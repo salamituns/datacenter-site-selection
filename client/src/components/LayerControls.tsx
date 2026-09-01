@@ -1,5 +1,5 @@
 import React from "react";
-import { Zap, Droplets, ShieldAlert, ThermometerSnowflake, Grid2x2, Scan } from "lucide-react";
+import { Zap, Droplets, ShieldAlert, ThermometerSnowflake, Grid2x2, Stamp } from "lucide-react";
 import { LayerVisibility } from "@/types/parcel";
 
 interface LayerControlsProps {
@@ -19,57 +19,62 @@ const LAYER_CONFIGS: LayerConfig[] = [
   {
     key: "powerGrid",
     label: "Power Grid & Substations",
-    description: "115 kV / 230 kV / 500 kV transmission",
+    description: "115 / 230 / 500 kV transmission",
     source: "HIFLD",
-    icon: <Zap className="h-4 w-4 text-power" />,
+    icon: <Zap className="h-3.5 w-3.5 dark:text-power-night" />,
   },
   {
     key: "waterAquifers",
     label: "Water & Aquifer Depth",
-    description: "Groundwater and surface discharge",
+    description: "Groundwater & discharge",
     source: "USGS NWIS",
-    icon: <Droplets className="h-4 w-4 text-water" />,
+    icon: <Droplets className="h-3.5 w-3.5 text-water dark:text-water-night" />,
   },
   {
     key: "seismicHazard",
     label: "Hazard & Seismic Risk",
-    description: "Peak ground acceleration, flood",
+    description: "Peak ground acceleration",
     source: "FEMA NRI",
-    icon: <ShieldAlert className="h-4 w-4 text-danger" />,
+    icon: <ShieldAlert className="h-3.5 w-3.5 text-danger dark:text-danger-night" />,
   },
   {
     key: "climateCDD",
     label: "Climate & Cooling",
-    description: "Annual cooling degree days",
+    description: "Cooling degree days",
     source: "NOAA NCEI",
-    icon: <ThermometerSnowflake className="h-4 w-4 text-brand-300" />,
+    icon: <ThermometerSnowflake className="h-3.5 w-3.5 text-muted" />,
   },
   {
     key: "primeClusters",
     label: "Prime Development Zones",
-    description: "Contiguous high-suitability clusters",
+    description: "Contiguous suitability clusters",
     source: "DBSCAN",
-    icon: <Scan className="h-4 w-4 text-brand-400" />,
+    icon: <Stamp className="h-3.5 w-3.5 text-accent-600 dark:text-accent-400" />,
   },
   {
     key: "parcelGrid",
     label: "Parcel Grid",
     description: "10 km² fishnet boundaries",
     source: "PostGIS",
-    icon: <Grid2x2 className="h-4 w-4 text-muted" />,
+    icon: <Grid2x2 className="h-3.5 w-3.5 text-muted" />,
   },
 ];
 
+/** Square instrument switch — a slide plate, not a pill. */
 function ToggleSwitch({ checked }: { checked: boolean }) {
   return (
     <span
-      className={`relative inline-flex h-[18px] w-[32px] shrink-0 items-center rounded-full border transition-colors duration-150 ${
-        checked ? "border-brand-500 bg-brand-500" : "border-border-strong bg-transparent"
+      className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-[2px] border transition-colors duration-150 ${
+        checked
+          ? "border-accent-600 bg-accent-600 dark:border-accent-400 dark:bg-accent-400/15"
+          : "border-border-strong bg-transparent"
       }`}
     >
       <span
-        className={`absolute h-3 w-3 rounded-full transition-transform duration-150 ${
-          checked ? "translate-x-[15px] bg-white" : "translate-x-[2px] bg-muted"
+        className={`absolute h-3 w-2.5 rounded-[1px] transition-transform duration-150 ${
+          checked
+            ? "translate-x-[15px] bg-surface dark:bg-accent-400"
+            : "translate-x-[2px] bg-border-strong"
         }`}
       />
     </span>
@@ -80,15 +85,17 @@ export const LayerControls: React.FC<LayerControlsProps> = ({ layers, onToggleLa
   const visibleCount = Object.values(layers).filter(Boolean).length;
 
   return (
-    <section className="rounded-xl border border-border bg-surface">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h3 className="text-[13px] font-semibold tracking-tight text-foreground">Layers</h3>
-        <span className="text-[11px] tabular-nums text-muted">
-          {visibleCount} of {LAYER_CONFIGS.length}
+    <section className="rounded-[2px] border border-border-strong bg-surface">
+      <div className="flex items-baseline justify-between border-b border-border px-4 py-2.5">
+        <h3 className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">
+          01 — Layers
+        </h3>
+        <span className="font-mono text-[10px] tabular-nums text-muted">
+          {visibleCount}/{LAYER_CONFIGS.length}
         </span>
       </div>
 
-      <div className="p-1.5">
+      <div className="divide-y divide-border">
         {LAYER_CONFIGS.map((layer) => {
           const isVisible = layers[layer.key];
           return (
@@ -96,20 +103,20 @@ export const LayerControls: React.FC<LayerControlsProps> = ({ layers, onToggleLa
               key={layer.key}
               onClick={() => onToggleLayer(layer.key)}
               aria-pressed={isVisible}
-              className="group flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-surface-raised"
+              className="group flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left transition-colors hover:bg-surface-raised/60"
             >
-              <div className={`flex min-w-0 items-center gap-2.5 transition-opacity ${isVisible ? "" : "opacity-45"}`}>
+              <div
+                className={`flex min-w-0 items-center gap-2.5 transition-opacity ${
+                  isVisible ? "" : "opacity-40"
+                }`}
+              >
                 {layer.icon}
                 <div className="min-w-0">
                   <div className="truncate text-xs font-medium text-foreground">
                     {layer.label}
                   </div>
-                  <div className="mt-0.5 flex items-center gap-1.5">
-                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted">
-                      {layer.source}
-                    </span>
-                    <span className="text-[10px] text-muted">·</span>
-                    <span className="truncate text-[10px] text-muted">{layer.description}</span>
+                  <div className="mt-0.5 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted">
+                    {layer.source} · {layer.description}
                   </div>
                 </div>
               </div>

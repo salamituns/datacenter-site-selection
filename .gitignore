@@ -70,4 +70,5 @@ pnpm-debug.log*
 # Local agent/QA artifacts
 .playwright-mcp/
 dashboard-*.png
+survey-*.png
 *.b64

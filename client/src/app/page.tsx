@@ -17,10 +17,10 @@ const GeospatialMap = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex h-full min-h-[480px] w-full items-center justify-center rounded-xl border border-border bg-surface">
-        <div className="flex flex-col items-center gap-2.5 text-xs text-muted">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-border-strong border-t-brand-500" />
-          <span>Loading map…</span>
+      <div className="flex h-full min-h-[480px] w-full items-center justify-center rounded-[3px] border border-border-strong bg-surface">
+        <div className="flex flex-col items-center gap-2.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-border-strong border-t-accent-600" />
+          <span>Preparing plate…</span>
         </div>
       </div>
     ),

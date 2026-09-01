@@ -12,15 +12,12 @@ interface GeospatialMapProps {
   isLiveSupabase?: boolean;
 }
 
-const BRAND = "#5E6AD2";
-const BRAND_LIGHT = "#8B96E3";
-
-/** Sequential single-hue fill: darker = more suitable. */
+/** Pencil shading: the more suitable the parcel, the darker the graphite. */
 function scoreOpacity(score: number): number {
-  if (score >= 82) return 0.55;
-  if (score >= 70) return 0.38;
-  if (score >= 60) return 0.22;
-  return 0.10;
+  if (score >= 82) return 0.30;
+  if (score >= 70) return 0.20;
+  if (score >= 60) return 0.11;
+  return 0.05;
 }
 
 export const GeospatialMap: React.FC<GeospatialMapProps> = ({
@@ -70,6 +67,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
       map.attributionControl.setPosition("bottomleft");
 
       L.control.zoom({ position: "topright" }).addTo(map);
+      L.control.scale({ position: "bottomleft", imperial: true, metric: false }).addTo(map);
 
       layersGroupRef.current = {
         parcels: L.layerGroup().addTo(map),
@@ -105,7 +103,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
     };
   }, []);
 
-  // Swap basemap tiles when the theme changes (no map re-init)
+  // Swap basemap tiles when the theme changes (paper <-> blueprint)
   useEffect(() => {
     const L = leafletRef.current;
     const map = mapInstanceRef.current;
@@ -149,11 +147,16 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
       clusterLayer.clearLayers();
 
       const isDark = resolvedTheme !== "light";
-      const hairline = isDark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)";
-      const nodeRing = isDark ? "#0F1011" : "#FFFFFF";
+      const ink = isDark ? "#E6EDF4" : "#1C1A14"; // shading & hairline ink
+      const hairline = isDark ? "rgba(230,237,244,0.18)" : "rgba(28,26,20,0.20)";
+      const nodeRing = isDark ? "#112B46" : "#FBF9F3";
+      const power = isDark ? "#E2B056" : "#B07D0F";
+      const waterColor = isDark ? "#46C0B4" : "#1F7A74";
+      const stamp = isDark ? "#F5854A" : "#E8590C"; // prime zone stamp
+      const stampStroke = isDark ? "#F9A870" : "#C24A08";
       const validBounds: [number, number][] = [];
 
-      // 1. PostGIS parcels — sequential indigo suitability fill
+      // 1. PostGIS parcels — graphite-shaded suitability, stamped prime zones
       if (layers.parcelGrid && parcels.length > 0) {
         parcels.forEach((p) => {
           if (isNaN(p.lat) || isNaN(p.lon)) return;
@@ -185,22 +188,17 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
           const opacity = scoreOpacity(p.composite_score);
 
           const polygon = L.polygon(polygonCoords, {
-            color: isSelected
-              ? isDark
-                ? "#F7F8F8"
-                : "#18181B"
-              : isPrime
-                ? BRAND_LIGHT
-                : hairline,
+            color: isSelected ? ink : isPrime ? stampStroke : hairline,
             weight: isSelected ? 2 : isPrime ? 1.25 : 0.75,
-            fillColor: BRAND,
-            fillOpacity: isPrime ? 0.6 : opacity,
+            dashArray: isPrime && !isSelected ? "5,3" : undefined,
+            fillColor: isPrime ? stamp : ink,
+            fillOpacity: isPrime ? 0.22 : opacity,
           });
 
           polygon.bindTooltip(
-            `<span class="font-mono">${p.grid_id}</span> · Score <b>${p.composite_score.toFixed(
+            `<span class="font-mono">${p.grid_id}</span> · SCORE <b>${p.composite_score.toFixed(
               1
-            )}</b>${p.is_prime_zone ? " · Prime zone" : ""}`,
+            )}</b>${p.is_prime_zone ? " · PRIME" : ""}`,
             {
               sticky: true,
               className: "map-tooltip",
@@ -235,10 +233,10 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
 
         txCorridors.forEach((line) => {
           L.polyline(line as any, {
-            color: "#D99E41",
+            color: power,
             weight: 1.5,
             dashArray: "4, 6",
-            opacity: 0.85,
+            opacity: 0.9,
           }).addTo(powerLayer);
         });
 
@@ -252,7 +250,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
         substations.forEach((sub) => {
           L.circleMarker([sub.lat, sub.lon], {
             radius: 4.5,
-            fillColor: "#D99E41",
+            fillColor: power,
             color: nodeRing,
             weight: 1.25,
             opacity: 1,
@@ -278,7 +276,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
         wells.forEach((w) => {
           L.circleMarker([w.lat, w.lon], {
             radius: 4,
-            fillColor: "#4DB6AC",
+            fillColor: waterColor,
             color: nodeRing,
             weight: 1.25,
             opacity: 1,
@@ -305,57 +303,69 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
   }, [mapReady, parcels, layers, selectedParcel, resolvedTheme]);
 
   return (
-    <div className="relative h-full min-h-[480px] w-full overflow-hidden rounded-xl border border-border bg-background">
+    <div className="relative h-full min-h-[480px] w-full overflow-hidden rounded-[3px] border border-border-strong bg-background">
       <div ref={mapContainerRef} className="absolute inset-0 z-0 h-full w-full" />
 
-      {/* Status */}
-      <div className="pointer-events-none absolute left-3 top-3 z-[500]">
-        <div className="flex items-center gap-2 rounded-md border border-border bg-surface/90 px-2.5 py-1.5 text-[11px] font-medium text-muted shadow-raised backdrop-blur">
+      {/* Graticule corner marks */}
+      {(["left-2 top-1", "right-2 top-1", "left-2 bottom-1", "right-2 bottom-1"] as const).map(
+        (pos) => (
           <span
-            className={`h-1.5 w-1.5 rounded-full ${isLiveSupabase ? "bg-success" : "bg-warning"}`}
+            key={pos}
+            className={`pointer-events-none absolute ${pos} z-[400] select-none font-mono text-[13px] leading-none text-muted/70`}
+            aria-hidden="true"
+          >
+            +
+          </span>
+        )
+      )}
+
+      {/* Plate status */}
+      <div className="pointer-events-none absolute left-3 top-3 z-[500]">
+        <div className="flex items-center gap-2 border border-border-strong bg-surface/95 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted shadow-plate backdrop-blur">
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              isLiveSupabase ? "bg-success dark:bg-success-night" : "bg-warning dark:bg-power-night"
+            }`}
           />
-          <span className="text-foreground">{isLiveSupabase ? "PostGIS" : "Demo dataset"}</span>
-          <span className="text-muted">·</span>
-          <span className="font-mono tabular-nums">{parcels.length} parcels</span>
+          <span className="text-foreground">{isLiveSupabase ? "PostGIS" : "Demo"}</span>
+          <span>·</span>
+          <span className="tabular-nums">{parcels.length} parcels</span>
         </div>
       </div>
 
-      {/* Legend */}
-      <div className="absolute bottom-3 right-3 z-[500] rounded-md border border-border bg-surface/90 px-3 py-2 text-[10px] font-medium text-muted shadow-raised backdrop-blur">
-        <div className="mb-1.5 text-[9px] uppercase tracking-wide">Suitability</div>
-        <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5">
-            <span
-              className="h-2.5 w-2.5 rounded-sm"
-              style={{ background: BRAND, opacity: 0.1 }}
-            />
-            &lt; 60
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span
-              className="h-2.5 w-2.5 rounded-sm"
-              style={{ background: BRAND, opacity: 0.22 }}
-            />
-            60+
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span
-              className="h-2.5 w-2.5 rounded-sm"
-              style={{ background: BRAND, opacity: 0.38 }}
-            />
-            70+
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span
-              className="h-2.5 w-2.5 rounded-sm"
-              style={{ background: BRAND, opacity: 0.55 }}
-            />
-            82+
-          </span>
+      {/* Map key */}
+      <div className="absolute bottom-3 right-3 z-[500] border border-border-strong bg-surface/95 px-3 py-2 shadow-plate backdrop-blur">
+        <div className="font-mono text-[8.5px] uppercase tracking-[0.18em] text-muted">
+          Suitability
+        </div>
+        <div className="mt-1.5 flex items-center gap-3 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted">
+          {[
+            { op: 0.05, label: "<60" },
+            { op: 0.11, label: "60+" },
+            { op: 0.20, label: "70+" },
+            { op: 0.30, label: "82+" },
+          ].map((step) => (
+            <span key={step.label} className="flex items-center gap-1.5">
+              <span
+                className="h-2.5 w-2.5"
+                style={{
+                  background: resolvedTheme === "light" ? "#1C1A14" : "#E6EDF4",
+                  opacity: step.op,
+                }}
+              />
+              {step.label}
+            </span>
+          ))}
           <span className="flex items-center gap-1.5 text-foreground">
             <span
-              className="h-2.5 w-2.5 rounded-sm"
-              style={{ background: BRAND, opacity: 0.6, border: `1px solid ${BRAND_LIGHT}` }}
+              className="h-2.5 w-2.5"
+              style={{
+                background:
+                  resolvedTheme === "light"
+                    ? "rgba(232,89,12,0.22)"
+                    : "rgba(245,133,74,0.25)",
+                border: `1px dashed ${resolvedTheme === "light" ? "#C24A08" : "#F9A870"}`,
+              }}
             />
             Prime
           </span>

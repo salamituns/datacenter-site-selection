@@ -3,28 +3,31 @@
 @tailwind utilities;
 
 /* ---------------------------------------------------------------------------
-   Design tokens
-   Light: paper neutrals. Dark: Linear-style true blacks and graphite surfaces.
+   "Surveyor's Plat" — cadastral survey document aesthetic.
+   Day: warm paper, ink hairlines, pencil-shaded suitability.
+   Night: engineering blueprint — Prussian blue with white linework.
 --------------------------------------------------------------------------- */
 @layer base {
   :root {
-    --background: 250 250 250; /* #fafafa */
-    --surface: 255 255 255; /* #ffffff */
-    --surface-raised: 244 244 245; /* #f4f4f5 */
-    --foreground: 24 24 27; /* #18181b */
-    --muted: 113 113 122; /* #71717a */
-    --border: 228 228 231; /* #e4e4e7 */
-    --border-strong: 212 212 216; /* #d4d4d8 */
+    --background: 244 241 233; /* #f4f1e9 paper */
+    --surface: 251 249 243; /* #fbf9f3 card stock */
+    --surface-raised: 233 229 219; /* #e9e5db */
+    --foreground: 28 26 20; /* #1c1a14 ink */
+    --muted: 118 112 100; /* #767064 graphite */
+    --border: 209 203 190; /* #d1cbbe hairline */
+    --border-strong: 178 172 158; /* #b2ac9e rule */
+    --accent: 232 89 12; /* signal orange, light mode */
   }
 
   .dark {
-    --background: 8 9 10; /* #08090a */
-    --surface: 15 16 17; /* #0f1011 */
-    --surface-raised: 25 26 28; /* #191a1c */
-    --foreground: 242 243 245; /* #f2f3f5 */
-    --muted: 138 143 152; /* #8a8f98 */
-    --border: 34 36 40; /* #222428 */
-    --border-strong: 46 48 54; /* #2e3036 */
+    --background: 12 34 58; /* #0c223a Prussian */
+    --surface: 17 43 70; /* #112b46 plate */
+    --surface-raised: 25 53 82; /* #193552 */
+    --foreground: 230 237 244; /* #e6edf4 white line */
+    --muted: 146 167 184; /* #92a7b8 */
+    --border: 39 63 89; /* #273f59 */
+    --border-strong: 55 80 106; /* #37506a */
+    --accent: 245 133 74; /* signal orange, brightened for blueprint */
   }
 
   body {
@@ -34,23 +37,23 @@
     text-rendering: optimizeLegibility;
   }
 
-  /* Thin, consistent icon strokes across the app */
   svg.lucide {
     stroke-width: 1.5;
   }
 
   ::selection {
-    background: rgb(94 106 210 / 0.25);
+    background: rgb(var(--accent) / 0.28);
   }
 
+  /* Dashed focus ring — caliper mark */
   :focus-visible {
-    outline: 2px solid rgb(94 106 210 / 0.7);
+    outline: 2px dashed rgb(var(--accent));
     outline-offset: 2px;
   }
 }
 
 /* ---------------------------------------------------------------------------
-   Scrollbars — quiet, overlay-style
+   Scrollbars — squared, instrument-like
 --------------------------------------------------------------------------- */
 ::-webkit-scrollbar {
   width: 8px;
@@ -61,22 +64,21 @@
 }
 ::-webkit-scrollbar-thumb {
   background: rgb(var(--border-strong));
-  border-radius: 8px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: rgb(var(--muted));
 }
 
 /* ---------------------------------------------------------------------------
-   Range inputs (scoring weight sliders)
+   Range inputs — caliper slides (squared thumb on a 2px rule)
    Fill progress is supplied inline as a linear-gradient by the component.
 --------------------------------------------------------------------------- */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 3px;
-  border-radius: 999px;
+  height: 2px;
+  border-radius: 0;
   background: rgb(var(--border));
   cursor: pointer;
 }
@@ -84,31 +86,26 @@ input[type="range"] {
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  height: 14px;
-  width: 14px;
-  border-radius: 999px;
+  height: 16px;
+  width: 9px;
+  border-radius: 1px;
   background: rgb(var(--surface));
-  border: 1px solid rgb(var(--border-strong));
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
-  transition: border-color 120ms ease, transform 120ms ease;
+  border: 1px solid rgb(var(--foreground));
+  box-shadow: 2px 2px 0 rgb(0 0 0 / 0.12);
 }
 
 input[type="range"]::-webkit-slider-thumb:hover {
-  border-color: rgb(94 106 210);
-  transform: scale(1.1);
-}
-
-input[type="range"]::-webkit-slider-thumb:active {
-  border-color: rgb(94 106 210);
+  background: rgb(var(--accent));
+  border-color: rgb(var(--foreground));
 }
 
 input[type="range"]::-moz-range-thumb {
-  height: 14px;
-  width: 14px;
-  border-radius: 999px;
+  height: 16px;
+  width: 9px;
+  border-radius: 1px;
   background: rgb(var(--surface));
-  border: 1px solid rgb(var(--border-strong));
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+  border: 1px solid rgb(var(--foreground));
+  box-shadow: 2px 2px 0 rgb(0 0 0 / 0.12);
 }
 
 input[type="range"]::-moz-range-track {
@@ -116,7 +113,7 @@ input[type="range"]::-moz-range-track {
 }
 
 /* ---------------------------------------------------------------------------
-   Leaflet — restyled to match the app theme
+   Leaflet — restyled as an ink-drawn survey plate
 --------------------------------------------------------------------------- */
 .leaflet-container {
   background: rgb(var(--background));
@@ -124,9 +121,9 @@ input[type="range"]::-moz-range-track {
 }
 
 .leaflet-control-zoom {
-  border: 1px solid rgb(var(--border)) !important;
-  border-radius: 8px !important;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12) !important;
+  border: 1px solid rgb(var(--border-strong)) !important;
+  border-radius: 2px !important;
+  box-shadow: none !important;
   overflow: hidden;
 }
 
@@ -134,10 +131,10 @@ input[type="range"]::-moz-range-track {
   background: rgb(var(--surface)) !important;
   color: rgb(var(--foreground)) !important;
   border-bottom: 1px solid rgb(var(--border)) !important;
-  width: 30px !important;
-  height: 30px !important;
-  line-height: 29px !important;
-  font-size: 16px !important;
+  width: 28px !important;
+  height: 28px !important;
+  line-height: 26px !important;
+  font-size: 15px !important;
 }
 
 .leaflet-control-zoom a:last-of-type {
@@ -149,28 +146,44 @@ input[type="range"]::-moz-range-track {
 }
 
 .leaflet-control-attribution {
-  background: rgb(var(--surface) / 0.85) !important;
+  background: rgb(var(--surface) / 0.9) !important;
   color: rgb(var(--muted)) !important;
   font-size: 9px !important;
   line-height: 1.2 !important;
-  padding: 2px 6px !important;
-  border-radius: 4px 4px 0 0;
-  backdrop-filter: blur(4px);
+  padding: 1px 5px !important;
+  border: 1px solid rgb(var(--border));
+  border-bottom: none;
+  border-left: none;
+  font-family: var(--font-mono), monospace !important;
 }
 
 .leaflet-control-attribution a {
   color: rgb(var(--muted)) !important;
 }
 
-/* Parcel / infrastructure tooltips */
+/* Scale bar — surveyor's bar scale */
+.leaflet-control-scale-line {
+  background: transparent !important;
+  border: 1px solid rgb(var(--border-strong)) !important;
+  border-top: none !important;
+  color: rgb(var(--muted)) !important;
+  font-family: var(--font-mono), monospace !important;
+  font-size: 9px !important;
+  letter-spacing: 0.06em;
+  padding: 0 4px !important;
+  box-shadow: none !important;
+}
+
+/* Parcel / infrastructure tooltips — margin annotations */
 .map-tooltip {
-  background: rgb(var(--surface) / 0.96) !important;
-  border: 1px solid rgb(var(--border)) !important;
-  border-radius: 6px !important;
-  box-shadow: 0 4px 16px rgb(0 0 0 / 0.16) !important;
+  background: rgb(var(--surface)) !important;
+  border: 1px solid rgb(var(--border-strong)) !important;
+  border-radius: 0 !important;
+  box-shadow: 2px 2px 0 rgb(0 0 0 / 0.12) !important;
   color: rgb(var(--foreground)) !important;
-  padding: 4px 8px !important;
-  font-size: 11px !important;
+  padding: 3px 7px !important;
+  font-family: var(--font-mono), monospace !important;
+  font-size: 10.5px !important;
   font-weight: 400;
 }
 

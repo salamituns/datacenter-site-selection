@@ -13,38 +13,24 @@ interface HeaderProps {
   onSync: () => void;
 }
 
-function LogoMark() {
+/** Geodetic benchmark: crosshair circle with a signal-orange station dot. */
+function BenchmarkMark() {
   return (
     <svg
-      width="22"
-      height="22"
-      viewBox="0 0 22 22"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
       fill="none"
       aria-hidden="true"
-      className="shrink-0"
+      className="shrink-0 text-foreground"
     >
-      <rect x="1" y="1" width="9" height="9" rx="2.5" fill="#5E6AD2" />
-      <rect
-        x="12"
-        y="1"
-        width="9"
-        height="9"
-        rx="2.5"
+      <circle cx="12" cy="12" r="7.25" stroke="currentColor" strokeWidth="1.25" />
+      <path
+        d="M12 1.5v4.5M12 18v4.5M1.5 12h4.5M18 12h4.5"
         stroke="currentColor"
-        strokeOpacity="0.35"
-        strokeWidth="1.5"
+        strokeWidth="1.25"
       />
-      <rect
-        x="1"
-        y="12"
-        width="9"
-        height="9"
-        rx="2.5"
-        stroke="currentColor"
-        strokeOpacity="0.35"
-        strokeWidth="1.5"
-      />
-      <rect x="12" y="12" width="9" height="9" rx="2.5" fill="#5E6AD2" fillOpacity="0.4" />
+      <circle cx="12" cy="12" r="2.25" className="fill-accent-600 dark:fill-accent-400" />
     </svg>
   );
 }
@@ -60,38 +46,33 @@ export const Header: React.FC<HeaderProps> = ({
   onSync,
 }) => {
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-background px-4">
-      {/* Brand */}
-      <div className="flex items-center gap-3">
-        <LogoMark />
+    <header className="flex h-16 shrink-0 items-center justify-between border-b border-border-strong bg-background px-4">
+      {/* Masthead */}
+      <div className="flex items-center gap-3.5">
+        <BenchmarkMark />
         <div>
-          <h1 className="text-[13px] font-semibold leading-tight tracking-tight text-foreground">
+          <h1 className="font-display text-[22px] font-semibold leading-none tracking-tight text-foreground">
             Site Selection Engine
           </h1>
-          <p className="text-[11px] leading-tight text-muted">
-            Hyperscale data centers · 100+ MW
+          <p className="mt-1 font-mono text-[9px] uppercase tracking-[0.18em] text-muted">
+            Hyperscale parcel survey · 100+ MW
           </p>
         </div>
       </div>
 
-      <div className="flex items-center gap-4">
-        {/* Quiet summary stats */}
-        <div className="hidden items-center gap-4 text-[11px] text-muted md:flex">
+      <div className="flex items-center gap-5">
+        {/* Ledger stats */}
+        <div className="hidden items-center gap-4 font-mono text-[11px] tabular-nums text-muted lg:flex">
           <span>
-            <span className="font-medium tabular-nums text-foreground">{totalParcels}</span>{" "}
-            parcels
+            <span className="text-foreground">{totalParcels}</span> parcels
           </span>
-          <span className="h-0.5 w-0.5 rounded-full bg-border-strong" />
+          <span className="h-px w-3 bg-border-strong" />
           <span>
-            <span className="font-medium tabular-nums text-foreground">{primeCount}</span> prime
-            zones
+            <span className="text-foreground">{primeCount}</span> prime zones
           </span>
-          <span className="h-0.5 w-0.5 rounded-full bg-border-strong" />
+          <span className="h-px w-3 bg-border-strong" />
           <span>
-            <span className="font-medium tabular-nums text-foreground">
-              {totalCapacityMW.toLocaleString()}
-            </span>{" "}
-            MW est. capacity
+            <span className="text-foreground">{totalCapacityMW.toLocaleString()}</span> MW est.
           </span>
         </div>
 
@@ -101,23 +82,23 @@ export const Header: React.FC<HeaderProps> = ({
             value={selectedState}
             onChange={(e) => onStateChange(e.target.value)}
             aria-label="Select region"
-            className="h-8 appearance-none rounded-md border border-border bg-surface pl-2.5 pr-7 text-xs font-medium text-foreground transition-colors hover:border-border-strong focus:border-brand-500 focus:outline-none"
+            className="h-8 appearance-none rounded-[2px] border border-border-strong bg-surface pl-2.5 pr-7 font-mono text-[11px] uppercase tracking-wide text-foreground transition-colors hover:border-foreground/60 focus:border-accent-600 focus:outline-none"
           >
-            <option value="VA">Northern Virginia (PJM)</option>
-            <option value="TX">Texas (ERCOT)</option>
-            <option value="OH">Central Ohio (PJM)</option>
-            <option value="OR">Pacific Northwest</option>
+            <option value="VA">N. Virginia · PJM</option>
+            <option value="TX">Texas · ERCOT</option>
+            <option value="OH">C. Ohio · PJM</option>
+            <option value="OR">Pacific NW</option>
           </select>
-          <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+          <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted" />
         </div>
 
         {/* Data source + sync */}
-        <div className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1.5">
+        <div className="flex items-center gap-1.5 rounded-[2px] border border-border-strong bg-surface px-2.5 py-1.5">
           <span
-            className={`h-1.5 w-1.5 rounded-full ${isLive ? "bg-success" : "bg-warning"}`}
+            className={`h-1.5 w-1.5 rounded-full ${isLive ? "bg-success dark:bg-success-night" : "bg-warning dark:bg-power-night"}`}
             title={isLive ? "Connected to Supabase PostGIS" : "Using local demo dataset"}
           />
-          <span className="text-[11px] font-medium text-muted">
+          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
             {isLive ? "PostGIS" : "Demo"}
           </span>
         </div>
@@ -127,7 +108,7 @@ export const Header: React.FC<HeaderProps> = ({
           disabled={isSyncing}
           aria-label="Sync parcels from PostGIS"
           title="Sync parcels from PostGIS"
-          className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-surface text-muted transition-colors hover:border-border-strong hover:text-foreground disabled:opacity-60"
+          className="flex h-8 w-8 items-center justify-center rounded-[2px] border border-border-strong bg-surface text-muted transition-colors hover:border-foreground/60 hover:text-foreground disabled:opacity-60"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? "animate-spin" : ""}`} />
         </button>

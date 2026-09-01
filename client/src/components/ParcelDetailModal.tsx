@@ -47,43 +47,24 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
   };
 
   const stats = [
-    {
-      label: "Composite",
-      value: parcel.composite_score.toFixed(1),
-      sub: scoreTier(parcel.composite_score),
-    },
-    {
-      label: "Power",
-      value: parcel.power_score.toFixed(0),
-      sub: `${parcel.substation_voltage_kv} kV grid`,
-    },
-    {
-      label: "Water",
-      value: parcel.water_score.toFixed(0),
-      sub: `${parcel.groundwater_depth_ft} ft depth`,
-    },
-    {
-      label: "Capacity",
-      value: `${parcel.megawatt_capacity_estimate}`,
-      sub: "MW est. build-out",
-    },
+    { label: "Composite", value: parcel.composite_score.toFixed(1), sub: scoreTier(parcel.composite_score) },
+    { label: "Power", value: parcel.power_score.toFixed(0), sub: `${parcel.substation_voltage_kv} kV grid` },
+    { label: "Water", value: parcel.water_score.toFixed(0), sub: `${parcel.groundwater_depth_ft} ft depth` },
+    { label: "Capacity", value: `${parcel.megawatt_capacity_estimate}`, sub: "MW est. build-out" },
   ];
 
   const constraints = [
     {
-      icon: <Zap className="h-3.5 w-3.5 text-power" />,
+      icon: <Zap className="h-3.5 w-3.5 dark:text-power-night" />,
       title: "Power Grid Proximity",
       rows: [
         { label: "115 kV+ line", value: `${parcel.power_distance_miles} mi` },
-        {
-          label: "Nearest substation",
-          value: `${parcel.substation_distance_miles} mi`,
-        },
+        { label: "Nearest substation", value: `${parcel.substation_distance_miles} mi` },
         { label: "Grid operator", value: parcel.grid_operator || "Unknown" },
       ],
     },
     {
-      icon: <Droplets className="h-3.5 w-3.5 text-water" />,
+      icon: <Droplets className="h-3.5 w-3.5 text-water dark:text-water-night" />,
       title: "Water Availability",
       rows: [
         { label: "Groundwater table", value: `${parcel.groundwater_depth_ft} ft` },
@@ -92,7 +73,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
       ],
     },
     {
-      icon: <ShieldAlert className="h-3.5 w-3.5 text-danger" />,
+      icon: <ShieldAlert className="h-3.5 w-3.5 text-danger dark:text-danger-night" />,
       title: "Geological Risk",
       rows: [
         { label: "Seismic (PGA)", value: `${parcel.seismic_hazard_pga}g` },
@@ -101,7 +82,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
       ],
     },
     {
-      icon: <ThermometerSnowflake className="h-3.5 w-3.5 text-brand-300" />,
+      icon: <ThermometerSnowflake className="h-3.5 w-3.5 text-muted" />,
       title: "Ambient Cooling",
       rows: [
         { label: "Cooling degree days", value: `${parcel.cooling_degree_days}` },
@@ -117,96 +98,113 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
       aria-modal="true"
       aria-label={`Parcel ${parcel.grid_id} details`}
       onClick={onClose}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4 backdrop-blur-[2px]"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-border bg-surface shadow-overlay"
+        className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-[3px] border border-border-strong bg-surface shadow-overlay"
       >
-        {/* Header */}
-        <div className="flex items-start justify-between border-b border-border px-6 py-4">
+        {/* Dossier header */}
+        <div className="flex items-start justify-between border-b border-border-strong px-6 py-4">
           <div>
-            <div className="flex items-center gap-2.5">
-              <h2 className="font-mono text-sm font-semibold tracking-tight text-foreground">
+            <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
+              Site Dossier
+            </div>
+            <div className="mt-1 flex items-center gap-2.5">
+              <h2 className="font-mono text-base font-medium tracking-tight text-foreground">
                 {parcel.grid_id}
               </h2>
               {parcel.is_prime_zone && (
-                <span className="rounded border border-brand-500/25 bg-brand-500/10 px-1.5 py-0.5 text-[10px] font-medium text-brand-300">
-                  {parcel.cluster_label}
+                <span className="border border-accent-600/60 bg-accent-600/10 px-1.5 py-0.5 font-mono text-[8.5px] uppercase tracking-[0.16em] text-accent-700 dark:border-accent-400/50 dark:bg-accent-400/10 dark:text-accent-300">
+                  Prime — {parcel.cluster_label}
                 </span>
               )}
             </div>
-            <p className="mt-1 text-[11px] text-muted">
+            <p className="mt-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
               {parcel.county_name} County, {parcel.state_code} · {parcel.area_sq_km.toFixed(1)} km²
-              · {parcel.lat.toFixed(4)}, {parcel.lon.toFixed(4)}
+              · {parcel.lat.toFixed(4)}N {Math.abs(parcel.lon).toFixed(4)}W
             </p>
           </div>
           <button
             onClick={onClose}
             aria-label="Close"
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
+            className="flex h-7 w-7 shrink-0 items-center justify-center border border-border-strong text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* Key metrics */}
-        <div className="grid grid-cols-2 gap-3 px-6 pt-5 sm:grid-cols-4">
-          {stats.map((stat) => (
-            <div key={stat.label} className="rounded-lg border border-border bg-background p-3">
-              <div className="text-[10px] font-medium uppercase tracking-wide text-muted">
+        {/* Key metrics — serif figures */}
+        <div className="grid grid-cols-2 divide-x divide-border border-b border-border sm:grid-cols-4 sm:divide-x-1">
+          {stats.map((stat, i) => (
+            <div
+              key={stat.label}
+              className={`px-5 py-3.5 ${i === 0 ? "" : "sm:border-l sm:border-border"} ${
+                i >= 2 ? "border-t border-border sm:border-t-0" : ""
+              }`}
+            >
+              <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted">
                 {stat.label}
               </div>
-              <div className="mt-1.5 font-mono text-lg font-semibold tabular-nums leading-none text-foreground">
+              <div className="mt-1 font-display text-[26px] font-semibold leading-none text-foreground">
                 {stat.value}
               </div>
-              <div className="mt-1.5 text-[10px] text-muted">{stat.sub}</div>
+              <div className="mt-1.5 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted">
+                {stat.sub}
+              </div>
             </div>
           ))}
         </div>
 
-        {/* Constraint breakdown */}
+        {/* Constraint analysis — ledger tables */}
         <div className="px-6 py-5">
-          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-            Constraint Analysis
+          <h4 className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
+            04 — Constraint Analysis
           </h4>
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="mt-3 grid grid-cols-1 gap-x-10 gap-y-5 sm:grid-cols-2">
             {constraints.map((group) => (
-              <div key={group.title} className="rounded-lg border border-border bg-background p-3.5">
+              <div key={group.title}>
                 <div className="flex items-center gap-2 text-xs font-medium text-foreground">
                   {group.icon}
                   {group.title}
                 </div>
-                <div className="mt-2.5 space-y-1.5">
+                <dl className="mt-2 border-t border-border">
                   {group.rows.map((row) => (
-                    <div key={row.label} className="flex items-baseline justify-between gap-3">
-                      <span className="text-[11px] text-muted">{row.label}</span>
-                      <span className="truncate font-mono text-[11px] tabular-nums text-foreground">
+                    <div
+                      key={row.label}
+                      className="flex items-baseline justify-between gap-3 border-b border-border/70 py-1.5"
+                    >
+                      <dt className="font-mono text-[10px] uppercase tracking-[0.06em] text-muted">
+                        {row.label}
+                      </dt>
+                      <dd className="font-mono text-[11px] tabular-nums text-foreground">
                         {row.value}
-                      </span>
+                      </dd>
                     </div>
                   ))}
-                </div>
+                </dl>
               </div>
             ))}
           </div>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between border-t border-border px-6 py-4">
+        <div className="flex items-center justify-between border-t border-border-strong px-6 py-4">
           <div
-            className={`flex items-center gap-1.5 text-[11px] font-medium ${
-              fastTrackEligible ? "text-success" : "text-muted"
+            className={`flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.1em] ${
+              fastTrackEligible
+                ? "text-success dark:text-success-night"
+                : "text-muted"
             }`}
           >
             <CheckCircle2 className="h-3.5 w-3.5" />
             {fastTrackEligible
-              ? "Meets fast-track interconnection profile"
+              ? "Fast-track interconnection profile"
               : "Standard interconnection review"}
           </div>
           <button
             onClick={exportDossier}
-            className="flex h-8 items-center gap-2 rounded-md bg-brand-500 px-3 text-xs font-medium text-white transition-colors hover:bg-brand-400"
+            className="flex h-8 items-center gap-2 bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.14em] text-background transition-opacity hover:opacity-80"
           >
             <Download className="h-3.5 w-3.5" />
             Export dossier

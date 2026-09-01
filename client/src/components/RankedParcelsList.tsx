@@ -32,25 +32,27 @@ export const RankedParcelsList: React.FC<RankedParcelsListProps> = ({
   });
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-surface">
-      {/* Panel header */}
-      <div className="border-b border-border px-4 py-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-[13px] font-semibold tracking-tight text-foreground">
-            Ranked Parcels
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[2px] border border-border-strong bg-surface">
+      {/* Section head */}
+      <div className="border-b border-border px-4 py-2.5">
+        <div className="flex items-baseline justify-between">
+          <h3 className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">
+            03 — Ranked Parcels
           </h3>
-          <span className="text-[11px] tabular-nums text-muted">{filteredParcels.length}</span>
+          <span className="font-mono text-[10px] tabular-nums text-muted">
+            {filteredParcels.length} shown
+          </span>
         </div>
 
         {/* Search */}
-        <div className="relative mt-3">
-          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+        <div className="relative mt-2.5">
+          <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
           <input
             type="text"
-            placeholder="Search grid, county, zone"
+            placeholder="Search grid, county, zone…"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="h-8 w-full rounded-md border border-border bg-background pl-8 pr-7 text-xs text-foreground placeholder:text-muted focus:border-brand-500 focus:outline-none"
+            className="h-8 w-full rounded-[2px] border border-border bg-background pl-8 pr-7 font-mono text-[11px] text-foreground placeholder:text-muted focus:border-accent-600 focus:outline-none"
           />
           {searchTerm && (
             <button
@@ -63,85 +65,83 @@ export const RankedParcelsList: React.FC<RankedParcelsListProps> = ({
           )}
         </div>
 
-        {/* Segmented filter */}
-        <div className="mt-2.5 flex gap-0.5 rounded-md bg-surface-raised p-0.5">
-          <button
-            onClick={() => setFilterMode("all")}
-            className={`flex-1 rounded py-1 text-[11px] font-medium transition-colors ${
-              filterMode === "all"
-                ? "bg-surface text-foreground shadow-raised"
-                : "text-muted hover:text-foreground"
-            }`}
-          >
-            All · {parcels.length}
-          </button>
-          <button
-            onClick={() => setFilterMode("prime")}
-            className={`flex-1 rounded py-1 text-[11px] font-medium transition-colors ${
-              filterMode === "prime"
-                ? "bg-surface text-foreground shadow-raised"
-                : "text-muted hover:text-foreground"
-            }`}
-          >
-            Prime · {primeCount}
-          </button>
+        {/* Ledger filter tabs */}
+        <div className="mt-2.5 flex border border-border-strong">
+          {(["all", "prime"] as const).map((mode) => {
+            const active = filterMode === mode;
+            return (
+              <button
+                key={mode}
+                onClick={() => setFilterMode(mode)}
+                className={`flex-1 py-1 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors ${
+                  active
+                    ? "bg-foreground text-background"
+                    : "text-muted hover:bg-surface-raised/60 hover:text-foreground"
+                } ${mode === "prime" ? "border-l border-border-strong" : ""}`}
+              >
+                {mode === "all" ? `All · ${parcels.length}` : `Prime · ${primeCount}`}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* List */}
-      <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto p-1.5">
+      {/* Ledger rows */}
+      <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto">
         {filteredParcels.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-            <p className="text-xs font-medium text-foreground">No matching parcels</p>
-            <p className="text-[11px] leading-relaxed text-muted">
-              Try a different search term or switch back to the All filter.
+            <p className="font-display text-base text-foreground">No matching parcels</p>
+            <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted">
+              Adjust search or filter
             </p>
           </div>
         ) : (
-          filteredParcels.map((parcel, index) => {
-            const isSelected = selectedParcel?.id === parcel.id;
-            return (
-              <button
-                key={parcel.id}
-                onClick={() => onSelectParcel(parcel)}
-                className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors ${
-                  isSelected
-                    ? "bg-surface-raised ring-1 ring-border-strong"
-                    : "hover:bg-surface-raised/60"
-                }`}
-              >
-                <span className="w-5 shrink-0 text-right font-mono text-[11px] tabular-nums text-muted">
-                  {index + 1}
-                </span>
-
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate font-mono text-xs font-medium text-foreground">
-                      {parcel.grid_id}
-                    </span>
-                    {parcel.is_prime_zone && (
-                      <span className="flex shrink-0 items-center gap-1">
-                        <span className="h-1.5 w-1.5 rounded-full bg-brand-400" />
-                        <span className="text-[10px] font-medium text-brand-300">Prime</span>
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-0.5 truncate text-[11px] text-muted">
-                    {parcel.county_name} County · {parcel.substation_distance_miles} mi to
-                    substation
-                  </p>
-                </div>
-
-                <span
-                  className={`shrink-0 font-mono text-xs font-semibold tabular-nums ${
-                    isSelected ? "text-brand-300" : "text-foreground"
-                  }`}
-                >
-                  {parcel.composite_score.toFixed(1)}
-                </span>
-              </button>
-            );
-          })
+          <table className="w-full border-collapse">
+            <tbody>
+              {filteredParcels.map((parcel, index) => {
+                const isSelected = selectedParcel?.id === parcel.id;
+                return (
+                  <tr
+                    key={parcel.id}
+                    onClick={() => onSelectParcel(parcel)}
+                    className={`cursor-pointer border-b border-border/70 transition-colors ${
+                      isSelected
+                        ? "bg-surface-raised shadow-[inset_2px_0_0_rgb(var(--accent))]"
+                        : "hover:bg-surface-raised/50"
+                    }`}
+                  >
+                    <td className="w-8 py-2 pl-3 text-right font-mono text-[10px] tabular-nums text-muted">
+                      {index + 1}
+                    </td>
+                    <td className="py-2 pl-2.5 pr-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate font-mono text-[11px] font-medium text-foreground">
+                          {parcel.grid_id}
+                        </span>
+                        {parcel.is_prime_zone && (
+                          <span className="shrink-0 border border-accent-600/60 px-1 font-mono text-[8px] uppercase tracking-[0.14em] text-accent-600 dark:border-accent-400/50 dark:text-accent-400">
+                            Prime
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 truncate font-mono text-[9.5px] uppercase tracking-[0.06em] text-muted">
+                        {parcel.county_name} · {parcel.substation_distance_miles} mi to sub
+                      </div>
+                    </td>
+                    <td
+                      className={`py-2 pr-3 text-right font-mono text-[12px] font-medium tabular-nums ${
+                        isSelected
+                          ? "text-accent-600 dark:text-accent-400"
+                          : "text-foreground"
+                      }`}
+                    >
+                      {parcel.composite_score.toFixed(1)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </div>
     </section>

@@ -18,9 +18,9 @@ export function ThemeToggle() {
   return (
     <button
       onClick={() => setTheme(isDark ? "light" : "dark")}
-      aria-label={mounted ? (isDark ? "Switch to light theme" : "Switch to dark theme") : "Toggle theme"}
-      title={mounted ? (isDark ? "Switch to light theme" : "Switch to dark theme") : "Toggle theme"}
-      className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-surface text-muted transition-colors hover:border-border-strong hover:text-foreground"
+      aria-label={mounted ? (isDark ? "Switch to paper (light) theme" : "Switch to blueprint (dark) theme") : "Toggle theme"}
+      title={mounted ? (isDark ? "Switch to paper (light) theme" : "Switch to blueprint (dark) theme") : "Toggle theme"}
+      className="flex h-8 w-8 items-center justify-center rounded-[2px] border border-border-strong bg-surface text-muted transition-colors hover:border-foreground/60 hover:text-foreground"
     >
       {mounted && isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
     </button>

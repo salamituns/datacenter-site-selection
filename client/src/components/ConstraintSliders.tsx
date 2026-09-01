@@ -8,8 +8,6 @@ interface ConstraintSlidersProps {
   onResetWeights: () => void;
 }
 
-const BRAND = "#5E6AD2";
-
 const SLIDERS: {
   key: keyof WeightFactors;
   label: string;
@@ -29,25 +27,45 @@ export const ConstraintSliders: React.FC<ConstraintSlidersProps> = ({
     weights.powerWeight + weights.waterWeight + weights.riskWeight + weights.climateWeight || 1;
 
   const segments = [
-    { key: "power", label: "Power", value: weights.powerWeight, className: "bg-power" },
-    { key: "water", label: "Water", value: weights.waterWeight, className: "bg-water" },
-    { key: "risk", label: "Risk", value: weights.riskWeight, className: "bg-danger" },
-    { key: "climate", label: "Climate", value: weights.climateWeight, className: "bg-brand-400" },
+    {
+      key: "power",
+      label: "PWR",
+      value: weights.powerWeight,
+      className: "bg-power dark:bg-power-night",
+    },
+    {
+      key: "water",
+      label: "WTR",
+      value: weights.waterWeight,
+      className: "bg-water dark:bg-water-night",
+    },
+    {
+      key: "risk",
+      label: "RSK",
+      value: weights.riskWeight,
+      className: "bg-danger dark:bg-danger-night",
+    },
+    {
+      key: "climate",
+      label: "CLM",
+      value: weights.climateWeight,
+      className: "bg-accent-500",
+    },
   ];
 
   return (
-    <section className="rounded-xl border border-border bg-surface">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h3 className="text-[13px] font-semibold tracking-tight text-foreground">
-          Scoring Weights
+    <section className="rounded-[2px] border border-border-strong bg-surface">
+      <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+        <h3 className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">
+          02 — Scoring Weights
         </h3>
         <button
           onClick={onResetWeights}
           aria-label="Reset weights to defaults"
           title="Reset to defaults"
-          className="flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
+          className="flex h-5 w-5 items-center justify-center text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
         >
-          <RotateCcw className="h-3.5 w-3.5" />
+          <RotateCcw className="h-3 w-3" />
         </button>
       </div>
 
@@ -56,9 +74,11 @@ export const ConstraintSliders: React.FC<ConstraintSlidersProps> = ({
           const value = weights[slider.key];
           return (
             <div key={slider.key}>
-              <div className="mb-2 flex items-center justify-between">
+              <div className="mb-2 flex items-baseline justify-between">
                 <label className="text-xs font-medium text-foreground">{slider.label}</label>
-                <span className="font-mono text-xs tabular-nums text-muted">{value}%</span>
+                <span className="font-mono text-[11px] tabular-nums text-muted">
+                  {value}%
+                </span>
               </div>
               <input
                 type="range"
@@ -71,7 +91,7 @@ export const ConstraintSliders: React.FC<ConstraintSlidersProps> = ({
                   onWeightChange({ ...weights, [slider.key]: Number(e.target.value) })
                 }
                 style={{
-                  background: `linear-gradient(to right, ${BRAND} ${value}%, rgb(var(--border)) ${value}%)`,
+                  background: `linear-gradient(to right, rgb(var(--accent)) ${value}%, rgb(var(--border-strong)) ${value}%)`,
                 }}
               />
             </div>
@@ -79,9 +99,9 @@ export const ConstraintSliders: React.FC<ConstraintSlidersProps> = ({
         })}
       </div>
 
-      {/* Weight distribution */}
+      {/* Weight distribution — stacked rule */}
       <div className="border-t border-border px-4 py-3">
-        <div className="flex h-1.5 w-full gap-px overflow-hidden rounded-full">
+        <div className="flex h-1.5 w-full gap-[2px]">
           {segments.map(
             (s) =>
               s.value > 0 && (
@@ -93,16 +113,21 @@ export const ConstraintSliders: React.FC<ConstraintSlidersProps> = ({
               )
           )}
         </div>
-        <div className="mt-2.5 flex items-center justify-between">
+        <div className="mt-2 flex items-center justify-between">
           <div className="flex items-center gap-3">
             {segments.map((s) => (
-              <span key={s.key} className="flex items-center gap-1.5 text-[10px] text-muted">
-                <span className={`h-1.5 w-1.5 rounded-full ${s.className}`} />
+              <span
+                key={s.key}
+                className="flex items-center gap-1 font-mono text-[9px] uppercase tracking-[0.1em] text-muted"
+              >
+                <span className={`h-1.5 w-1.5 ${s.className}`} />
                 {s.label}
               </span>
             ))}
           </div>
-          <span className="text-[10px] text-muted">Normalized to 100%</span>
+          <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-muted">
+            Norm. 100%
+          </span>
         </div>
       </div>
     </section>
