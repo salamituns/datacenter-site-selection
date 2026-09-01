@@ -303,7 +303,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
   }, [mapReady, parcels, layers, selectedParcel, resolvedTheme]);
 
   return (
-    <div className="relative h-full min-h-[480px] w-full overflow-hidden rounded-[3px] border border-border-strong bg-background">
+    <div className="relative h-full min-h-[360px] w-full overflow-hidden rounded-[3px] border border-border-strong bg-background">
       <div ref={mapContainerRef} className="absolute inset-0 z-0 h-full w-full" />
 
       {/* Graticule corner marks */}

@@ -46,21 +46,21 @@ export const Header: React.FC<HeaderProps> = ({
   onSync,
 }) => {
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between border-b border-border-strong bg-background px-4">
+    <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border-strong bg-background px-3 sm:px-4">
       {/* Masthead */}
-      <div className="flex items-center gap-3.5">
+      <div className="flex min-w-0 items-center gap-2.5 sm:gap-3.5">
         <BenchmarkMark />
-        <div>
-          <h1 className="font-display text-[22px] font-semibold leading-none tracking-tight text-foreground">
+        <div className="min-w-0">
+          <h1 className="font-display text-lg font-semibold leading-none tracking-tight text-foreground sm:text-[22px]">
             Site Selection Engine
           </h1>
-          <p className="mt-1 font-mono text-[9px] uppercase tracking-[0.18em] text-muted">
+          <p className="mt-1 hidden font-mono text-[9px] uppercase tracking-[0.18em] text-muted sm:block">
             Hyperscale parcel survey · 100+ MW
           </p>
         </div>
       </div>
 
-      <div className="flex items-center gap-5">
+      <div className="flex shrink-0 items-center gap-2.5 sm:gap-5">
         {/* Ledger stats */}
         <div className="hidden items-center gap-4 font-mono text-[11px] tabular-nums text-muted lg:flex">
           <span>
@@ -77,12 +77,12 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Region selector */}
-        <div className="relative">
+        <div className="relative hidden sm:block">
           <select
             value={selectedState}
             onChange={(e) => onStateChange(e.target.value)}
             aria-label="Select region"
-            className="h-8 appearance-none rounded-[2px] border border-border-strong bg-surface pl-2.5 pr-7 font-mono text-[11px] uppercase tracking-wide text-foreground transition-colors hover:border-foreground/60 focus:border-accent-600 focus:outline-none"
+            className="h-8 appearance-none rounded-[2px] border border-border-strong bg-surface pl-2 pr-6 font-mono text-[10px] uppercase tracking-wide text-foreground transition-colors hover:border-foreground/60 focus:border-accent-600 focus:outline-none sm:pl-2.5 sm:pr-7 sm:text-[11px]"
           >
             <option value="VA">N. Virginia · PJM</option>
             <option value="TX">Texas · ERCOT</option>
@@ -93,7 +93,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Data source + sync */}
-        <div className="flex items-center gap-1.5 rounded-[2px] border border-border-strong bg-surface px-2.5 py-1.5">
+        <div className="hidden items-center gap-1.5 rounded-[2px] border border-border-strong bg-surface px-2.5 py-1.5 sm:flex">
           <span
             className={`h-1.5 w-1.5 rounded-full ${isLive ? "bg-success dark:bg-success-night" : "bg-warning dark:bg-power-night"}`}
             title={isLive ? "Connected to Supabase PostGIS" : "Using local demo dataset"}

@@ -17,7 +17,7 @@ const GeospatialMap = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex h-full min-h-[480px] w-full items-center justify-center rounded-[3px] border border-border-strong bg-surface">
+      <div className="flex h-full min-h-[360px] w-full items-center justify-center rounded-[3px] border border-border-strong bg-surface">
         <div className="flex flex-col items-center gap-2.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted">
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-border-strong border-t-accent-600" />
           <span>Preparing plate…</span>
@@ -135,7 +135,7 @@ export default function DashboardPage() {
     Array.from(clusterCapacities.values()).reduce((acc, val) => acc + val, 0) || 1500;
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background">
+    <div className="flex min-h-screen flex-col bg-background lg:h-screen lg:overflow-hidden">
       <Header
         totalParcels={totalParcelsCount}
         primeCount={primeCount}
@@ -149,7 +149,7 @@ export default function DashboardPage() {
 
       <main className="grid min-h-0 flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[280px_minmax(0,1fr)_340px]">
         {/* Left rail: layers & scoring weights */}
-        <div className="scrollbar-hide min-h-0 space-y-4 overflow-y-auto lg:h-full">
+        <div className="space-y-4 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:scrollbar-hide">
           <LayerControls layers={layers} onToggleLayer={handleToggleLayer} />
           <ConstraintSliders
             weights={weights}
@@ -159,7 +159,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Center: geospatial map viewport */}
-        <div className="min-h-[480px] lg:min-h-0">
+        <div className="h-[58svh] min-h-[360px] lg:h-full lg:min-h-0">
           <GeospatialMap
             parcels={computedParcels}
             layers={layers}
@@ -170,7 +170,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Right rail: ranked candidate parcels */}
-        <div className="min-h-[420px] lg:min-h-0">
+        <div className="h-[70svh] min-h-[420px] max-h-[620px] lg:h-full lg:min-h-0 lg:max-h-none">
           <RankedParcelsList
             parcels={computedParcels}
             selectedParcel={selectedParcel}
