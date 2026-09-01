@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { ChevronUp, RefreshCw, Search, SlidersHorizontal, X } from "lucide-react";
 import { GridParcel, LayerVisibility, WeightFactors } from "@/types/parcel";
 import { ConstraintSliders } from "@/components/ConstraintSliders";
@@ -24,16 +24,21 @@ interface MobileLayoutProps {
 
 type SheetState = "minimized" | "peek" | "expanded";
 
-const SHEET_HEIGHT: Record<SheetState, string> = {
-  minimized: "h-[52px]",
-  peek: "h-[36svh]",
-  expanded: "h-[78svh]",
-};
+/** Snap-point heights in px for the current viewport. */
+function snapHeights(): Record<SheetState, number> {
+  const vh = typeof window === "undefined" ? 0 : window.innerHeight;
+  return {
+    minimized: 52,
+    peek: Math.round(vh * 0.36),
+    expanded: Math.round(vh * 0.78),
+  };
+}
 
 /**
  * Map-centric mobile chrome: a floating search bar over the full-bleed map
- * and a three-state bottom sheet (peek / expanded / minimized) that owns
- * all filtering and the ranked ledger.
+ * and a drag-able bottom sheet (peek / expanded / minimized) that owns all
+ * filtering and the ranked ledger. The grabber drags the sheet between snap
+ * points; the ledger scrolls inside the sheet in peek and expanded states.
  */
 export const MobileLayout: React.FC<MobileLayoutProps> = ({
   parcels,
@@ -52,6 +57,17 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
   const [sheet, setSheet] = useState<SheetState>("peek");
   const [weightsOpen, setWeightsOpen] = useState(false);
 
+  // Live drag: px height override while dragging, null when snapped.
+  const [dragH, setDragH] = useState<number | null>(null);
+  const dragStart = useRef<{ y: number; h: number } | null>(null);
+  // Suppresses the synthetic click that follows a real drag gesture.
+  const lastDragEnd = useRef(0);
+
+  const tapAfterDrag = () => {
+    if (Date.now() - lastDragEnd.current < 300) return true;
+    return false;
+  };
+
   const filteredParcels = parcels.filter((p) => {
     const q = searchTerm.toLowerCase();
     return (
@@ -64,6 +80,49 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
   const openWeights = () => {
     setWeightsOpen(true);
     setSheet("expanded");
+  };
+
+  /* ── Drag-to-resize (pointer events unify touch + mouse) ── */
+  const onHandleDown = (e: React.PointerEvent) => {
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // Pointer no longer active (edge/browser quirk) — drag still works via bubbling.
+    }
+    dragStart.current = { y: e.clientY, h: dragH ?? snapHeights()[sheet] };
+    setDragH(dragStart.current.h);
+  };
+
+  const onHandleMove = (e: React.PointerEvent) => {
+    if (!dragStart.current) return;
+    const dy = dragStart.current.y - e.clientY; // up = grow
+    if (Math.abs(dy) > 8) lastDragEnd.current = Number.MAX_SAFE_INTEGER;
+    const max = Math.round(window.innerHeight * 0.92);
+    setDragH(Math.min(max, Math.max(40, dragStart.current.h + dy)));
+  };
+
+  const onHandleUp = () => {
+    if (!dragStart.current) return;
+    const h = dragH ?? dragStart.current.h;
+    const px = snapHeights();
+    const nearest = (Object.keys(px) as SheetState[]).sort(
+      (a, b) => Math.abs(h - px[a]) - Math.abs(h - px[b])
+    )[0];
+    dragStart.current = null;
+    if (lastDragEnd.current === Number.MAX_SAFE_INTEGER) {
+      lastDragEnd.current = Date.now();
+    }
+    setDragH(null);
+    setSheet(nearest);
+  };
+
+  // While dragging up out of the minimized bar, reveal the full sheet body.
+  const showFull = sheet !== "minimized" || (dragH !== null && dragH > 96);
+  const handleProps = {
+    onPointerDown: onHandleDown,
+    onPointerMove: onHandleMove,
+    onPointerUp: onHandleUp,
+    onPointerCancel: onHandleUp,
   };
 
   return (
@@ -95,30 +154,22 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
 
       {/* ── Bottom sheet ─────────────────────────────────── */}
       <div
-        className={`fixed inset-x-0 bottom-0 z-30 flex flex-col overflow-hidden rounded-t-[6px] border-t border-border-strong bg-surface pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_rgb(0_0_0/0.10)] transition-[height] duration-300 ease-out ${SHEET_HEIGHT[sheet]}`}
+        style={dragH !== null ? { height: dragH, transitionProperty: "none" } : undefined}
+        className={`fixed inset-x-0 bottom-0 z-30 flex flex-col overflow-hidden rounded-t-[6px] border-t border-border-strong bg-surface pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_rgb(0_0_0/0.10)] transition-[height] duration-300 ease-out ${
+          dragH !== null ? "" : sheet === "minimized" ? "h-[52px]" : sheet === "peek" ? "h-[36svh]" : "h-[78svh]"
+        }`}
       >
-        {sheet === "minimized" ? (
-          /* Collapsed bar — tap to raise the sheet */
-          <button
-            onClick={() => setSheet("peek")}
-            aria-label="Show ranked parcels"
-            className="flex h-[52px] w-full items-center justify-between px-4"
-          >
-            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">
-              03 — Ranked Parcels
-              <span className="ml-2 tabular-nums text-foreground">
-                {filteredParcels.length}
-              </span>
-            </span>
-            <ChevronUp className="h-4 w-4 text-muted" />
-          </button>
-        ) : (
+        {showFull ? (
           <>
-            {/* Grabber — toggles peek / expanded */}
+            {/* Grabber — drag to resize, tap to toggle peek/expanded */}
             <button
-              onClick={() => setSheet(sheet === "expanded" ? "peek" : "expanded")}
+              {...handleProps}
+              onClick={() => {
+                if (tapAfterDrag()) return;
+                setSheet(sheet === "expanded" ? "peek" : "expanded");
+              }}
               aria-label={sheet === "expanded" ? "Collapse sheet" : "Expand sheet"}
-              className="flex h-6 w-full shrink-0 items-center justify-center"
+              className="flex h-7 w-full shrink-0 touch-none select-none items-center justify-center"
             >
               <span className="h-1 w-10 rounded-full bg-border-strong" />
             </button>
@@ -168,21 +219,13 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                 <SlidersHorizontal className="h-3.5 w-3.5" />
                 Weights
               </button>
-              <div className="flex min-w-0 gap-2 overflow-x-auto">
-                <LayerChips layers={layers} onToggleLayer={onToggleLayer} />
-              </div>
+              <LayerChips layers={layers} onToggleLayer={onToggleLayer} />
             </div>
 
-            {/* Sheet body — weights dropdown or ledger cards */}
-            <div
-              className={`min-h-0 flex-1 ${
-                sheet === "expanded" && !weightsOpen
-                  ? "scrollbar-hide overflow-y-auto"
-                  : "overflow-hidden"
-              }`}
-            >
+            {/* Sheet body — scrolls in peek and expanded alike */}
+            <div className="min-h-0 flex-1 overflow-hidden">
               {weightsOpen ? (
-                <div className="scrollbar-hide h-full overflow-y-auto px-3 pb-4">
+                <div className="scrollbar-hide h-full touch-pan-y overflow-y-auto overscroll-contain px-3 pb-4">
                   <ConstraintSliders
                     weights={weights}
                     onWeightChange={onWeightChange}
@@ -196,14 +239,35 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                   </button>
                 </div>
               ) : (
-                <ParcelCards
-                  parcels={filteredParcels}
-                  selectedId={selectedParcel?.id}
-                  onSelect={onSelectParcel}
-                />
+                <div className="scrollbar-hide h-full touch-pan-y overflow-y-auto overscroll-contain">
+                  <ParcelCards
+                    parcels={filteredParcels}
+                    selectedId={selectedParcel?.id}
+                    onSelect={onSelectParcel}
+                  />
+                </div>
               )}
             </div>
           </>
+        ) : (
+          /* Collapsed bar — drag up or tap to raise the sheet */
+          <button
+            {...handleProps}
+            onClick={() => {
+              if (tapAfterDrag()) return;
+              setSheet("peek");
+            }}
+            aria-label="Show ranked parcels"
+            className="flex h-[52px] w-full touch-none select-none items-center justify-between px-4"
+          >
+            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">
+              03 — Ranked Parcels
+              <span className="ml-2 tabular-nums text-foreground">
+                {filteredParcels.length}
+              </span>
+            </span>
+            <ChevronUp className="h-4 w-4 text-muted" />
+          </button>
         )}
       </div>
     </div>

@@ -56,11 +56,7 @@ const CHIPS: {
 /** Horizontal-scrolling layer pills — active state reads as stamped ink. */
 export const LayerChips: React.FC<LayerChipsProps> = ({ layers, onToggleLayer }) => {
   return (
-    <div
-      role="group"
-      aria-label="Map layers"
-      className="scrollbar-hide flex gap-2 overflow-x-auto border-b border-border px-3 py-2"
-    >
+    <div role="group" aria-label="Map layers" className="flex gap-2">
       {CHIPS.map((chip) => {
         const active = layers[chip.key];
         return (
