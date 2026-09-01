@@ -7,6 +7,7 @@ import { LayerControls } from "@/components/LayerControls";
 import { ConstraintSliders } from "@/components/ConstraintSliders";
 import { RankedParcelsList } from "@/components/RankedParcelsList";
 import { ParcelDetailModal } from "@/components/ParcelDetailModal";
+import { MobileLayout } from "@/components/mobile/MobileLayout";
 import { INITIAL_PARCELS } from "@/components/mockData";
 import { fetchGridParcels } from "@/lib/supabase";
 import { GridParcel, LayerVisibility, WeightFactors } from "@/types/parcel";
@@ -147,9 +148,9 @@ export default function DashboardPage() {
         onSync={handleSync}
       />
 
-      <main className="grid min-h-0 flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[280px_minmax(0,1fr)_340px]">
-        {/* Left rail: layers & scoring weights */}
-        <div className="space-y-4 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:scrollbar-hide">
+      <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)_340px] lg:gap-4 lg:p-4">
+        {/* Left rail: layers & scoring weights — desktop only (mobile owns them in the sheet) */}
+        <div className="hidden space-y-4 lg:block lg:h-full lg:min-h-0 lg:overflow-y-auto lg:scrollbar-hide">
           <LayerControls layers={layers} onToggleLayer={handleToggleLayer} />
           <ConstraintSliders
             weights={weights}
@@ -158,8 +159,8 @@ export default function DashboardPage() {
           />
         </div>
 
-        {/* Center: geospatial map viewport */}
-        <div className="h-[58svh] min-h-[360px] lg:h-full lg:min-h-0">
+        {/* Map: full-bleed fixed background on mobile, center column on desktop */}
+        <div className="fixed inset-0 z-0 lg:static lg:inset-auto lg:z-auto lg:h-full lg:min-h-0">
           <GeospatialMap
             parcels={computedParcels}
             layers={layers}
@@ -169,8 +170,8 @@ export default function DashboardPage() {
           />
         </div>
 
-        {/* Right rail: ranked candidate parcels */}
-        <div className="h-[70svh] min-h-[420px] max-h-[620px] lg:h-full lg:min-h-0 lg:max-h-none">
+        {/* Right rail: ranked candidate parcels — desktop only */}
+        <div className="hidden lg:block lg:h-full lg:min-h-0">
           <RankedParcelsList
             parcels={computedParcels}
             selectedParcel={selectedParcel}
@@ -178,6 +179,21 @@ export default function DashboardPage() {
           />
         </div>
       </main>
+
+      {/* Mobile map-centric chrome: floating top bar + bottom sheet */}
+      <MobileLayout
+        parcels={computedParcels}
+        layers={layers}
+        onToggleLayer={handleToggleLayer}
+        weights={weights}
+        onWeightChange={setWeights}
+        onResetWeights={handleResetWeights}
+        selectedParcel={selectedParcel}
+        onSelectParcel={setSelectedParcel}
+        isLive={isLivePostgis}
+        isSyncing={isSyncing}
+        onSync={handleSync}
+      />
 
       {/* Detailed site dossier */}
       <ParcelDetailModal parcel={selectedParcel} onClose={() => setSelectedParcel(null)} />

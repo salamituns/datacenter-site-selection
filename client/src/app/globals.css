@@ -120,6 +120,14 @@ input[type="range"]::-moz-range-track {
   font: inherit;
 }
 
+/* Mobile: pinch-to-zoom replaces the zoom buttons, which would fight the
+   floating top bar for space (Apple/Google Maps pattern). */
+@media (max-width: 1023px) {
+  .leaflet-control-zoom {
+    display: none;
+  }
+}
+
 .leaflet-control-zoom {
   border: 1px solid rgb(var(--border-strong)) !important;
   border-radius: 2px !important;

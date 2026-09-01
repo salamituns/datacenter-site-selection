@@ -46,7 +46,7 @@ export const Header: React.FC<HeaderProps> = ({
   onSync,
 }) => {
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border-strong bg-background px-3 sm:px-4">
+    <header className="hidden h-16 shrink-0 items-center justify-between gap-3 border-b border-border-strong bg-background px-3 lg:flex sm:px-4">
       {/* Masthead */}
       <div className="flex min-w-0 items-center gap-2.5 sm:gap-3.5">
         <BenchmarkMark />

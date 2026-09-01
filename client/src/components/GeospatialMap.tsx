@@ -319,8 +319,8 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
         )
       )}
 
-      {/* Plate status */}
-      <div className="pointer-events-none absolute left-3 top-3 z-[500]">
+      {/* Plate status — desktop only; the mobile sheet carries the status dot */}
+      <div className="pointer-events-none absolute left-3 top-3 z-[500] hidden lg:block">
         <div className="flex items-center gap-2 border border-border-strong bg-surface/95 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted shadow-plate backdrop-blur">
           <span
             className={`h-1.5 w-1.5 rounded-full ${
