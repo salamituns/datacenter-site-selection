@@ -1,0 +1,66 @@
+name: Data Ingestion & ML Pipeline
+
+on:
+  schedule:
+    # Run weekly on Sundays at 00:00 UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+    inputs:
+      state:
+        description: 'State code (e.g. VA, TX, OH)'
+        required: true
+        default: 'VA'
+      county:
+        description: 'County or Region name'
+        required: true
+        default: 'Loudoun'
+      dry_run:
+        description: 'Dry run mode (do not push to Supabase)'
+        type: boolean
+        default: false
+  push:
+    paths:
+      - 'worker/**'
+      - '.github/workflows/data_pipeline.yml'
+    branches:
+      - main
+
+jobs:
+  run-pipeline:
+    name: Run Ingestion, Scikit-Learn Clustering & Supabase PostGIS Sync
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install System Geospatial Libraries (GDAL / GEOS / PROJ)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libgeos-dev libproj-dev
+
+      - name: Install Python Dependencies
+        run: |
+          cd worker
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Pipeline & Sync PostGIS Data
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          cd worker
+          STATE="${{ github.event.inputs.state || 'VA' }}"
+          COUNTY="${{ github.event.inputs.county || 'Loudoun' }}"
+          DRY_RUN="${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}"
+
+          echo "Running pipeline for $COUNTY, $STATE (Dry run: $DRY_RUN)..."
+          python pipeline.py --state "$STATE" --county "$COUNTY" $DRY_RUN

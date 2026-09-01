@@ -1,0 +1,73 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing & Coverage
+coverage/
+.nyc_output
+
+# Next.js build output
+.next/
+out/
+build/
+dist/
+
+# Python virtual environment & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# GIS / Spatial Data Cache
+*.shp
+*.shx
+*.dbf
+*.prj
+*.geojson
+*.gpkg
+data/raw/
+data/processed/
+data/cache/
+
+# Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+
+# Supabase Local
+.supabase/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# OS / IDE
+.DS_Store
+*.pem
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Vercel local state
+.vercel/
+
+# Local agent/QA artifacts
+.playwright-mcp/
+dashboard-*.png
+*.b64
