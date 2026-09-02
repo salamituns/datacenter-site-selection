@@ -17,7 +17,7 @@ import os
 import sys
 import argparse
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from dotenv import load_dotenv
 import pandas as pd
 import geopandas as gpd
@@ -28,6 +28,33 @@ from grid_parser import GridParser
 from clustering_model import SiteClusteringModel
 
 load_dotenv()
+
+# Survey region presets — bbox (min_lon, min_lat, max_lon, max_lat), county
+# label, and the regional grid operator attached to ingested parcels.
+# Targets are real hyperscale corridors: Abilene (Stargate/CTLV, ERCOT),
+# the New Albany/Columbus corridor (PJM), and Boardman/Umatilla (BPA).
+REGION_PRESETS: Dict[str, Dict[str, Any]] = {
+    "VA": {
+        "bbox": (-77.85, 38.75, -77.25, 39.25),
+        "county": "Loudoun",
+        "grid_operator": "PJM Interconnection",
+    },
+    "TX": {
+        "bbox": (-100.05, 32.15, -99.45, 32.75),
+        "county": "Taylor",
+        "grid_operator": "ERCOT",
+    },
+    "OH": {
+        "bbox": (-83.15, 39.85, -82.55, 40.35),
+        "county": "Franklin",
+        "grid_operator": "PJM Interconnection",
+    },
+    "OR": {
+        "bbox": (-120.05, 45.55, -119.45, 46.15),
+        "county": "Morrow",
+        "grid_operator": "Bonneville Power Administration",
+    },
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +70,7 @@ def run_pipeline(
     max_lat: float = 39.25,
     state_code: str = "VA",
     county_name: str = "Loudoun",
+    grid_operator: str = "PJM Interconnection",
     dry_run: bool = False,
     output_geojson: Optional[str] = None
 ) -> Tuple[gpd.GeoDataFrame, Dict[int, Dict[str, Any]]]:
@@ -72,6 +100,10 @@ def run_pipeline(
     # 3. Step 2: Intersect HIFLD Transmission Lines & Substations
     logger.info("Step 2/5: Ingesting & Intersecting HIFLD Power Grid Corridors...")
     grid_gdf = grid_parser.intersect_hifld_power_grid(grid_gdf)
+
+    # 2b. Stamp the region's real grid operator (the HIFLD template step
+    #     defaults to PJM, which is wrong for ERCOT / BPA territories).
+    grid_gdf["grid_operator"] = grid_operator
 
     # 4. Step 3: Ingest USGS NWIS Groundwater & NOAA Climate Degree Days
     logger.info("Step 3/5: Querying USGS NWIS Hydrological Data & NOAA Climate Normals...")
@@ -187,14 +219,36 @@ def sync_to_supabase(gdf: gpd.GeoDataFrame):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AI Data Center Site Selection Pipeline")
     parser.add_argument("--dry-run", action="store_true", help="Run locally without uploading to Supabase")
-    parser.add_argument("--state", default="VA", help="State code (e.g. VA, TX, OH, OR)")
-    parser.add_argument("--county", default="Loudoun", help="County or region name")
-    parser.add_argument("--geojson", default="site_selection_results.geojson", help="Output GeoJSON filepath")
+    parser.add_argument("--state", default="VA", help="State code (e.g. VA, TX, OH, OR) — selects the bbox preset")
+    parser.add_argument("--county", default=None, help="Override the preset county/region name")
+    parser.add_argument("--bbox", default=None, help="Override the preset bbox: min_lon,min_lat,max_lon,max_lat")
+    parser.add_argument("--geojson", default=None, help="Output GeoJSON filepath")
     
     args = parser.parse_args()
+    state = args.state.upper()
+    preset = REGION_PRESETS.get(state)
+
+    if args.bbox:
+        try:
+            min_lon, min_lat, max_lon, max_lat = [float(x) for x in args.bbox.split(",")]
+        except ValueError:
+            raise SystemExit("--bbox must be four comma-separated numbers: min_lon,min_lat,max_lon,max_lat")
+    elif preset:
+        min_lon, min_lat, max_lon, max_lat = preset["bbox"]
+    else:
+        raise SystemExit(f"No bbox preset for state '{state}'. Pass --bbox min_lon,min_lat,max_lon,max_lat.")
+
+    county = args.county or (preset or {}).get("county", "Regional")
+    operator = (preset or {}).get("grid_operator", "PJM Interconnection")
+
     run_pipeline(
-        state_code=args.state,
-        county_name=args.county,
+        min_lon=min_lon,
+        min_lat=min_lat,
+        max_lon=max_lon,
+        max_lat=max_lat,
+        state_code=state,
+        county_name=county,
+        grid_operator=operator,
         dry_run=args.dry_run,
         output_geojson=args.geojson
     )
