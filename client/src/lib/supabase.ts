@@ -36,27 +36,58 @@ function decodeEWKBPoint(hex: string): [number, number] | null {
 }
 
 /**
- * Fetches ranked parcels directly from Supabase PostGIS `v_grid_parcels` view or table.
+ * Counts parcels per region (state_code) so the selector can disable
+ * regions that have not been surveyed yet. Cheap HEAD-count queries.
  */
-export async function fetchGridParcels(limit: number = 500): Promise<GridParcel[]> {
+export async function fetchRegionCounts(codes: string[]): Promise<Record<string, number>> {
+  if (!supabase) return {};
+  try {
+    const results = await Promise.all(
+      codes.map(async (code) => {
+        const { count, error } = await supabase
+          .from("grid_parcels")
+          .select("grid_id", { count: "exact", head: true })
+          .eq("state_code", code);
+        return [code, error ? 0 : (count ?? 0)] as const;
+      })
+    );
+    return Object.fromEntries(results);
+  } catch (err) {
+    console.error("Failed to fetch region counts:", err);
+    return {};
+  }
+}
+
+/**
+ * Fetches ranked parcels directly from Supabase PostGIS `v_grid_parcels` view or table.
+ * Optionally scoped to a single region (state_code) for server-side filtering.
+ */
+export async function fetchGridParcels(
+  limit: number = 500,
+  stateCode?: string
+): Promise<GridParcel[]> {
   if (!supabase) {
     return []; // Credentials not configured — caller falls back to demo data.
   }
   try {
     // 1. Try querying the helper view `v_grid_parcels` which has precomputed ST_X / ST_Y / ST_AsGeoJSON
-    let { data, error } = await supabase
+    let query = supabase
       .from("v_grid_parcels")
       .select("*")
       .order("composite_score", { ascending: false })
       .limit(limit);
+    if (stateCode) query = query.eq("state_code", stateCode);
+    let { data, error } = await query;
 
     // 2. If view query fails or returns empty, fallback to `grid_parcels` table
     if (error || !data || data.length === 0) {
-      const fallbackRes = await supabase
+      let fallbackQuery = supabase
         .from("grid_parcels")
         .select("*")
         .order("composite_score", { ascending: false })
         .limit(limit);
+      if (stateCode) fallbackQuery = fallbackQuery.eq("state_code", stateCode);
+      const fallbackRes = await fallbackQuery;
       data = fallbackRes.data;
       error = fallbackRes.error;
     }

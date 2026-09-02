@@ -9,7 +9,8 @@ import { RankedParcelsList } from "@/components/RankedParcelsList";
 import { ParcelDetailModal } from "@/components/ParcelDetailModal";
 import { MobileLayout } from "@/components/mobile/MobileLayout";
 import { INITIAL_PARCELS } from "@/components/mockData";
-import { fetchGridParcels } from "@/lib/supabase";
+import { fetchGridParcels, fetchRegionCounts } from "@/lib/supabase";
+import { REGIONS, HOME_REGION } from "@/lib/regions";
 import { GridParcel, LayerVisibility, WeightFactors } from "@/types/parcel";
 
 // Dynamically import the Leaflet map component to avoid SSR window issues
@@ -36,11 +37,13 @@ const DEFAULT_WEIGHTS: WeightFactors = {
 };
 
 export default function DashboardPage() {
-  const [selectedState, setSelectedState] = useState("VA");
+  const [selectedState, setSelectedState] = useState<string>(HOME_REGION);
   const [selectedParcel, setSelectedParcel] = useState<GridParcel | null>(null);
   const [rawParcels, setRawParcels] = useState<GridParcel[]>(INITIAL_PARCELS);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isLivePostgis, setIsLivePostgis] = useState<boolean>(false);
+  // Parcel counts per region — null until probed; drives selector availability.
+  const [regionCounts, setRegionCounts] = useState<Record<string, number> | null>(null);
 
   // Active map layers
   const [layers, setLayers] = useState<LayerVisibility>({
@@ -55,26 +58,42 @@ export default function DashboardPage() {
   // Dynamic weighting factors
   const [weights, setWeights] = useState<WeightFactors>(DEFAULT_WEIGHTS);
 
-  // Fetch live PostGIS records from Supabase on mount
-  useEffect(() => {
-    async function loadParcels() {
-      setIsSyncing(true);
-      const data = await fetchGridParcels(500);
-      if (data && data.length > 0) {
-        setRawParcels(data);
-        setIsLivePostgis(true);
-      } else {
-        setRawParcels(INITIAL_PARCELS);
-        setIsLivePostgis(false);
-      }
-      setIsSyncing(false);
+  // Load the surveyed parcels for a region. Live PostGIS data when rows
+  // exist; the home region falls back to the demo dataset when unreachable,
+  // other regions show an honest empty survey until ingested.
+  const loadParcels = async (stateCode: string) => {
+    setIsSyncing(true);
+    const data = await fetchGridParcels(500, stateCode);
+    if (data && data.length > 0) {
+      setRawParcels(data);
+      setIsLivePostgis(true);
+    } else {
+      setRawParcels(stateCode === HOME_REGION ? INITIAL_PARCELS : []);
+      setIsLivePostgis(false);
     }
-    loadParcels();
+    setIsSyncing(false);
+  };
+
+  // Initial + per-region load
+  useEffect(() => {
+    loadParcels(selectedState);
+  }, [selectedState]);
+
+  // Probe which regions have surveys on mount
+  useEffect(() => {
+    fetchRegionCounts(REGIONS.map((r) => r.code)).then(setRegionCounts);
   }, []);
+
+  // Switching regions invalidates the current selection (it belongs to
+  // another survey) — clear it so no dangling dossier stays open.
+  const handleStateChange = (stateCode: string) => {
+    setSelectedParcel(null);
+    setSelectedState(stateCode);
+  };
 
   const handleSync = async () => {
     setIsSyncing(true);
-    const data = await fetchGridParcels(500);
+    const data = await fetchGridParcels(500, selectedState);
     if (data && data.length > 0) {
       setRawParcels(data);
       setIsLivePostgis(true);
@@ -142,7 +161,8 @@ export default function DashboardPage() {
         primeCount={primeCount}
         totalCapacityMW={totalCapacityMW}
         selectedState={selectedState}
-        onStateChange={setSelectedState}
+        onStateChange={handleStateChange}
+        regionCounts={regionCounts}
         isLive={isLivePostgis}
         isSyncing={isSyncing}
         onSync={handleSync}
@@ -190,6 +210,9 @@ export default function DashboardPage() {
         onResetWeights={handleResetWeights}
         selectedParcel={selectedParcel}
         onSelectParcel={setSelectedParcel}
+        selectedState={selectedState}
+        onStateChange={handleStateChange}
+        regionCounts={regionCounts}
         isLive={isLivePostgis}
         isSyncing={isSyncing}
         onSync={handleSync}

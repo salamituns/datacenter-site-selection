@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useRef, useState } from "react";
-import { ChevronUp, RefreshCw, Search, SlidersHorizontal, X } from "lucide-react";
+import { ChevronDown, ChevronUp, RefreshCw, Search, SlidersHorizontal, X } from "lucide-react";
 import { GridParcel, LayerVisibility, WeightFactors } from "@/types/parcel";
 import { ConstraintSliders } from "@/components/ConstraintSliders";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { REGIONS, HOME_REGION } from "@/lib/regions";
 import { LayerChips } from "./LayerChips";
 import { ParcelCards } from "./ParcelCards";
 
@@ -17,6 +18,10 @@ interface MobileLayoutProps {
   onResetWeights: () => void;
   selectedParcel: GridParcel | null;
   onSelectParcel: (parcel: GridParcel) => void;
+  selectedState: string;
+  onStateChange: (state: string) => void;
+  /** Parcel counts per region code — unsurveyed regions are disabled. */
+  regionCounts?: Record<string, number> | null;
   isLive: boolean;
   isSyncing: boolean;
   onSync: () => void;
@@ -49,10 +54,16 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
   onResetWeights,
   selectedParcel,
   onSelectParcel,
+  selectedState,
+  onStateChange,
+  regionCounts,
   isLive,
   isSyncing,
   onSync,
 }) => {
+  const isSelectable = (code: string) =>
+    code === HOME_REGION || (regionCounts?.[code] ?? 0) > 0;
+
   const [searchTerm, setSearchTerm] = useState("");
   const [sheet, setSheet] = useState<SheetState>("peek");
   const [weightsOpen, setWeightsOpen] = useState(false);
@@ -139,6 +150,26 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
             aria-label="Search parcels"
             className="h-10 w-full rounded-[3px] border border-border-strong bg-surface/95 py-0 pl-9 pr-3 font-mono text-[11px] text-foreground shadow-plate backdrop-blur placeholder:text-muted focus:border-accent-600 focus:outline-none"
           />
+        </div>
+        {/* Region pill — cycles surveyed regions */}
+        <div className="relative shrink-0">
+          <select
+            value={selectedState}
+            onChange={(e) => onStateChange(e.target.value)}
+            aria-label="Select region"
+            className="h-10 appearance-none rounded-[3px] border border-border-strong bg-surface/95 pl-2.5 pr-6 font-mono text-[11px] uppercase tracking-wide text-foreground shadow-plate backdrop-blur transition-colors focus:border-accent-600 focus:outline-none"
+          >
+            {REGIONS.map((region) => (
+              <option
+                key={region.code}
+                value={region.code}
+                disabled={!isSelectable(region.code)}
+              >
+                {region.short}
+              </option>
+            ))}
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted" />
         </div>
         <button
           onClick={onSync}

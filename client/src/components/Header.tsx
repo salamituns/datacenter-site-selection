@@ -1,6 +1,7 @@
 import React from "react";
 import { RefreshCw, ChevronDown } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
+import { REGIONS, HOME_REGION } from "@/lib/regions";
 
 interface HeaderProps {
   totalParcels: number;
@@ -8,6 +9,8 @@ interface HeaderProps {
   totalCapacityMW: number;
   selectedState: string;
   onStateChange: (state: string) => void;
+  /** Parcel counts per region code — unsurveyed regions are disabled. */
+  regionCounts?: Record<string, number> | null;
   isLive: boolean;
   isSyncing: boolean;
   onSync: () => void;
@@ -41,10 +44,15 @@ export const Header: React.FC<HeaderProps> = ({
   totalCapacityMW,
   selectedState,
   onStateChange,
+  regionCounts,
   isLive,
   isSyncing,
   onSync,
 }) => {
+  // A region is selectable once surveyed — the home region always is
+  // (it carries the demo dataset fallback).
+  const isSelectable = (code: string) =>
+    code === HOME_REGION || (regionCounts?.[code] ?? 0) > 0;
   return (
     <header className="hidden h-16 shrink-0 items-center justify-between gap-3 border-b border-border-strong bg-background px-3 lg:flex sm:px-4">
       {/* Masthead */}
@@ -84,10 +92,11 @@ export const Header: React.FC<HeaderProps> = ({
             aria-label="Select region"
             className="h-8 appearance-none rounded-[2px] border border-border-strong bg-surface pl-2 pr-6 font-mono text-[10px] uppercase tracking-wide text-foreground transition-colors hover:border-foreground/60 focus:border-accent-600 focus:outline-none sm:pl-2.5 sm:pr-7 sm:text-[11px]"
           >
-            <option value="VA">N. Virginia · PJM</option>
-            <option value="TX">Texas · ERCOT</option>
-            <option value="OH">C. Ohio · PJM</option>
-            <option value="OR">Pacific NW</option>
+            {REGIONS.map((region) => (
+              <option key={region.code} value={region.code} disabled={!isSelectable(region.code)}>
+                {region.label}
+              </option>
+            ))}
           </select>
           <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted" />
         </div>
