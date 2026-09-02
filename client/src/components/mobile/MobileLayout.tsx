@@ -16,6 +16,9 @@ interface MobileLayoutProps {
   weights: WeightFactors;
   onWeightChange: (weights: WeightFactors) => void;
   onResetWeights: () => void;
+  /** Minimum composite score for Prime Zone candidacy (worker baseline: 60). */
+  primeThreshold: number;
+  onPrimeThresholdChange: (threshold: number) => void;
   selectedParcel: GridParcel | null;
   onSelectParcel: (parcel: GridParcel) => void;
   selectedState: string;
@@ -52,6 +55,8 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
   weights,
   onWeightChange,
   onResetWeights,
+  primeThreshold,
+  onPrimeThresholdChange,
   selectedParcel,
   onSelectParcel,
   selectedState,
@@ -261,6 +266,8 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                     weights={weights}
                     onWeightChange={onWeightChange}
                     onResetWeights={onResetWeights}
+                    primeThreshold={primeThreshold}
+                    onPrimeThresholdChange={onPrimeThresholdChange}
                   />
                   <button
                     onClick={() => setWeightsOpen(false)}

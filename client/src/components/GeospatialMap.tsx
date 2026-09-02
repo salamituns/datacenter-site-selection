@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { GridParcel, LayerVisibility, MapFeatures } from "@/types/parcel";
+import { PrimeZone } from "@/lib/primeZones";
 import { useTheme } from "next-themes";
 
 interface GeospatialMapProps {
@@ -12,6 +13,8 @@ interface GeospatialMapProps {
   isLiveSupabase?: boolean;
   /** Real HIFLD / USGS infrastructure features for the selected region. */
   mapFeatures?: MapFeatures;
+  /** Reactive prime zones (browser DBSCAN) — hulls are drawn as overlays. */
+  primeZones?: PrimeZone[];
 }
 
 /** Pencil shading: the more suitable the parcel, the darker the graphite. */
@@ -29,6 +32,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
   onSelectParcel,
   isLiveSupabase = false,
   mapFeatures = { lines: [], substations: [], wells: [] },
+  primeZones = [],
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -214,6 +218,29 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
         });
       }
 
+      // 1b. Reactive Prime Zone hulls — dashed boundary overlays from the
+      //     browser-side DBSCAN, morphing with the scoring sliders.
+      if (layers.primeClusters) {
+        primeZones.forEach((zone) => {
+          if (!zone.hull?.coordinates?.[0]?.length) return;
+          const latlngs = zone.hull.coordinates[0].map(
+            (coord: number[]) => [coord[1], coord[0]] as [number, number]
+          );
+          L.polygon(latlngs, {
+            color: stampStroke,
+            weight: 1.75,
+            dashArray: "2,4",
+            fillColor: stamp,
+            fillOpacity: 0.04,
+          })
+            .bindTooltip(
+              `<b>${zone.label}</b><br/><span class="font-mono">${zone.parcelCount} parcels · ${zone.mwCapacity} MW</span>`,
+              { sticky: true, className: "map-tooltip", direction: "top" }
+            )
+            .addTo(clusterLayer);
+        });
+      }
+
       // 2. HIFLD power grid corridors & substations (real, persisted per region)
       if (layers.powerGrid) {
         mapFeatures.lines.forEach((line) => {
@@ -286,7 +313,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
     }
 
     updateLayers();
-  }, [mapReady, parcels, layers, selectedParcel, resolvedTheme, mapFeatures]);
+  }, [mapReady, parcels, layers, selectedParcel, resolvedTheme, mapFeatures, primeZones]);
 
   return (
     <div className="relative h-full min-h-[360px] w-full overflow-hidden rounded-[3px] border border-border-strong bg-background">

@@ -6,6 +6,9 @@ interface ConstraintSlidersProps {
   weights: WeightFactors;
   onWeightChange: (weights: WeightFactors) => void;
   onResetWeights: () => void;
+  /** Minimum composite score for Prime Zone candidacy (worker baseline: 60). */
+  primeThreshold: number;
+  onPrimeThresholdChange: (threshold: number) => void;
 }
 
 const SLIDERS: {
@@ -22,6 +25,8 @@ export const ConstraintSliders: React.FC<ConstraintSlidersProps> = ({
   weights,
   onWeightChange,
   onResetWeights,
+  primeThreshold,
+  onPrimeThresholdChange,
 }) => {
   const totalWeight =
     weights.powerWeight + weights.waterWeight + weights.riskWeight + weights.climateWeight || 1;
@@ -129,6 +134,35 @@ export const ConstraintSliders: React.FC<ConstraintSlidersProps> = ({
             Norm. 100%
           </span>
         </div>
+      </div>
+
+      {/* Stringency threshold — prime zone candidacy cutoff.
+          Defaults to the Python worker's ingestion baseline (60) so the
+          initial page load matches the persisted survey exactly. */}
+      <div className="border-t border-border px-4 py-4">
+        <div className="mb-2 flex items-baseline justify-between">
+          <label className="text-xs font-medium text-foreground">Stringency Threshold</label>
+          <span className="font-mono text-[11px] tabular-nums text-muted">
+            ≥ {primeThreshold}
+          </span>
+        </div>
+        <input
+          type="range"
+          min={50}
+          max={90}
+          step={1}
+          value={primeThreshold}
+          aria-label="Stringency Threshold"
+          onChange={(e) => onPrimeThresholdChange(Number(e.target.value))}
+          style={{
+            background: `linear-gradient(to right, rgb(var(--accent)) ${
+              ((primeThreshold - 50) / 40) * 100
+            }%, rgb(var(--border-strong)) ${((primeThreshold - 50) / 40) * 100}%)`,
+          }}
+        />
+        <p className="mt-2 font-mono text-[9px] uppercase tracking-[0.1em] text-muted">
+          Min composite score for Prime Zone candidacy · baseline 60
+        </p>
       </div>
     </section>
   );

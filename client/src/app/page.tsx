@@ -11,6 +11,8 @@ import { PanelEdgeToggle } from "@/components/PanelEdgeToggle";
 import { MobileLayout } from "@/components/mobile/MobileLayout";
 import { INITIAL_PARCELS } from "@/components/mockData";
 import { fetchGridParcels, fetchMapFeatures, fetchRegionCounts } from "@/lib/supabase";
+import { computePrimeZones, PrimeZone } from "@/lib/primeZones";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { REGIONS, HOME_REGION } from "@/lib/regions";
 import { GridParcel, LayerVisibility, MapFeatures, WeightFactors } from "@/types/parcel";
 
@@ -64,6 +66,10 @@ export default function DashboardPage() {
 
   // Dynamic weighting factors
   const [weights, setWeights] = useState<WeightFactors>(DEFAULT_WEIGHTS);
+
+  // Minimum composite score for Prime Development Zone candidacy. Defaults
+  // to the worker's ingestion-time threshold; exposed as a slider.
+  const [primeThreshold, setPrimeThreshold] = useState(60);
 
   // Load the surveyed parcels for a region. Live PostGIS data when rows
   // exist; the home region falls back to the demo dataset when unreachable,
@@ -120,9 +126,12 @@ export default function DashboardPage() {
 
   const handleResetWeights = () => {
     setWeights(DEFAULT_WEIGHTS);
+    setPrimeThreshold(60);
   };
 
-  // Dynamically recompute parcel composite scores when sliders change
+  // Dynamically recompute parcel composite scores when sliders change.
+  // This is the live path: cheap arithmetic per parcel, runs on every tick,
+  // and drives the map shading instantly.
   const computedParcels = useMemo(() => {
     const totalWeight =
       weights.powerWeight + weights.waterWeight + weights.riskWeight + weights.climateWeight;
@@ -149,20 +158,77 @@ export default function DashboardPage() {
       .sort((a, b) => b.composite_score - a.composite_score);
   }, [rawParcels, weights]);
 
-  // Aggregate key statistics
-  const totalParcelsCount = computedParcels.length;
-  const primeParcels = computedParcels.filter((p) => p.is_prime_zone);
-  const primeCount = new Set(primeParcels.map((p) => p.cluster_zone_id)).size;
+  // Heavier derived work (DBSCAN + convex hulls) trails the sliders on a
+  // debounced value so mid-drag frames stay light; zones and stamps morph
+  // a few frames after the shading does.
+  const debouncedWeights = useDebouncedValue(weights, 75);
+  const debouncedThreshold = useDebouncedValue(primeThreshold, 75);
 
-  // Total capacity from unique prime zone clusters
-  const clusterCapacities = new Map<number, number>();
-  primeParcels.forEach((p) => {
-    if (p.cluster_zone_id >= 0 && !clusterCapacities.has(p.cluster_zone_id)) {
-      clusterCapacities.set(p.cluster_zone_id, p.megawatt_capacity_estimate);
-    }
-  });
-  const totalCapacityMW =
-    Array.from(clusterCapacities.values()).reduce((acc, val) => acc + val, 0) || 1500;
+  // Scores recomputed with the debounced weights — the clustering input.
+  const zoneScoredParcels = useMemo(() => {
+    const totalWeight =
+      debouncedWeights.powerWeight +
+      debouncedWeights.waterWeight +
+      debouncedWeights.riskWeight +
+      debouncedWeights.climateWeight;
+    const wNorm = {
+      power: debouncedWeights.powerWeight / (totalWeight || 1),
+      water: debouncedWeights.waterWeight / (totalWeight || 1),
+      risk: debouncedWeights.riskWeight / (totalWeight || 1),
+      climate: debouncedWeights.climateWeight / (totalWeight || 1),
+    };
+    return rawParcels.map((p) => ({
+      ...p,
+      composite_score: Number(
+        (
+          p.power_score * wNorm.power +
+          p.water_score * wNorm.water +
+          p.risk_score * wNorm.risk +
+          p.climate_score * wNorm.climate
+        ).toFixed(1)
+      ),
+    }));
+  }, [rawParcels, debouncedWeights]);
+
+  // Reactive Prime Development Zones — browser-side DBSCAN (Turf) mirroring
+  // the worker's ingestion semantics. No PostGIS round-trip per slider tick.
+  const primeResult = useMemo(
+    () => computePrimeZones(zoneScoredParcels, debouncedThreshold),
+    [zoneScoredParcels, debouncedThreshold]
+  );
+
+  // Blend: live composite scores (instant shading) + debounced prime zone
+  // designation (stamps, labels, capacities). The ledger, dossier, and map
+  // all consume this, so the whole UI is slider-reactive.
+  const displayParcels = useMemo(
+    () =>
+      computedParcels.map((p) => {
+        const zone = primeResult.parcelZone.get(p.id);
+        return zone
+          ? {
+              ...p,
+              is_prime_zone: true,
+              cluster_zone_id: zone.id,
+              cluster_label: zone.label,
+              megawatt_capacity_estimate: zone.mwCapacity,
+            }
+          : {
+              ...p,
+              is_prime_zone: false,
+              cluster_zone_id: -1,
+              cluster_label: "Secondary Candidate",
+            };
+      }),
+    [computedParcels, primeResult]
+  );
+
+  // Aggregate key statistics — reactive with the sliders.
+  const totalParcelsCount = displayParcels.length;
+  const primeCount = primeResult.zones.length;
+  const totalCapacityMW = primeResult.zones.reduce(
+    (acc, z: PrimeZone) => acc + z.mwCapacity,
+    0
+  );
 
   // Desktop grid template tracks rail visibility so the map re-flows
   // into whatever space the visible rails leave.
@@ -203,6 +269,8 @@ export default function DashboardPage() {
             weights={weights}
             onWeightChange={setWeights}
             onResetWeights={handleResetWeights}
+            primeThreshold={primeThreshold}
+            onPrimeThresholdChange={setPrimeThreshold}
           />
         </div>
 
@@ -211,12 +279,13 @@ export default function DashboardPage() {
             side rails and stay reachable at the map edge when a rail closes. */}
         <div className="fixed inset-0 z-0 lg:relative lg:inset-auto lg:z-auto lg:h-full lg:min-h-0">
           <GeospatialMap
-            parcels={computedParcels}
+            parcels={displayParcels}
             layers={layers}
             selectedParcel={selectedParcel}
             onSelectParcel={setSelectedParcel}
             isLiveSupabase={isLivePostgis}
             mapFeatures={mapFeatures}
+            primeZones={primeResult.zones}
           />
           <PanelEdgeToggle
             side="left"
@@ -241,7 +310,7 @@ export default function DashboardPage() {
           }`}
         >
           <RankedParcelsList
-            parcels={computedParcels}
+            parcels={displayParcels}
             selectedParcel={selectedParcel}
             onSelectParcel={setSelectedParcel}
           />
@@ -250,12 +319,14 @@ export default function DashboardPage() {
 
       {/* Mobile map-centric chrome: floating top bar + bottom sheet */}
       <MobileLayout
-        parcels={computedParcels}
+        parcels={displayParcels}
         layers={layers}
         onToggleLayer={handleToggleLayer}
         weights={weights}
         onWeightChange={setWeights}
         onResetWeights={handleResetWeights}
+        primeThreshold={primeThreshold}
+        onPrimeThresholdChange={setPrimeThreshold}
         selectedParcel={selectedParcel}
         onSelectParcel={setSelectedParcel}
         selectedState={selectedState}

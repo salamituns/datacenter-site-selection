@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.8",
+    "@turf/clusters-dbscan": "^7.4.0",
+    "@turf/convex": "^7.4.0",
     "@types/leaflet": "^1.9.22",
     "clsx": "^2.1.0",
     "leaflet": "^1.9.4",
