@@ -57,6 +57,10 @@ export default function DashboardPage() {
     parcelGrid: true,
   });
 
+  // Desktop rail visibility — toggled from the header buttons
+  const [leftRailOpen, setLeftRailOpen] = useState(true);
+  const [rightRailOpen, setRightRailOpen] = useState(true);
+
   // Dynamic weighting factors
   const [weights, setWeights] = useState<WeightFactors>(DEFAULT_WEIGHTS);
 
@@ -159,6 +163,17 @@ export default function DashboardPage() {
   const totalCapacityMW =
     Array.from(clusterCapacities.values()).reduce((acc, val) => acc + val, 0) || 1500;
 
+  // Desktop grid template tracks rail visibility so the map re-flows
+  // into whatever space the visible rails leave.
+  const gridTemplate =
+    leftRailOpen && rightRailOpen
+      ? "lg:grid-cols-[280px_minmax(0,1fr)_340px]"
+      : leftRailOpen
+      ? "lg:grid-cols-[280px_minmax(0,1fr)]"
+      : rightRailOpen
+      ? "lg:grid-cols-[minmax(0,1fr)_340px]"
+      : "lg:grid-cols-1";
+
   return (
     <div className="flex min-h-screen flex-col bg-background lg:h-screen lg:overflow-hidden">
       <Header
@@ -171,11 +186,21 @@ export default function DashboardPage() {
         isLive={isLivePostgis}
         isSyncing={isSyncing}
         onSync={handleSync}
+        leftRailOpen={leftRailOpen}
+        rightRailOpen={rightRailOpen}
+        onToggleLeftRail={() => setLeftRailOpen((v) => !v)}
+        onToggleRightRail={() => setRightRailOpen((v) => !v)}
       />
 
-      <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)_340px] lg:gap-4 lg:p-4">
+      <main
+        className={`grid min-h-0 flex-1 grid-cols-1 ${gridTemplate} lg:gap-4 lg:p-4`}
+      >
         {/* Left rail: layers & scoring weights — desktop only (mobile owns them in the sheet) */}
-        <div className="hidden space-y-4 lg:block lg:h-full lg:min-h-0 lg:overflow-y-auto lg:scrollbar-hide">
+        <div
+          className={`hidden space-y-4 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:scrollbar-hide ${
+            leftRailOpen ? "lg:block" : "lg:hidden"
+          }`}
+        >
           <LayerControls layers={layers} onToggleLayer={handleToggleLayer} />
           <ConstraintSliders
             weights={weights}
@@ -197,7 +222,11 @@ export default function DashboardPage() {
         </div>
 
         {/* Right rail: ranked candidate parcels — desktop only */}
-        <div className="hidden lg:block lg:h-full lg:min-h-0">
+        <div
+          className={`hidden lg:h-full lg:min-h-0 ${
+            rightRailOpen ? "lg:block" : "lg:hidden"
+          }`}
+        >
           <RankedParcelsList
             parcels={computedParcels}
             selectedParcel={selectedParcel}
