@@ -183,13 +183,10 @@ input[type="range"]::-moz-range-track {
 }
 
 /* Clicked SVG paths receive browser focus in Chromium, which draws its
-   default blue ring (outline: auto rgb(0,95,204)) — off-palette. Plain
-   click-focus gets nothing (the selected parcel already gets the ink
-   stroke); genuine keyboard focus gets a token-colored ink ring. */
-.leaflet-overlay-pane path:focus {
-  outline: none;
-}
-
+   default blue ring (outline: auto rgb(0,95,204)) — off-palette. The
+   focus box itself is useful (it confirms which cell the click landed
+   on before the dossier opens), so it is redrawn in token ink. */
+.leaflet-overlay-pane path:focus,
 .leaflet-overlay-pane path:focus-visible {
   outline: 2px solid rgb(var(--foreground));
   outline-offset: 2px;
