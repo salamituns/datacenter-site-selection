@@ -1,5 +1,5 @@
 import React from "react";
-import { RefreshCw, ChevronDown, PanelLeft, PanelRight } from "lucide-react";
+import { RefreshCw, ChevronDown } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
 import { REGIONS, HOME_REGION } from "@/lib/regions";
 
@@ -14,11 +14,6 @@ interface HeaderProps {
   isLive: boolean;
   isSyncing: boolean;
   onSync: () => void;
-  /** Desktop rail visibility — toggled from the header. */
-  leftRailOpen: boolean;
-  rightRailOpen: boolean;
-  onToggleLeftRail: () => void;
-  onToggleRightRail: () => void;
 }
 
 /** Geodetic benchmark: crosshair circle with a signal-orange station dot. */
@@ -53,10 +48,6 @@ export const Header: React.FC<HeaderProps> = ({
   isLive,
   isSyncing,
   onSync,
-  leftRailOpen,
-  rightRailOpen,
-  onToggleLeftRail,
-  onToggleRightRail,
 }) => {
   // A region is selectable once surveyed — the home region always is
   // (it carries the demo dataset fallback).
@@ -129,30 +120,6 @@ export const Header: React.FC<HeaderProps> = ({
           className="flex h-8 w-8 items-center justify-center rounded-[2px] border border-border-strong bg-surface text-muted transition-colors hover:border-foreground/60 hover:text-foreground disabled:opacity-60"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? "animate-spin" : ""}`} />
-        </button>
-
-        {/* Rail toggles — show/hide the desktop side panels */}
-        <button
-          onClick={onToggleLeftRail}
-          aria-pressed={leftRailOpen}
-          aria-label={leftRailOpen ? "Hide layers panel" : "Show layers panel"}
-          title={leftRailOpen ? "Hide layers & weights panel" : "Show layers & weights panel"}
-          className={`flex h-8 w-8 items-center justify-center rounded-[2px] border border-border-strong bg-surface transition-colors hover:border-foreground/60 ${
-            leftRailOpen ? "text-foreground" : "text-muted hover:text-foreground"
-          }`}
-        >
-          <PanelLeft className="h-3.5 w-3.5" />
-        </button>
-        <button
-          onClick={onToggleRightRail}
-          aria-pressed={rightRailOpen}
-          aria-label={rightRailOpen ? "Hide ranked parcels panel" : "Show ranked parcels panel"}
-          title={rightRailOpen ? "Hide ranked parcels panel" : "Show ranked parcels panel"}
-          className={`flex h-8 w-8 items-center justify-center rounded-[2px] border border-border-strong bg-surface transition-colors hover:border-foreground/60 ${
-            rightRailOpen ? "text-foreground" : "text-muted hover:text-foreground"
-          }`}
-        >
-          <PanelRight className="h-3.5 w-3.5" />
         </button>
 
         <ThemeToggle />

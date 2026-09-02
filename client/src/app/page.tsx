@@ -7,6 +7,7 @@ import { LayerControls } from "@/components/LayerControls";
 import { ConstraintSliders } from "@/components/ConstraintSliders";
 import { RankedParcelsList } from "@/components/RankedParcelsList";
 import { ParcelDetailModal } from "@/components/ParcelDetailModal";
+import { PanelEdgeToggle } from "@/components/PanelEdgeToggle";
 import { MobileLayout } from "@/components/mobile/MobileLayout";
 import { INITIAL_PARCELS } from "@/components/mockData";
 import { fetchGridParcels, fetchMapFeatures, fetchRegionCounts } from "@/lib/supabase";
@@ -186,10 +187,6 @@ export default function DashboardPage() {
         isLive={isLivePostgis}
         isSyncing={isSyncing}
         onSync={handleSync}
-        leftRailOpen={leftRailOpen}
-        rightRailOpen={rightRailOpen}
-        onToggleLeftRail={() => setLeftRailOpen((v) => !v)}
-        onToggleRightRail={() => setRightRailOpen((v) => !v)}
       />
 
       <main
@@ -209,8 +206,10 @@ export default function DashboardPage() {
           />
         </div>
 
-        {/* Map: full-bleed fixed background on mobile, center column on desktop */}
-        <div className="fixed inset-0 z-0 lg:static lg:inset-auto lg:z-auto lg:h-full lg:min-h-0">
+        {/* Map: full-bleed fixed background on mobile, center column on desktop.
+            Anchors the panel edge toggles, which straddle the seams to the
+            side rails and stay reachable at the map edge when a rail closes. */}
+        <div className="fixed inset-0 z-0 lg:relative lg:inset-auto lg:z-auto lg:h-full lg:min-h-0">
           <GeospatialMap
             parcels={computedParcels}
             layers={layers}
@@ -218,6 +217,20 @@ export default function DashboardPage() {
             onSelectParcel={setSelectedParcel}
             isLiveSupabase={isLivePostgis}
             mapFeatures={mapFeatures}
+          />
+          <PanelEdgeToggle
+            side="left"
+            open={leftRailOpen}
+            onToggle={() => setLeftRailOpen((v) => !v)}
+            titleOpen="Hide layers & weights panel"
+            titleClosed="Show layers & weights panel"
+          />
+          <PanelEdgeToggle
+            side="right"
+            open={rightRailOpen}
+            onToggle={() => setRightRailOpen((v) => !v)}
+            titleOpen="Hide ranked parcels panel"
+            titleClosed="Show ranked parcels panel"
           />
         </div>
 
