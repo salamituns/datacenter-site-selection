@@ -163,6 +163,30 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
       const stampStroke = isDark ? "#F9A870" : "#C24A08";
       const validBounds: [number, number][] = [];
 
+      // 0. Reactive Prime Zone tint — the faint fill of each hull from the
+      //     browser-side DBSCAN. It renders beneath the parcels (added
+      //     first), so parcel clicks and tooltips always win wherever a
+      //     parcel exists; the zone tooltip surfaces over the gaps between
+      //     cells inside the hull. The dashed boundary renders above (1b).
+      if (layers.primeClusters) {
+        primeZones.forEach((zone) => {
+          if (!zone.hull?.coordinates?.[0]?.length) return;
+          const latlngs = zone.hull.coordinates[0].map(
+            (coord: number[]) => [coord[1], coord[0]] as [number, number]
+          );
+          L.polygon(latlngs, {
+            stroke: false,
+            fillColor: stamp,
+            fillOpacity: 0.04,
+          })
+            .bindTooltip(
+              `<b>${zone.label}</b><br/><span class="font-mono">${zone.parcelCount} parcels · ${zone.mwCapacity} MW</span>`,
+              { sticky: true, className: "map-tooltip", direction: "top" }
+            )
+            .addTo(clusterLayer);
+        });
+      }
+
       // 1. PostGIS parcels — graphite-shaded suitability, stamped prime zones
       if (layers.parcelGrid && parcels.length > 0) {
         parcels.forEach((p) => {
@@ -218,8 +242,11 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
         });
       }
 
-      // 1b. Reactive Prime Zone hulls — dashed boundary overlays from the
-      //     browser-side DBSCAN, morphing with the scoring sliders.
+      // 1b. Reactive Prime Zone hulls — dashed boundary overlay, boundary
+      //     only and non-interactive: the convex hull hugs the cell
+      //     footprints, so a filled or interactive hull would sit over the
+      //     parcels and swallow every click (the "shield" bug). The edge
+      //     itself is decorative; zone info lives on the tint's tooltip.
       if (layers.primeClusters) {
         primeZones.forEach((zone) => {
           if (!zone.hull?.coordinates?.[0]?.length) return;
@@ -230,14 +257,9 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
             color: stampStroke,
             weight: 1.75,
             dashArray: "2,4",
-            fillColor: stamp,
-            fillOpacity: 0.04,
-          })
-            .bindTooltip(
-              `<b>${zone.label}</b><br/><span class="font-mono">${zone.parcelCount} parcels · ${zone.mwCapacity} MW</span>`,
-              { sticky: true, className: "map-tooltip", direction: "top" }
-            )
-            .addTo(clusterLayer);
+            fill: false,
+            interactive: false,
+          }).addTo(clusterLayer);
         });
       }
 

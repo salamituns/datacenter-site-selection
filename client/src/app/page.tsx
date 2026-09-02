@@ -287,20 +287,27 @@ export default function DashboardPage() {
             mapFeatures={mapFeatures}
             primeZones={primeResult.zones}
           />
-          <PanelEdgeToggle
-            side="left"
-            open={leftRailOpen}
-            onToggle={() => setLeftRailOpen((v) => !v)}
-            titleOpen="Hide layers & weights panel"
-            titleClosed="Show layers & weights panel"
-          />
-          <PanelEdgeToggle
-            side="right"
-            open={rightRailOpen}
-            onToggle={() => setRightRailOpen((v) => !v)}
-            titleOpen="Hide ranked parcels panel"
-            titleClosed="Show ranked parcels panel"
-          />
+          {/* Rail chevrons hide while the dossier modal is open — they sit
+              at z-[500] (above the map's Leaflet panes) and would otherwise
+              paint over the modal at widths where the seams cross it. */}
+          {!selectedParcel && (
+            <>
+              <PanelEdgeToggle
+                side="left"
+                open={leftRailOpen}
+                onToggle={() => setLeftRailOpen((v) => !v)}
+                titleOpen="Hide layers & weights panel"
+                titleClosed="Show layers & weights panel"
+              />
+              <PanelEdgeToggle
+                side="right"
+                open={rightRailOpen}
+                onToggle={() => setRightRailOpen((v) => !v)}
+                titleOpen="Hide ranked parcels panel"
+                titleClosed="Show ranked parcels panel"
+              />
+            </>
+          )}
         </div>
 
         {/* Right rail: ranked candidate parcels — desktop only */}
