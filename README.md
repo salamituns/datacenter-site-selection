@@ -116,7 +116,7 @@ Open [http://localhost:3000](http://localhost:3000) to access the interactive si
 
 The dashboard deploys to Vercel automatically from this repository:
 
-- **Production**: every push to `main` deploys to [datacenter-site-selection-salamituns-projects.vercel.app](https://datacenter-site-selection-salamituns-projects.vercel.app)
+- **Production**: every push to `main` deploys to [grid.salamituns.com](https://grid.salamituns.com)
 - **Previews**: every pull request gets a SSO-protected preview URL
 
 The Next.js app lives in `client/`, which is configured as the Vercel root directory. The build requires two environment variables (set per-environment in Vercel, never in source):
