@@ -237,7 +237,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
             {/* Sheet head */}
             <div className="flex shrink-0 items-center justify-between gap-2 px-3 pb-1.5 pt-0.5">
               <h3 className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">
-                03 — Ranked Parcels
+                Ranked Parcels
                 <span className="ml-2 tabular-nums text-foreground">
                   {filteredParcels.length}
                 </span>
@@ -312,7 +312,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
             className="flex h-[52px] w-full touch-none select-none items-center justify-between px-4"
           >
             <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">
-              03 — Ranked Parcels
+              Ranked Parcels
               <span className="ml-2 tabular-nums text-foreground">
                 {filteredParcels.length}
               </span>

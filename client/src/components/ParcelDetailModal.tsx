@@ -174,7 +174,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
       {/* Constraint analysis — ledger tables */}
       <div className="px-4 py-5 lg:px-6">
         <h4 className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
-          04 — Constraint Analysis
+          Constraint Analysis
         </h4>
         <div className="mt-3 grid grid-cols-1 gap-x-10 gap-y-5 sm:grid-cols-2">
           {constraints.map((group) => (

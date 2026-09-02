@@ -62,7 +62,7 @@ export const ConstraintSliders: React.FC<ConstraintSlidersProps> = ({
     <section className="rounded-[2px] border border-border-strong bg-surface">
       <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
         <h3 className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">
-          02 — Scoring Weights
+          Scoring Weights
         </h3>
         <button
           onClick={onResetWeights}

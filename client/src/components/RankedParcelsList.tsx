@@ -37,7 +37,7 @@ export const RankedParcelsList: React.FC<RankedParcelsListProps> = ({
       <div className="border-b border-border px-4 py-2.5">
         <div className="flex items-baseline justify-between">
           <h3 className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">
-            03 — Ranked Parcels
+            Ranked Parcels
           </h3>
           <span className="font-mono text-[10px] tabular-nums text-muted">
             {filteredParcels.length} shown

@@ -88,7 +88,7 @@ export const LayerControls: React.FC<LayerControlsProps> = ({ layers, onToggleLa
     <section className="rounded-[2px] border border-border-strong bg-surface">
       <div className="flex items-baseline justify-between border-b border-border px-4 py-2.5">
         <h3 className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">
-          01 — Layers
+          Layers
         </h3>
         <span className="font-mono text-[10px] tabular-nums text-muted">
           {visibleCount}/{LAYER_CONFIGS.length}
