@@ -26,6 +26,7 @@ from water_api import USGSWaterAPI
 from climate_api import NOAAClimateAPI
 from grid_parser import GridParser
 from clustering_model import SiteClusteringModel
+from hifld_api import HIFLDPowerAPI
 
 load_dotenv()
 
@@ -83,6 +84,7 @@ def run_pipeline(
     # 1. Initialize API Clients & Parsers
     water_api = USGSWaterAPI()
     climate_api = NOAAClimateAPI()
+    hifld_api = HIFLDPowerAPI()
     grid_parser = GridParser(water_api=water_api, climate_api=climate_api)
     clustering_model = SiteClusteringModel(min_composite_score=60.0, eps_km=8.5, min_samples=2)
 
@@ -97,9 +99,23 @@ def run_pipeline(
         county_name=county_name
     )
 
-    # 3. Step 2: Intersect HIFLD Transmission Lines & Substations
+    # 3. Step 2: Intersect real HIFLD transmission lines & substations
     logger.info("Step 2/5: Ingesting & Intersecting HIFLD Power Grid Corridors...")
-    grid_gdf = grid_parser.intersect_hifld_power_grid(grid_gdf)
+    lines_gdf, subs_gdf = hifld_api.fetch_power_by_bbox(
+        min_lon=min_lon, min_lat=min_lat, max_lon=max_lon, max_lat=max_lat
+    )
+    if lines_gdf is not None and subs_gdf is not None:
+        logger.info(
+            f"Using LIVE HIFLD grid: {len(lines_gdf)} transmission lines, {len(subs_gdf)} substations."
+        )
+        grid_gdf = grid_parser.intersect_hifld_power_grid(
+            grid_gdf, transmission_lines_gdf=lines_gdf, substations_gdf=subs_gdf
+        )
+    else:
+        logger.warning(
+            "HIFLD services unavailable — falling back to synthetic corridor template."
+        )
+        grid_gdf = grid_parser.intersect_hifld_power_grid(grid_gdf)
 
     # 2b. Stamp the region's real grid operator (the HIFLD template step
     #     defaults to PJM, which is wrong for ERCOT / BPA territories).
