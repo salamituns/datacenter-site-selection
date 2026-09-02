@@ -4,6 +4,7 @@ import React, { useRef, useState } from "react";
 import { ChevronDown, ChevronUp, RefreshCw, Search, SlidersHorizontal, X } from "lucide-react";
 import { GridParcel, LayerVisibility, WeightFactors } from "@/types/parcel";
 import { ConstraintSliders } from "@/components/ConstraintSliders";
+import { BenchmarkMark } from "@/components/Header";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { REGIONS, HOME_REGION } from "@/lib/regions";
 import { LayerChips } from "./LayerChips";
@@ -143,8 +144,30 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
 
   return (
     <div className="lg:hidden">
-      {/* ── Floating top bar ─────────────────────────────── */}
-      <div className="fixed inset-x-3 top-3 z-20 flex items-center gap-2">
+      {/* ── Floating top chrome: masthead + search bar ── */}
+      <div className="fixed inset-x-3 top-3 z-20 flex flex-col gap-2">
+        {/* Masthead — product identity, always visible over the map */}
+        <div className="flex h-9 shrink-0 items-center justify-between gap-2 rounded-[3px] border border-border-strong bg-surface/95 px-2.5 shadow-plate backdrop-blur">
+          <div className="flex min-w-0 items-center gap-2">
+            <BenchmarkMark size={18} />
+            <h1 className="truncate font-display text-[15px] font-semibold leading-none tracking-tight text-foreground">
+              Site Selection Engine
+            </h1>
+          </div>
+          <span
+            className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted"
+            title={isLive ? "Connected to Supabase PostGIS" : "Using local demo dataset"}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                isLive ? "bg-success dark:bg-success-night" : "bg-warning dark:bg-power-night"
+              }`}
+            />
+            {isLive ? "PostGIS" : "Demo"}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
           <input
@@ -186,6 +209,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
           <RefreshCw className={`h-4 w-4 ${isSyncing ? "animate-spin" : ""}`} />
         </button>
         <ThemeToggle className="h-10 w-10 rounded-[3px] bg-surface/95 shadow-plate backdrop-blur" />
+        </div>
       </div>
 
       {/* ── Bottom sheet ─────────────────────────────────── */}
@@ -219,17 +243,6 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                 </span>
               </h3>
               <div className="flex items-center gap-2">
-                <span
-                  className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted"
-                  title={isLive ? "Connected to Supabase PostGIS" : "Using local demo dataset"}
-                >
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      isLive ? "bg-success dark:bg-success-night" : "bg-warning dark:bg-power-night"
-                    }`}
-                  />
-                  {isLive ? "PostGIS" : "Demo"}
-                </span>
                 <button
                   onClick={() => setSheet("minimized")}
                   aria-label="Minimize sheet"

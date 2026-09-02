@@ -17,11 +17,11 @@ interface HeaderProps {
 }
 
 /** Geodetic benchmark: crosshair circle with a signal-orange station dot. */
-function BenchmarkMark() {
+export function BenchmarkMark({ size = 24 }: { size?: number }) {
   return (
     <svg
-      width="24"
-      height="24"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       aria-hidden="true"
