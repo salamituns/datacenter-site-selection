@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { GridParcel, LayerVisibility } from "@/types/parcel";
+import { GridParcel, LayerVisibility, MapFeatures } from "@/types/parcel";
 import { useTheme } from "next-themes";
 
 interface GeospatialMapProps {
@@ -10,6 +10,8 @@ interface GeospatialMapProps {
   selectedParcel: GridParcel | null;
   onSelectParcel: (parcel: GridParcel) => void;
   isLiveSupabase?: boolean;
+  /** Real HIFLD / USGS infrastructure features for the selected region. */
+  mapFeatures?: MapFeatures;
 }
 
 /** Pencil shading: the more suitable the parcel, the darker the graphite. */
@@ -26,6 +28,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
   selectedParcel,
   onSelectParcel,
   isLiveSupabase = false,
+  mapFeatures = { lines: [], substations: [], wells: [] },
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -211,52 +214,39 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
         });
       }
 
-      // 2. HIFLD power grid corridors & substations
+      // 2. HIFLD power grid corridors & substations (real, persisted per region)
       if (layers.powerGrid) {
-        const txCorridors = [
-          [
-            [39.18, -77.85],
-            [39.05, -77.55],
-            [38.95, -77.25],
-          ],
-          [
-            [39.22, -77.65],
-            [38.98, -77.58],
-            [38.78, -77.52],
-          ],
-          [
-            [38.88, -77.85],
-            [38.82, -77.54],
-            [38.75, -77.25],
-          ],
-        ];
-
-        txCorridors.forEach((line) => {
-          L.polyline(line as any, {
+        mapFeatures.lines.forEach((line) => {
+          const coords = line.geojson_geom?.coordinates;
+          if (!coords || coords.length < 2) return;
+          const latlngs = coords.map((coord: number[]) => [coord[1], coord[0]] as [number, number]);
+          const kv = line.voltage_kv;
+          L.polyline(latlngs, {
             color: power,
-            weight: 1.5,
+            weight: kv >= 345 ? 2.25 : 1.5,
             dashArray: "4, 6",
             opacity: 0.9,
-          }).addTo(powerLayer);
+          })
+            .bindTooltip(
+              `<span class="font-mono">${kv} kV</span> · ${line.owner || "Unknown"}<br/>` +
+                `<b>${line.line_name || "Transmission Line"}</b>`,
+              { sticky: true, className: "map-tooltip", direction: "top" }
+            )
+            .addTo(powerLayer);
         });
 
-        const substations = [
-          { lat: 39.04, lon: -77.52, name: "Pleasant View", kv: 500 },
-          { lat: 39.08, lon: -77.45, name: "Goose Creek", kv: 500 },
-          { lat: 38.83, lon: -77.58, name: "Gainesville", kv: 230 },
-          { lat: 39.16, lon: -77.68, name: "Lucketts", kv: 500 },
-        ];
-
-        substations.forEach((sub) => {
+        mapFeatures.substations.forEach((sub) => {
+          if (isNaN(sub.lat) || isNaN(sub.lon)) return;
+          const kv = sub.voltage_kv;
           L.circleMarker([sub.lat, sub.lon], {
-            radius: 4.5,
+            radius: kv >= 345 ? 5.5 : 4.5,
             fillColor: power,
             color: nodeRing,
             weight: 1.25,
             opacity: 1,
             fillOpacity: 1,
           })
-            .bindTooltip(`${sub.name} · ${sub.kv} kV`, {
+            .bindTooltip(`${sub.substation_name} · ${kv} kV`, {
               direction: "top",
               className: "map-tooltip",
             })
@@ -264,16 +254,10 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
         });
       }
 
-      // 3. USGS water observation wells
+      // 3. USGS NWIS observation wells (real, persisted per region)
       if (layers.waterAquifers) {
-        const wells = [
-          { lat: 39.11, lon: -77.61, id: "GW-001", depth: 34.2 },
-          { lat: 38.88, lon: -77.32, id: "GW-002", depth: 38.0 },
-          { lat: 39.01, lon: -77.43, id: "GW-003", depth: 42.5 },
-          { lat: 39.04, lon: -77.5, id: "GW-004", depth: 28.0 },
-        ];
-
-        wells.forEach((w) => {
+        mapFeatures.wells.forEach((w) => {
+          if (isNaN(w.lat) || isNaN(w.lon)) return;
           L.circleMarker([w.lat, w.lon], {
             radius: 4,
             fillColor: waterColor,
@@ -282,10 +266,12 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
             opacity: 1,
             fillOpacity: 1,
           })
-            .bindTooltip(`USGS ${w.id} · ${w.depth} ft`, {
-              direction: "top",
-              className: "map-tooltip",
-            })
+            .bindTooltip(
+              w.water_depth_ft != null
+                ? `USGS ${w.site_no} · ${w.water_depth_ft.toFixed(0)} ft`
+                : `USGS ${w.site_no}`,
+              { direction: "top", className: "map-tooltip" }
+            )
             .addTo(waterLayer);
         });
       }
@@ -300,7 +286,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
     }
 
     updateLayers();
-  }, [mapReady, parcels, layers, selectedParcel, resolvedTheme]);
+  }, [mapReady, parcels, layers, selectedParcel, resolvedTheme, mapFeatures]);
 
   return (
     <div className="relative h-full min-h-[360px] w-full overflow-hidden rounded-[3px] border border-border-strong bg-background">

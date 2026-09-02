@@ -62,15 +62,17 @@ class HIFLDPowerAPI:
         """
         bbox = f"{min_lon},{min_lat},{max_lon},{max_lat}"
 
+        # Field names differ per layer: lines expose both GlobalID and ID,
+        # substations only ID (no GlobalID field exists there).
         lines = self._fetch_paginated(
             self.TRANSMISSION_URL,
             bbox,
-            out_fields="VOLTAGE,VOLT_CLASS,OWNER,SUB_1,SUB_2,TYPE,STATUS",
+            out_fields="ID,GlobalID,VOLTAGE,VOLT_CLASS,OWNER,SUB_1,SUB_2,TYPE,STATUS",
         )
         subs = self._fetch_paginated(
             self.SUBSTATIONS_URL,
             bbox,
-            out_fields="NAME,TYPE,MAX_VOLT,MIN_VOLT",
+            out_fields="ID,NAME,TYPE,MAX_VOLT,MIN_VOLT",
         )
 
         if lines is None or subs is None:
@@ -146,8 +148,12 @@ class HIFLDPowerAPI:
                 if voltage is None or voltage < self.MIN_VOLTAGE_KV:
                     continue
 
+                feature_id = str(props.get("GlobalID") or props.get("ID") or "").strip()
+                if not feature_id:
+                    feature_id = f"NL-{len(rows):05d}"  # no global id — synthetic fallback key
                 geom = shape(geometry)
                 rows.append({
+                    "feature_id": feature_id,
                     "voltage_kv": voltage,
                     "volt_class": props.get("VOLT_CLASS"),
                     "owner": props.get("OWNER"),
@@ -179,7 +185,12 @@ class HIFLDPowerAPI:
                 if name.upper().startswith("UNKNOWN"):
                     name = "Unnamed Substation"
 
+                feature_id = str(props.get("ID") or "").strip()
+                if not feature_id:
+                    feature_id = f"NS-{len(rows):05d}"
+
                 rows.append({
+                    "feature_id": feature_id,
                     "substation_name": name,
                     "voltage_kv": float(max_volt),
                     "geometry": shape(geometry),

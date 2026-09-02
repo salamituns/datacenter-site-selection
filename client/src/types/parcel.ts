@@ -73,3 +73,45 @@ export interface ClusterSummary {
   total_area_sq_km: number;
   total_mw_capacity: number;
 }
+
+// ── Map infrastructure features (real HIFLD / USGS NWIS, persisted per region) ──
+
+export interface TransmissionLineFeature {
+  id: string;
+  feature_id: string;
+  state_code: string;
+  owner: string | null;
+  voltage_kv: number;
+  volt_class: string | null;
+  line_name: string | null;
+  /** GeoJSON LineString: coordinates[0] is an array of [lon, lat] pairs */
+  geojson_geom?: {
+    type: string;
+    coordinates: number[][];
+  };
+}
+
+export interface SubstationFeature {
+  id: string;
+  feature_id: string;
+  state_code: string;
+  substation_name: string;
+  voltage_kv: number;
+  lon: number;
+  lat: number;
+}
+
+export interface ObservationWellFeature {
+  id: string;
+  site_no: string;
+  state_code: string;
+  water_depth_ft: number | null;
+  lon: number;
+  lat: number;
+}
+
+export interface MapFeatures {
+  lines: TransmissionLineFeature[];
+  substations: SubstationFeature[];
+  wells: ObservationWellFeature[];
+}

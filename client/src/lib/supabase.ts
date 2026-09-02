@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import { GridParcel } from "@/types/parcel";
+import { GridParcel, MapFeatures } from "@/types/parcel";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -55,6 +55,60 @@ export async function fetchRegionCounts(codes: string[]): Promise<Record<string,
   } catch (err) {
     console.error("Failed to fetch region counts:", err);
     return {};
+  }
+}
+
+/**
+ * Fetches the persisted map infrastructure features (HIFLD transmission
+ * lines + substations, USGS observation wells) for a survey region. Returns
+ * empty lists when unavailable — the map simply draws no markers.
+ */
+export async function fetchMapFeatures(stateCode?: string): Promise<MapFeatures> {
+  const empty: MapFeatures = { lines: [], substations: [], wells: [] };
+  if (!supabase) return empty;
+  try {
+    const scope = (q: any) => (stateCode ? q.eq("state_code", stateCode) : q);
+    const [linesRes, subsRes, wellsRes] = await Promise.all([
+      scope(supabase.from("v_transmission_lines").select("*").limit(500)),
+      scope(supabase.from("v_substations").select("*").limit(500)),
+      scope(supabase.from("v_observation_wells").select("*").limit(500)),
+    ]);
+
+    const lines = (linesRes.data || []).map((item: any) => ({
+      id: item.id,
+      feature_id: item.feature_id,
+      state_code: item.state_code,
+      owner: item.owner || null,
+      voltage_kv: Number(item.voltage_kv || 0),
+      volt_class: item.volt_class || null,
+      line_name: item.line_name || null,
+      geojson_geom:
+        typeof item.geojson_geom === "string" ? JSON.parse(item.geojson_geom) : item.geojson_geom,
+    }));
+
+    const substations = (subsRes.data || []).map((item: any) => ({
+      id: item.id,
+      feature_id: item.feature_id,
+      state_code: item.state_code,
+      substation_name: item.substation_name || "Substation",
+      voltage_kv: Number(item.voltage_kv || 0),
+      lon: Number(item.lon),
+      lat: Number(item.lat),
+    }));
+
+    const wells = (wellsRes.data || []).map((item: any) => ({
+      id: item.id,
+      site_no: item.site_no,
+      state_code: item.state_code,
+      water_depth_ft: item.water_depth_ft == null ? null : Number(item.water_depth_ft),
+      lon: Number(item.lon),
+      lat: Number(item.lat),
+    }));
+
+    return { lines, substations, wells };
+  } catch (err) {
+    console.error("Failed to fetch map features:", err);
+    return empty;
   }
 }
 

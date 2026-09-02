@@ -9,9 +9,9 @@ import { RankedParcelsList } from "@/components/RankedParcelsList";
 import { ParcelDetailModal } from "@/components/ParcelDetailModal";
 import { MobileLayout } from "@/components/mobile/MobileLayout";
 import { INITIAL_PARCELS } from "@/components/mockData";
-import { fetchGridParcels, fetchRegionCounts } from "@/lib/supabase";
+import { fetchGridParcels, fetchMapFeatures, fetchRegionCounts } from "@/lib/supabase";
 import { REGIONS, HOME_REGION } from "@/lib/regions";
-import { GridParcel, LayerVisibility, WeightFactors } from "@/types/parcel";
+import { GridParcel, LayerVisibility, MapFeatures, WeightFactors } from "@/types/parcel";
 
 // Dynamically import the Leaflet map component to avoid SSR window issues
 const GeospatialMap = dynamic(
@@ -44,6 +44,8 @@ export default function DashboardPage() {
   const [isLivePostgis, setIsLivePostgis] = useState<boolean>(false);
   // Parcel counts per region — null until probed; drives selector availability.
   const [regionCounts, setRegionCounts] = useState<Record<string, number> | null>(null);
+  // Real infrastructure features (HIFLD lines/substations, USGS wells) drawn on the map.
+  const [mapFeatures, setMapFeatures] = useState<MapFeatures>({ lines: [], substations: [], wells: [] });
 
   // Active map layers
   const [layers, setLayers] = useState<LayerVisibility>({
@@ -77,6 +79,9 @@ export default function DashboardPage() {
   // Initial + per-region load
   useEffect(() => {
     loadParcels(selectedState);
+    // Map features refresh alongside the parcel survey (independent — a
+    // marker-layer failure must not blank the parcel grid).
+    fetchMapFeatures(selectedState).then(setMapFeatures).catch(() => {});
   }, [selectedState]);
 
   // Probe which regions have surveys on mount
@@ -187,6 +192,7 @@ export default function DashboardPage() {
             selectedParcel={selectedParcel}
             onSelectParcel={setSelectedParcel}
             isLiveSupabase={isLivePostgis}
+            mapFeatures={mapFeatures}
           />
         </div>
 

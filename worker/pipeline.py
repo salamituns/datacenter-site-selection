@@ -126,6 +126,10 @@ def run_pipeline(
     # 4. Step 3: Ingest USGS NWIS Groundwater & NOAA Climate Degree Days
     logger.info("Step 3/5: Querying USGS NWIS Hydrological Data & NOAA Climate Normals...")
     grid_gdf = grid_parser.intersect_water_and_climate(grid_gdf)
+    # Same bbox as above — NWIS result is cached, so this is free.
+    wells_df = water_api.fetch_groundwater_levels_by_bbox(
+        min_lon=min_lon, min_lat=min_lat, max_lon=max_lon, max_lat=max_lat
+    )
 
     # 5. Step 4: Intersect FEMA Flood & USGS Seismic Hazard Risk
     logger.info("Step 4/5: Intersecting FEMA NRI & USGS Seismic Hazard Risk...")
@@ -166,6 +170,15 @@ def run_pipeline(
     # Sync to Supabase PostGIS
     if not dry_run:
         sync_to_supabase(clustered_gdf)
+        # Persist the real map features (lines / substations / wells) so the
+        # client renders live infrastructure markers per region. Skipped for
+        # synthetic fallbacks — never persist fake corridors.
+        if lines_gdf is not None and subs_gdf is not None:
+            sync_map_features(state_code, lines_gdf, subs_gdf)
+        else:
+            logger.warning("HIFLD unavailable — map feature tables not refreshed.")
+        if wells_df is not None and not wells_df.empty:
+            sync_observation_wells(state_code, wells_df)
     else:
         logger.info("Dry-run mode active. Skipped remote Supabase synchronization.")
 
@@ -238,6 +251,111 @@ def sync_to_supabase(gdf: gpd.GeoDataFrame):
 
     except Exception as e:
         logger.error(f"Error during Supabase upsert: {e}")
+
+
+def _get_supabase_client() -> Optional[Any]:
+    """Returns a service-role Supabase client, or None when unconfigured."""
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+    if not supabase_url or not supabase_key:
+        logger.warning("SUPABASE_URL or SUPABASE_KEY not found in environment. Skipping database upload.")
+        return None
+    from supabase import create_client, Client
+    return create_client(supabase_url, supabase_key)
+
+
+def sync_map_features(
+    state_code: str,
+    lines_gdf: gpd.GeoDataFrame,
+    subs_gdf: gpd.GeoDataFrame
+):
+    """
+    Replaces the persisted HIFLD power features for a region: real transmission
+    corridors and substations the client draws on the map. Multi-part line
+    geometries are exploded into per-part rows (feature_id gains a -N suffix).
+    """
+    supabase = _get_supabase_client()
+    if supabase is None:
+        return
+    try:
+        from shapely.geometry import MultiLineString
+
+        # Region-scoped replace keeps re-ingestion idempotent.
+        supabase.table("transmission_lines").delete().eq("state_code", state_code).execute()
+        supabase.table("substations").delete().eq("state_code", state_code).execute()
+
+        line_records: List[Dict[str, Any]] = []
+        for _, row in lines_gdf.iterrows():
+            geom = row.geometry
+            parts = list(geom.geoms) if isinstance(geom, MultiLineString) else [geom]
+            for i, part in enumerate(parts):
+                feature_id = str(row["feature_id"]) if len(parts) == 1 else f"{row['feature_id']}-{i + 1}"
+                line_records.append({
+                    "feature_id": feature_id,
+                    "state_code": state_code,
+                    "owner": str(row.get("owner") or "Unknown Owner"),
+                    "voltage_kv": float(row["voltage_kv"]),
+                    "volt_class": str(row.get("volt_class") or ""),
+                    "line_name": str(row.get("line_name") or "Transmission Line"),
+                    "geom": f"SRID=4326;{part.wkt}",
+                })
+
+        sub_records: List[Dict[str, Any]] = []
+        for _, row in subs_gdf.iterrows():
+            sub_records.append({
+                "feature_id": str(row["feature_id"]),
+                "state_code": state_code,
+                "substation_name": str(row["substation_name"]),
+                "voltage_kv": float(row["voltage_kv"]),
+                "geom": f"SRID=4326;POINT({row.geometry.x} {row.geometry.y})",
+            })
+
+        for table, records in (("transmission_lines", line_records), ("substations", sub_records)):
+            chunk_size = 50
+            for i in range(0, len(records), chunk_size):
+                supabase.table(table).insert(records[i:i + chunk_size]).execute()
+
+        logger.info(
+            f"Persisted {len(line_records)} transmission line segments and "
+            f"{len(sub_records)} substations for {state_code} map rendering."
+        )
+    except Exception as e:
+        logger.error(f"Error persisting HIFLD map features for {state_code}: {e}")
+
+
+def sync_observation_wells(state_code: str, wells_df: pd.DataFrame):
+    """Replaces the persisted USGS NWIS observation wells for a region."""
+    supabase = _get_supabase_client()
+    if supabase is None or wells_df is None or wells_df.empty:
+        return
+    try:
+        supabase.table("observation_wells").delete().eq("state_code", state_code).execute()
+
+        records: List[Dict[str, Any]] = []
+        # NWIS returns one row per level observation — keep the first row per site.
+        seen_sites = set()
+        for _, row in wells_df.iterrows():
+            site_no = str(row["site_no"])
+            if site_no in seen_sites:
+                continue
+            lat, lon = float(row["lat"]), float(row["lon"])
+            if pd.isna(lat) or pd.isna(lon):
+                continue
+            seen_sites.add(site_no)
+            records.append({
+                "site_no": site_no,
+                "state_code": state_code,
+                "water_depth_ft": None if pd.isna(row["water_depth_ft"]) else float(row["water_depth_ft"]),
+                "geom": f"SRID=4326;POINT({lon} {lat})",
+            })
+
+        chunk_size = 50
+        for i in range(0, len(records), chunk_size):
+            supabase.table("observation_wells").insert(records[i:i + chunk_size]).execute()
+
+        logger.info(f"Persisted {len(records)} USGS observation wells for {state_code} map rendering.")
+    except Exception as e:
+        logger.error(f"Error persisting observation wells for {state_code}: {e}")
 
 
 if __name__ == "__main__":
