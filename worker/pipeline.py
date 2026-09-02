@@ -27,6 +27,7 @@ from climate_api import NOAAClimateAPI
 from grid_parser import GridParser
 from clustering_model import SiteClusteringModel
 from hifld_api import HIFLDPowerAPI
+from hazard_api import HazardAPI
 
 load_dotenv()
 
@@ -85,6 +86,7 @@ def run_pipeline(
     water_api = USGSWaterAPI()
     climate_api = NOAAClimateAPI()
     hifld_api = HIFLDPowerAPI()
+    hazard_api = HazardAPI()
     grid_parser = GridParser(water_api=water_api, climate_api=climate_api)
     clustering_model = SiteClusteringModel(min_composite_score=60.0, eps_km=8.5, min_samples=2)
 
@@ -127,7 +129,13 @@ def run_pipeline(
 
     # 5. Step 4: Intersect FEMA Flood & USGS Seismic Hazard Risk
     logger.info("Step 4/5: Intersecting FEMA NRI & USGS Seismic Hazard Risk...")
-    grid_gdf = grid_parser.intersect_hazard_risk(grid_gdf)
+    county_risk = hazard_api.fetch_county_risk(state_code, county_name)
+    pga_lookup = hazard_api.fetch_pga_for_grid(grid_gdf) if county_risk is not None else None
+    if county_risk is None:
+        logger.warning("FEMA NRI unavailable — synthetic hazard model in effect.")
+    grid_gdf = grid_parser.intersect_hazard_risk(
+        grid_gdf, pga_lookup=pga_lookup, county_risk=county_risk
+    )
 
     # 6. Step 5: Multi-Factor Weighted Suitability Scoring
     logger.info("Step 5/5: Computing Weighted Constraint Suitability Composite Scores...")

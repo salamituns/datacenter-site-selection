@@ -20,6 +20,7 @@ import logging
 
 from water_api import USGSWaterAPI
 from climate_api import NOAAClimateAPI
+from hazard_api import HazardAPI
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("grid_parser")
@@ -170,10 +171,22 @@ class GridParser:
 
     def intersect_hazard_risk(
         self,
-        grid_gdf: gpd.GeoDataFrame
+        grid_gdf: gpd.GeoDataFrame,
+        pga_lookup: Optional[Dict[str, float]] = None,
+        county_risk: Optional[Dict[str, float]] = None
     ) -> gpd.GeoDataFrame:
         """
         Intersects FEMA National Risk Index (Flood/Hurricane) and USGS Seismic Hazard (PGA).
+
+        Real data is used when supplied by the pipeline:
+        - pga_lookup: uniform-hazard PGA (g) per ~11 km centroid key
+          (HazardAPI.fetch_pga_for_grid). Missing keys default to a
+          conservative low hazard.
+        - county_risk: FEMA NRI flood/hurricane scores (0-100) for the
+          survey's county.
+
+        When either is None the deterministic synthetic model fills in
+        that layer so the pipeline never hard-fails on a service.
         """
         seismic_pga_list = []
         flood_risk_list = []
@@ -181,13 +194,21 @@ class GridParser:
 
         for _, row in grid_gdf.iterrows():
             c = row["centroid"]
-            np.random.seed(int(abs(c.x * 700 + c.y * 3000)) % 2**32)
-            
-            # Seismic Peak Ground Acceleration (%g with 2% probability in 50 years)
-            pga = float(np.random.uniform(0.02, 0.08))
-            # FEMA NRI Flood & Hurricane Percentiles
-            flood = float(np.random.uniform(8.0, 35.0))
-            hurricane = float(np.random.uniform(12.0, 30.0))
+
+            if pga_lookup is not None:
+                # Real USGS uniform-hazard PGA; unknown cells read as low.
+                pga = float(pga_lookup.get(HazardAPI.pga_key(c.x, c.y), 0.02))
+            else:
+                np.random.seed(int(abs(c.x * 700 + c.y * 3000)) % 2**32)
+                pga = float(np.random.uniform(0.02, 0.08))
+
+            if county_risk is not None:
+                flood = float(county_risk["flood_risk_score"])
+                hurricane = float(county_risk["hurricane_risk_score"])
+            else:
+                np.random.seed(int(abs(c.x * 700 + c.y * 3000)) % 2**32)
+                flood = float(np.random.uniform(8.0, 35.0))
+                hurricane = float(np.random.uniform(12.0, 30.0))
 
             seismic_pga_list.append(round(pga, 4))
             flood_risk_list.append(round(flood, 1))
