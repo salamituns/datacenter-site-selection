@@ -139,7 +139,7 @@ def _grid_records(gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
     return records
 
 
-def _line_records(lines_gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
+def _line_records(lines_gdf: gpd.GeoDataFrame, state_code: str) -> List[Dict[str, Any]]:
     from shapely.geometry import MultiLineString
     records: List[Dict[str, Any]] = []
     for _, row in lines_gdf.iterrows():
@@ -149,6 +149,7 @@ def _line_records(lines_gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
             feature_id = str(row["feature_id"]) if len(parts) == 1 else f"{row['feature_id']}-{i + 1}"
             records.append({
                 "feature_id": feature_id,
+                "state_code": state_code,
                 "owner": str(row.get("owner") or "Unknown Owner"),
                 "voltage_kv": float(row["voltage_kv"]),
                 "volt_class": str(row.get("volt_class") or ""),
@@ -158,16 +159,17 @@ def _line_records(lines_gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
     return records
 
 
-def _sub_records(subs_gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
+def _sub_records(subs_gdf: gpd.GeoDataFrame, state_code: str) -> List[Dict[str, Any]]:
     return [{
         "feature_id": str(row["feature_id"]),
+        "state_code": state_code,
         "substation_name": str(row["substation_name"]),
         "voltage_kv": float(row["voltage_kv"]),
         "geom": f"SRID=4326;POINT({row.geometry.x} {row.geometry.y})",
     } for _, row in subs_gdf.iterrows()]
 
 
-def _well_records(wells_df: pd.DataFrame) -> List[Dict[str, Any]]:
+def _well_records(wells_df: pd.DataFrame, state_code: str) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     seen = set()
     for _, row in wells_df.iterrows():
@@ -180,6 +182,7 @@ def _well_records(wells_df: pd.DataFrame) -> List[Dict[str, Any]]:
         seen.add(site_no)
         records.append({
             "site_no": site_no,
+            "state_code": state_code,
             "water_depth_ft": None if pd.isna(row["water_depth_ft"]) else float(row["water_depth_ft"]),
             "geom": f"SRID=4326;POINT({lon} {lat})",
         })
@@ -394,10 +397,10 @@ def run_pipeline(
             logger.info("Staging screening outputs…")
             run.stage_grid_parcels(_grid_records(clustered_gdf))
             if power_live:
-                run.stage_transmission_lines(_line_records(lines_gdf))
-                run.stage_substations(_sub_records(subs_gdf))
+                run.stage_transmission_lines(_line_records(lines_gdf, state_code))
+                run.stage_substations(_sub_records(subs_gdf, state_code))
             if wells_df is not None and not wells_df.empty:
-                run.stage_observation_wells(_well_records(wells_df))
+                run.stage_observation_wells(_well_records(wells_df, state_code))
 
             # ── Atomic publication ─────────────────────────────────────
             logger.info("Promoting run atomically…")
