@@ -142,13 +142,22 @@ export default function DashboardPage() {
       climate: weights.climateWeight / (totalWeight || 1),
     };
 
+    // Parcels missing any sub-score cannot be re-weighted — they keep
+    // their stored composite (never an invented value).
+    const reweightable = (p: GridParcel) =>
+      p.power_score != null &&
+      p.water_score != null &&
+      p.risk_score != null &&
+      p.climate_score != null;
+
     return rawParcels
       .map((p) => {
-        const dynamicScore =
-          p.power_score * wNorm.power +
-          p.water_score * wNorm.water +
-          p.risk_score * wNorm.risk +
-          p.climate_score * wNorm.climate;
+        const dynamicScore = reweightable(p)
+          ? p.power_score! * wNorm.power +
+            p.water_score! * wNorm.water +
+            p.risk_score! * wNorm.risk +
+            p.climate_score! * wNorm.climate
+          : p.composite_score;
 
         return {
           ...p,
@@ -181,10 +190,15 @@ export default function DashboardPage() {
       ...p,
       composite_score: Number(
         (
-          p.power_score * wNorm.power +
-          p.water_score * wNorm.water +
-          p.risk_score * wNorm.risk +
-          p.climate_score * wNorm.climate
+          p.power_score != null &&
+          p.water_score != null &&
+          p.risk_score != null &&
+          p.climate_score != null
+            ? p.power_score * wNorm.power +
+              p.water_score * wNorm.water +
+              p.risk_score * wNorm.risk +
+              p.climate_score * wNorm.climate
+            : p.composite_score
         ).toFixed(1)
       ),
     }));

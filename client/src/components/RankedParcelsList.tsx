@@ -22,8 +22,8 @@ export const RankedParcelsList: React.FC<RankedParcelsListProps> = ({
     const q = searchTerm.toLowerCase();
     const matchesSearch =
       p.grid_id.toLowerCase().includes(q) ||
-      p.county_name.toLowerCase().includes(q) ||
-      p.cluster_label.toLowerCase().includes(q);
+      (p.county_name ?? "").toLowerCase().includes(q) ||
+      (p.cluster_label ?? "").toLowerCase().includes(q);
 
     if (filterMode === "prime") {
       return matchesSearch && p.is_prime_zone;
@@ -125,7 +125,7 @@ export const RankedParcelsList: React.FC<RankedParcelsListProps> = ({
                         )}
                       </div>
                       <div className="mt-0.5 truncate font-mono text-[9.5px] uppercase tracking-[0.06em] text-muted">
-                        {parcel.county_name} · {parcel.substation_distance_miles} mi to sub
+                        {parcel.county_name ?? "Unsurveyed"} · {parcel.substation_distance_miles} mi to sub
                       </div>
                     </td>
                     <td

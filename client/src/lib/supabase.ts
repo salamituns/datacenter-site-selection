@@ -113,6 +113,75 @@ export async function fetchMapFeatures(stateCode?: string): Promise<MapFeatures>
 }
 
 /**
+ * Maps one `v_grid_parcels` / `grid_parcels` row to a GridParcel. Pure —
+ * exported for tests. Nullable columns pass their nulls through (the UI
+ * renders "Unverified"); a row without a drawable centroid maps to null
+ * rather than being pinned to an invented coordinate.
+ */
+export function mapGridParcelRow(item: any): GridParcel | null {
+  const num = (v: unknown): number | null =>
+    v == null || v === "" || isNaN(Number(v)) ? null : Number(v);
+  const str = (v: unknown): string | null => {
+    const s = typeof v === "string" ? v.trim() : v;
+    return s == null || s === "" ? null : String(s);
+  };
+
+  let lon = typeof item.lon === "number" ? item.lon : null;
+  let lat = typeof item.lat === "number" ? item.lat : null;
+  if (lon === null || lat === null) {
+    if (typeof item.centroid === "string") {
+      const decoded = decodeEWKBPoint(item.centroid);
+      if (decoded) {
+        lon = decoded[0];
+        lat = decoded[1];
+      }
+    }
+  }
+  if (lon === null || lat === null) return null;
+
+  let geojson_geom = item.geojson_geom;
+  if (typeof geojson_geom === "string") {
+    try {
+      geojson_geom = JSON.parse(geojson_geom);
+    } catch {}
+  }
+
+  return {
+    id: item.id || item.grid_id,
+    grid_id: item.grid_id,
+    state_code: str(item.state_code) ?? "—",
+    county_name: str(item.county_name),
+    area_sq_km: Number(item.area_sq_km || 0),
+    lon,
+    lat,
+    geojson_geom,
+    power_distance_miles: num(item.power_distance_miles) ?? 0,
+    substation_distance_miles: num(item.substation_distance_miles) ?? 0,
+    substation_voltage_kv: num(item.substation_voltage_kv),
+    substation_name: str(item.substation_name),
+    grid_operator: str(item.grid_operator),
+    groundwater_depth_ft: num(item.groundwater_depth_ft),
+    surface_water_distance_miles: num(item.surface_water_distance_miles),
+    water_availability_index: num(item.water_availability_index),
+    seismic_hazard_pga: num(item.seismic_hazard_pga),
+    flood_risk_score: num(item.flood_risk_score),
+    hurricane_risk_score: num(item.hurricane_risk_score),
+    cooling_degree_days: num(item.cooling_degree_days),
+    ambient_avg_temp_f: num(item.ambient_avg_temp_f),
+    free_cooling_potential_hours: num(item.free_cooling_potential_hours),
+    power_score: num(item.power_score),
+    water_score: num(item.water_score),
+    risk_score: num(item.risk_score),
+    climate_score: num(item.climate_score),
+    composite_score: num(item.composite_score) ?? 0,
+    cluster_zone_id: num(item.cluster_zone_id),
+    cluster_label: str(item.cluster_label),
+    is_prime_zone: Boolean(item.is_prime_zone),
+    megawatt_capacity_estimate: num(item.megawatt_capacity_estimate),
+  };
+}
+
+/**
  * Fetches ranked parcels directly from Supabase PostGIS `v_grid_parcels` view or table.
  * Optionally scoped to a single region (state_code) for server-side filtering.
  */
@@ -155,67 +224,18 @@ export async function fetchGridParcels(
       return [];
     }
 
-    // Map records to GridParcel interface
-    return data.map((item: any) => {
-      let lon = typeof item.lon === "number" ? item.lon : null;
-      let lat = typeof item.lat === "number" ? item.lat : null;
-
-      // If lon/lat not directly on item, try parsing centroid
-      if (lon === null || lat === null) {
-        if (typeof item.centroid === "string") {
-          const decoded = decodeEWKBPoint(item.centroid);
-          if (decoded) {
-            lon = decoded[0];
-            lat = decoded[1];
-          }
-        }
+    // Map records to GridParcel; rows without a drawable centroid are
+    // skipped (logged) rather than pinned to an invented coordinate.
+    const mapped: GridParcel[] = [];
+    for (const item of data) {
+      const row = mapGridParcelRow(item);
+      if (!row) {
+        console.warn("Skipping parcel with no drawable centroid:", item.grid_id);
+        continue;
       }
-
-      // Default fallback if still null
-      if (lon === null) lon = -77.534;
-      if (lat === null) lat = 39.043;
-
-      let geojson_geom = item.geojson_geom;
-      if (typeof geojson_geom === "string") {
-        try {
-          geojson_geom = JSON.parse(geojson_geom);
-        } catch {}
-      }
-
-      return {
-        id: item.id || item.grid_id,
-        grid_id: item.grid_id,
-        state_code: item.state_code || "VA",
-        county_name: item.county_name || "Loudoun",
-        area_sq_km: Number(item.area_sq_km || 10.0),
-        lon,
-        lat,
-        geojson_geom,
-        power_distance_miles: Number(item.power_distance_miles || 0),
-        substation_distance_miles: Number(item.substation_distance_miles || 0),
-        substation_voltage_kv: Number(item.substation_voltage_kv || 230),
-        substation_name: item.substation_name || "Substation",
-        grid_operator: item.grid_operator || "PJM",
-        groundwater_depth_ft: Number(item.groundwater_depth_ft || 45),
-        surface_water_distance_miles: Number(item.surface_water_distance_miles || 2),
-        water_availability_index: Number(item.water_availability_index || 80),
-        seismic_hazard_pga: Number(item.seismic_hazard_pga || 0.04),
-        flood_risk_score: Number(item.flood_risk_score || 15),
-        hurricane_risk_score: Number(item.hurricane_risk_score || 15),
-        cooling_degree_days: Number(item.cooling_degree_days || 1000),
-        ambient_avg_temp_f: Number(item.ambient_avg_temp_f || 55),
-        free_cooling_potential_hours: Number(item.free_cooling_potential_hours || 4500),
-        power_score: Number(item.power_score || 80),
-        water_score: Number(item.water_score || 80),
-        risk_score: Number(item.risk_score || 80),
-        climate_score: Number(item.climate_score || 80),
-        composite_score: Number(item.composite_score || 80),
-        cluster_zone_id: Number(item.cluster_zone_id ?? -1),
-        cluster_label: item.cluster_label || "Secondary",
-        is_prime_zone: Boolean(item.is_prime_zone),
-        megawatt_capacity_estimate: Number(item.megawatt_capacity_estimate || 100),
-      };
-    });
+      mapped.push(row);
+    }
+    return mapped;
   } catch (err) {
     console.error("Failed to fetch parcels from Supabase:", err);
     return [];

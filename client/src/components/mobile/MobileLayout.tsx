@@ -89,8 +89,8 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
     const q = searchTerm.toLowerCase();
     return (
       p.grid_id.toLowerCase().includes(q) ||
-      p.county_name.toLowerCase().includes(q) ||
-      p.cluster_label.toLowerCase().includes(q)
+      (p.county_name ?? "").toLowerCase().includes(q) ||
+      (p.cluster_label ?? "").toLowerCase().includes(q)
     );
   });
 

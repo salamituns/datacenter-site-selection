@@ -53,7 +53,7 @@ export const ParcelCards: React.FC<ParcelCardsProps> = ({
                 )}
               </div>
               <div className="mt-0.5 truncate font-mono text-[9.5px] uppercase tracking-[0.06em] text-muted">
-                {parcel.county_name} · {parcel.cluster_label}
+                {parcel.county_name ?? "Unsurveyed"} · {parcel.cluster_label ?? "Unclassified"}
               </div>
             </div>
             <span

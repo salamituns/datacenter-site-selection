@@ -58,7 +58,14 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
 
   if (!parcel) return null;
 
-  const fastTrackEligible = parcel.seismic_hazard_pga < 0.08 && parcel.power_distance_miles <= 2;
+  // Null-aware display: a missing source value is shown as "Unverified"
+  // — never a plausible-looking default.
+  const fmt = (v: number | null, unit = ""): string =>
+    v == null ? "Unverified" : `${v}${unit}`;
+  const fastTrackEligible =
+    parcel.seismic_hazard_pga != null &&
+    parcel.seismic_hazard_pga < 0.08 &&
+    parcel.power_distance_miles <= 2;
 
   const exportDossier = () => {
     const blob = new Blob([JSON.stringify(parcel, null, 2)], { type: "application/json" });
@@ -72,9 +79,30 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
 
   const stats = [
     { label: "Composite", value: parcel.composite_score.toFixed(1), sub: scoreTier(parcel.composite_score) },
-    { label: "Power", value: parcel.power_score.toFixed(0), sub: `${parcel.substation_voltage_kv} kV grid` },
-    { label: "Water", value: parcel.water_score.toFixed(0), sub: `${parcel.groundwater_depth_ft} ft depth` },
-    { label: "Capacity", value: `${parcel.megawatt_capacity_estimate}`, sub: "MW est. build-out" },
+    {
+      label: "Power",
+      value: parcel.power_score != null ? parcel.power_score.toFixed(0) : "—",
+      sub:
+        parcel.substation_voltage_kv != null
+          ? `${parcel.substation_voltage_kv} kV grid`
+          : "voltage unverified",
+    },
+    {
+      label: "Water",
+      value: parcel.water_score != null ? parcel.water_score.toFixed(0) : "—",
+      sub:
+        parcel.groundwater_depth_ft != null
+          ? `${parcel.groundwater_depth_ft} ft depth`
+          : "depth unverified",
+    },
+    {
+      label: "Capacity",
+      value:
+        parcel.megawatt_capacity_estimate != null
+          ? `${parcel.megawatt_capacity_estimate}`
+          : "—",
+      sub: "MW area-derived est.",
+    },
   ];
 
   const constraints = [
@@ -84,15 +112,21 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
       rows: [
         { label: "115 kV+ line", value: `${parcel.power_distance_miles} mi` },
         { label: "Nearest substation", value: `${parcel.substation_distance_miles} mi` },
-        { label: "Grid operator", value: parcel.grid_operator || "Unknown" },
+        { label: "Grid operator", value: parcel.grid_operator || "Unverified" },
       ],
     },
     {
       icon: <Droplets className="h-3.5 w-3.5 text-water dark:text-water-night" />,
       title: "Water Availability",
       rows: [
-        { label: "Groundwater table", value: `${parcel.groundwater_depth_ft} ft` },
-        { label: "Availability index", value: `${parcel.water_availability_index}/100` },
+        { label: "Groundwater table", value: fmt(parcel.groundwater_depth_ft, " ft") },
+        {
+          label: "Availability index",
+          value:
+            parcel.water_availability_index != null
+              ? `${parcel.water_availability_index}/100`
+              : "Unverified",
+        },
         { label: "Cooling mode", value: "Closed-loop capable" },
       ],
     },
@@ -100,8 +134,8 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
       icon: <ShieldAlert className="h-3.5 w-3.5 text-danger dark:text-danger-night" />,
       title: "Geological Risk",
       rows: [
-        { label: "Seismic (PGA)", value: `${parcel.seismic_hazard_pga}g` },
-        { label: "FEMA flood risk", value: `${parcel.flood_risk_score}/100` },
+        { label: "Seismic (PGA)", value: fmt(parcel.seismic_hazard_pga, "g") },
+        { label: "FEMA flood risk", value: fmt(parcel.flood_risk_score, "/100") },
         { label: "Design threshold", value: "< 0.08g PGA" },
       ],
     },
@@ -109,9 +143,9 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
       icon: <ThermometerSnowflake className="h-3.5 w-3.5 text-muted" />,
       title: "Ambient Cooling",
       rows: [
-        { label: "Cooling degree days", value: `${parcel.cooling_degree_days}` },
-        { label: "Economizer hours", value: `${parcel.free_cooling_potential_hours}` },
-        { label: "Mean ambient", value: `${parcel.ambient_avg_temp_f}°F` },
+        { label: "Cooling degree days", value: fmt(parcel.cooling_degree_days) },
+        { label: "Economizer hours", value: fmt(parcel.free_cooling_potential_hours) },
+        { label: "Mean ambient", value: fmt(parcel.ambient_avg_temp_f, "°F") },
       ],
     },
   ];
@@ -131,12 +165,12 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
             </h2>
             {parcel.is_prime_zone && (
               <span className="border border-accent-600/60 bg-accent-600/10 px-1.5 py-0.5 font-mono text-[8.5px] uppercase tracking-[0.16em] text-accent-700 dark:border-accent-400/50 dark:bg-accent-400/10 dark:text-accent-300">
-                Prime — {parcel.cluster_label}
+                Prime — {parcel.cluster_label ?? "Unclassified"}
               </span>
             )}
           </div>
           <p className="mt-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
-            {parcel.county_name} County, {parcel.state_code} · {parcel.area_sq_km.toFixed(1)} km²
+            {parcel.county_name ?? "Unsurveyed county"} County, {parcel.state_code} · {parcel.area_sq_km.toFixed(1)} km²
             · {parcel.lat.toFixed(4)}N {Math.abs(parcel.lon).toFixed(4)}W
           </p>
         </div>
