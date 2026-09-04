@@ -1,5 +1,10 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import { GridParcel, MapFeatures } from "@/types/parcel";
+import {
+  GridParcel,
+  LandParcel,
+  MapFeatures,
+  ParcelQualification,
+} from "@/types/parcel";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -179,6 +184,99 @@ export function mapGridParcelRow(item: any): GridParcel | null {
     is_prime_zone: Boolean(item.is_prime_zone),
     megawatt_capacity_estimate: num(item.megawatt_capacity_estimate),
   };
+}
+
+/**
+ * Fetches the cadastral parcels with gate verdicts for a region
+ * (v_land_parcels_map — geometry simplified ~5 m for transport).
+ * Pages through the Data API (capped at 1,000 rows per request) until
+ * the region is exhausted or `limit` is reached. Returns null when the
+ * region has no qualified parcels yet.
+ */
+export async function fetchLandParcels(
+  stateCode: string,
+  limit: number = 5000
+): Promise<LandParcel[] | null> {
+  if (!supabase) return null;
+  try {
+    const PAGE = 1000;
+    const rows: any[] = [];
+    for (let offset = 0; offset < limit; offset += PAGE) {
+      const pageSize = Math.min(PAGE, limit - offset);
+      const { data, error } = await supabase
+        .from("v_land_parcels_map")
+        .select(
+          "parcel_key,pin,state_code,county_name,lon,lat,gis_acreage,legal_acreage,overall_status,geojson_geom"
+        )
+        .eq("state_code", stateCode)
+        .range(offset, offset + pageSize - 1);
+      if (error) {
+        console.error("Failed to fetch land parcels:", error);
+        return rows.length > 0 ? mapLandParcelRows(rows) : null;
+      }
+      if (!data || data.length === 0) break;
+      rows.push(...data);
+      if (data.length < pageSize) break;
+    }
+    if (rows.length === 0) return null;
+    return mapLandParcelRows(rows);
+  } catch (err) {
+    console.error("Failed to fetch land parcels:", err);
+    return null;
+  }
+}
+
+function mapLandParcelRows(data: any[]): LandParcel[] {
+  return data.map((item) => ({
+    parcel_key: item.parcel_key,
+    pin: item.pin,
+    state_code: item.state_code,
+    county_name: item.county_name ?? null,
+    lon: Number(item.lon),
+    lat: Number(item.lat),
+    gis_acreage: item.gis_acreage == null ? null : Number(item.gis_acreage),
+    legal_acreage: item.legal_acreage == null ? null : Number(item.legal_acreage),
+    overall_status: item.overall_status ?? null,
+    geojson_geom: typeof item.geojson_geom === "string"
+      ? JSON.parse(item.geojson_geom)
+      : item.geojson_geom,
+  }));
+}
+
+/**
+ * Fetches the full qualification dossier for one parcel: every gate with
+ * its verdict and rationale, and every metric with evidence class and
+ * source lineage.
+ */
+export async function fetchParcelQualification(
+  parcelKey: string
+): Promise<ParcelQualification | null> {
+  if (!supabase) return null;
+  try {
+    const [gatesRes, metricsRes] = await Promise.all([
+      supabase
+        .from("v_parcel_gates")
+        .select("gate_key,status,affected_area_pct,rationale")
+        .eq("parcel_key", parcelKey),
+      supabase
+        .from("v_parcel_metrics")
+        .select(
+          "metric_key,label,value,text_value,unit,evidence_class,source_organization,source_dataset"
+        )
+        .eq("parcel_key", parcelKey),
+    ]);
+    if (gatesRes.error || metricsRes.error) {
+      console.error("Failed to fetch parcel qualification:", gatesRes.error ?? metricsRes.error);
+      return null;
+    }
+    return {
+      gates: (gatesRes.data ?? []) as any[],
+      metrics: (metricsRes.data ?? []) as any[],
+    };
+  } catch (err) {
+    console.error("Failed to fetch parcel qualification:", err);
+    return null;
+  }
 }
 
 /**

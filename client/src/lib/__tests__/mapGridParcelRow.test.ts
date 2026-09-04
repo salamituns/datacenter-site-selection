@@ -86,7 +86,7 @@ describe("mapGridParcelRow", () => {
   });
 
   it("returns null for a row with no drawable centroid", () => {
-    const row = { ...baseRow };
+    const row: Record<string, unknown> = { ...baseRow };
     delete row.lon;
     delete row.lat;
     delete row.centroid;

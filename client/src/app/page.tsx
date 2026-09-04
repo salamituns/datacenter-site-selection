@@ -7,14 +7,28 @@ import { LayerControls } from "@/components/LayerControls";
 import { ConstraintSliders } from "@/components/ConstraintSliders";
 import { RankedParcelsList } from "@/components/RankedParcelsList";
 import { ParcelDetailModal } from "@/components/ParcelDetailModal";
+import { ParcelQualificationModal } from "@/components/ParcelQualificationModal";
 import { PanelEdgeToggle } from "@/components/PanelEdgeToggle";
 import { MobileLayout } from "@/components/mobile/MobileLayout";
 import { INITIAL_PARCELS } from "@/components/mockData";
-import { fetchGridParcels, fetchMapFeatures, fetchRegionCounts } from "@/lib/supabase";
+import {
+  fetchGridParcels,
+  fetchLandParcels,
+  fetchMapFeatures,
+  fetchParcelQualification,
+  fetchRegionCounts,
+} from "@/lib/supabase";
 import { computePrimeZones, PrimeZone } from "@/lib/primeZones";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { REGIONS, HOME_REGION } from "@/lib/regions";
-import { GridParcel, LayerVisibility, MapFeatures, WeightFactors } from "@/types/parcel";
+import {
+  GridParcel,
+  LandParcel,
+  LayerVisibility,
+  MapFeatures,
+  ParcelQualification,
+  WeightFactors,
+} from "@/types/parcel";
 
 // Dynamically import the Leaflet map component to avoid SSR window issues
 const GeospatialMap = dynamic(
@@ -49,6 +63,10 @@ export default function DashboardPage() {
   const [regionCounts, setRegionCounts] = useState<Record<string, number> | null>(null);
   // Real infrastructure features (HIFLD lines/substations, USGS wells) drawn on the map.
   const [mapFeatures, setMapFeatures] = useState<MapFeatures>({ lines: [], substations: [], wells: [] });
+  // Qualified cadastral parcels (Release 1 pilot) + the open qualification dossier.
+  const [landParcels, setLandParcels] = useState<LandParcel[]>([]);
+  const [selectedLandParcel, setSelectedLandParcel] = useState<LandParcel | null>(null);
+  const [parcelQualification, setParcelQualification] = useState<ParcelQualification | null>(null);
 
   // Active map layers
   const [layers, setLayers] = useState<LayerVisibility>({
@@ -58,6 +76,7 @@ export default function DashboardPage() {
     climateCDD: true,
     primeClusters: true,
     parcelGrid: true,
+    qualifiedParcels: false,
   });
 
   // Desktop rail visibility — toggled from the header buttons
@@ -93,7 +112,39 @@ export default function DashboardPage() {
     // Map features refresh alongside the parcel survey (independent — a
     // marker-layer failure must not blank the parcel grid).
     fetchMapFeatures(selectedState).then(setMapFeatures).catch(() => {});
+    // Qualified cadastral parcels ride along; a region without a parcel
+    // pilot simply shows none when the layer is toggled.
+    setLandParcels([]);
+    if (layers.qualifiedParcels) {
+      fetchLandParcels(selectedState)
+        .then((p) => setLandParcels(p ?? []))
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedState]);
+
+  // Qualified-parcel layer: fetch once per region when first toggled on.
+  useEffect(() => {
+    if (layers.qualifiedParcels && landParcels.length === 0) {
+      fetchLandParcels(selectedState)
+        .then((p) => setLandParcels(p ?? []))
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layers.qualifiedParcels]);
+
+  // Opening a qualification dossier fetches its gates + metrics with
+  // evidence classes and source lineage.
+  useEffect(() => {
+    if (!selectedLandParcel) {
+      setParcelQualification(null);
+      return;
+    }
+    setParcelQualification(null);
+    fetchParcelQualification(selectedLandParcel.parcel_key)
+      .then(setParcelQualification)
+      .catch(() => {});
+  }, [selectedLandParcel]);
 
   // Probe which regions have surveys on mount
   useEffect(() => {
@@ -104,6 +155,7 @@ export default function DashboardPage() {
   // another survey) — clear it so no dangling dossier stays open.
   const handleStateChange = (stateCode: string) => {
     setSelectedParcel(null);
+    setSelectedLandParcel(null);
     setSelectedState(stateCode);
   };
 
@@ -300,11 +352,14 @@ export default function DashboardPage() {
             isLiveSupabase={isLivePostgis}
             mapFeatures={mapFeatures}
             primeZones={primeResult.zones}
+            landParcels={layers.qualifiedParcels ? landParcels : []}
+            selectedLandParcel={selectedLandParcel}
+            onSelectLandParcel={setSelectedLandParcel}
           />
-          {/* Rail chevrons hide while the dossier modal is open — they sit
+          {/* Rail chevrons hide while either dossier modal is open — they sit
               at z-[500] (above the map's Leaflet panes) and would otherwise
               paint over the modal at widths where the seams cross it. */}
-          {!selectedParcel && (
+          {!selectedParcel && !selectedLandParcel && (
             <>
               <PanelEdgeToggle
                 side="left"
@@ -360,6 +415,13 @@ export default function DashboardPage() {
 
       {/* Detailed site dossier */}
       <ParcelDetailModal parcel={selectedParcel} onClose={() => setSelectedParcel(null)} />
+
+      {/* Parcel qualification dossier (Release 1) */}
+      <ParcelQualificationModal
+        parcel={selectedLandParcel}
+        qualification={parcelQualification}
+        onClose={() => setSelectedLandParcel(null)}
+      />
     </div>
   );
 }

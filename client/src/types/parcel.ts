@@ -59,6 +59,53 @@ export interface LayerVisibility {
   climateCDD: boolean;
   primeClusters: boolean;
   parcelGrid: boolean;
+  /** Loudoun pilot: cadastral parcels with gate verdicts (Release 1). */
+  qualifiedParcels: boolean;
+}
+
+// ── Parcel qualification (Release 1) ──────────────────────────────────
+
+export type GateStatus = "PASS" | "CONDITIONAL" | "FAIL" | "UNKNOWN";
+
+/** Cadastral parcel with its latest-run gate verdict, as served by
+ *  v_land_parcels_map (geometry simplified ~5 m for map transport). */
+export interface LandParcel {
+  parcel_key: string;
+  pin: string;
+  state_code: string;
+  county_name: string | null;
+  lon: number;
+  lat: number;
+  gis_acreage: number | null;
+  legal_acreage: number | null;
+  overall_status: GateStatus | null;
+  geojson_geom?: {
+    type: string;
+    coordinates: number[][][] | number[][][][];
+  };
+}
+
+export interface ParcelGateRow {
+  gate_key: string;
+  status: GateStatus;
+  affected_area_pct: number | null;
+  rationale: string | null;
+}
+
+export interface ParcelMetricRow {
+  metric_key: string;
+  label: string | null;
+  value: number | null;
+  text_value: string | null;
+  unit: string | null;
+  evidence_class: string | null;
+  source_organization: string | null;
+  source_dataset: string | null;
+}
+
+export interface ParcelQualification {
+  gates: ParcelGateRow[];
+  metrics: ParcelMetricRow[];
 }
 
 export interface WeightFactors {

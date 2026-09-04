@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { GridParcel, LayerVisibility, MapFeatures } from "@/types/parcel";
+import { GridParcel, LandParcel, LayerVisibility, MapFeatures } from "@/types/parcel";
 import { PrimeZone } from "@/lib/primeZones";
 import { useTheme } from "next-themes";
 
@@ -15,6 +15,10 @@ interface GeospatialMapProps {
   mapFeatures?: MapFeatures;
   /** Reactive prime zones (browser DBSCAN) — hulls are drawn as overlays. */
   primeZones?: PrimeZone[];
+  /** Qualified cadastral parcels (Release 1 pilot) with gate verdicts. */
+  landParcels?: LandParcel[];
+  selectedLandParcel?: LandParcel | null;
+  onSelectLandParcel?: (parcel: LandParcel) => void;
 }
 
 /** Pencil shading: the more suitable the parcel, the darker the graphite. */
@@ -33,6 +37,9 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
   isLiveSupabase = false,
   mapFeatures = { lines: [], substations: [], wells: [] },
   primeZones = [],
+  landParcels = [],
+  selectedLandParcel = null,
+  onSelectLandParcel,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -45,11 +52,13 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
 
   const layersGroupRef = useRef<{
     parcels: any;
+    qualified: any;
     powerGrid: any;
     water: any;
     clusters: any;
   }>({
     parcels: null,
+    qualified: null,
     powerGrid: null,
     water: null,
     clusters: null,
@@ -78,6 +87,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
 
       layersGroupRef.current = {
         parcels: L.layerGroup().addTo(map),
+        qualified: L.layerGroup().addTo(map),
         powerGrid: L.layerGroup().addTo(map),
         water: L.layerGroup().addTo(map),
         clusters: L.layerGroup().addTo(map),
@@ -141,6 +151,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
       const map = mapInstanceRef.current;
       const {
         parcels: parcelLayer,
+        qualified: qualifiedLayer,
         powerGrid: powerLayer,
         water: waterLayer,
         clusters: clusterLayer,
@@ -149,6 +160,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
       if (!L || !map || !parcelLayer) return;
 
       parcelLayer.clearLayers();
+      qualifiedLayer.clearLayers();
       powerLayer.clearLayers();
       waterLayer.clearLayers();
       clusterLayer.clearLayers();
@@ -239,6 +251,57 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
 
           polygon.on("click", () => onSelectParcel(p));
           polygon.addTo(isPrime ? clusterLayer : parcelLayer);
+        });
+      }
+
+      // 1a. Qualified cadastral parcels (Release 1) — verdict-shaded,
+      //      drawn above the screening cells. Clicking one opens its
+      //      qualification dossier; UNKNOWN is a hatched neutral, never
+      //      a guessed color.
+      if (layers.qualifiedParcels && landParcels.length > 0) {
+        const statusStyle = (status: string | null) => {
+          switch (status) {
+            case "PASS":
+              return { fill: isDark ? "#66C17A" : "#3E8E4E", stroke: isDark ? "#8AD79A" : "#2F6E3C" };
+            case "CONDITIONAL":
+              return { fill: isDark ? "#E2B056" : "#B07D0F", stroke: isDark ? "#F0C57E" : "#8A6208" };
+            case "FAIL":
+              return { fill: isDark ? "#E06A5A" : "#B3402F", stroke: isDark ? "#EE8A7B" : "#8F3225" };
+            default: // UNKNOWN or null — pending evidence
+              return { fill: isDark ? "#9AA5B1" : "#8A8A82", stroke: hairline };
+          }
+        };
+        landParcels.forEach((p) => {
+          if (isNaN(p.lat) || isNaN(p.lon)) return;
+          const geom = p.geojson_geom;
+          if (!geom?.coordinates) return;
+          // Polygon: coordinates[number][ring][pt]; MultiPolygon:
+          // coordinates[polygon][ring][pt] — normalize to polygon parts.
+          const parts: number[][][] =
+            geom.type === "MultiPolygon"
+              ? (geom.coordinates as number[][][][]).map((poly) => poly[0]).filter(Boolean)
+              : [(geom.coordinates as number[][][])[0]];
+          if (!parts.some(Boolean)) return;
+          const style = statusStyle(p.overall_status);
+          const isSelected = selectedLandParcel?.parcel_key === p.parcel_key;
+          const latlngParts = parts.map((ring) =>
+            (ring ?? []).map((coord) => [coord[1], coord[0]] as [number, number])
+          );
+          const acres = p.gis_acreage != null ? `${Math.round(p.gis_acreage).toLocaleString()} ac` : "acreage unverified";
+          latlngParts.forEach((latlngs) => {
+            const polygon = L.polygon(latlngs, {
+              color: isSelected ? ink : style.stroke,
+              weight: isSelected ? 2 : 1,
+              fillColor: style.fill,
+              fillOpacity: isSelected ? 0.3 : p.overall_status === "UNKNOWN" ? 0.07 : 0.13,
+            });
+            polygon.bindTooltip(
+              `<span class="font-mono">${p.pin}</span> · ${acres}<br/><b>${p.overall_status ?? "UNQUALIFIED"}</b> · click for gates`,
+              { sticky: true, className: "map-tooltip", direction: "top" }
+            );
+            if (onSelectLandParcel) polygon.on("click", () => onSelectLandParcel(p));
+            polygon.addTo(qualifiedLayer);
+          });
         });
       }
 
@@ -335,7 +398,18 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
     }
 
     updateLayers();
-  }, [mapReady, parcels, layers, selectedParcel, resolvedTheme, mapFeatures, primeZones]);
+  }, [
+    mapReady,
+    parcels,
+    layers,
+    selectedParcel,
+    resolvedTheme,
+    mapFeatures,
+    primeZones,
+    landParcels,
+    selectedLandParcel,
+    onSelectLandParcel,
+  ]);
 
   return (
     <div className="relative h-full min-h-[360px] w-full overflow-hidden rounded-[3px] border border-border-strong bg-background">
@@ -405,6 +479,34 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
             Prime
           </span>
         </div>
+        {layers.qualifiedParcels && (
+          <div className="mt-1.5 border-t border-border pt-1.5">
+            <div className="font-mono text-[8.5px] uppercase tracking-[0.18em] text-muted">
+              Parcel verdicts
+            </div>
+            <div className="mt-1 flex items-center gap-3 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted">
+              {(
+                [
+                  ["PASS", "#3E8E4E", "#66C17A"],
+                  ["COND.", "#B07D0F", "#E2B056"],
+                  ["FAIL", "#B3402F", "#E06A5A"],
+                  ["UNKNOWN", "#8A8A82", "#9AA5B1"],
+                ] as const
+              ).map(([label, light, dark]) => (
+                <span key={label} className="flex items-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5"
+                    style={{
+                      background: resolvedTheme === "light" ? light : dark,
+                      opacity: 0.75,
+                    }}
+                  />
+                  {label}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

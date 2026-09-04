@@ -1,5 +1,13 @@
 import React from "react";
-import { Zap, Droplets, ShieldAlert, ThermometerSnowflake, Grid2x2, Stamp } from "lucide-react";
+import {
+  Zap,
+  Droplets,
+  ShieldAlert,
+  ThermometerSnowflake,
+  Grid2x2,
+  Stamp,
+  LandPlot,
+} from "lucide-react";
 import { LayerVisibility } from "@/types/parcel";
 
 interface LayerControlsProps {
@@ -57,6 +65,13 @@ const LAYER_CONFIGS: LayerConfig[] = [
     description: "10 km² fishnet boundaries",
     source: "PostGIS",
     icon: <Grid2x2 className="h-3.5 w-3.5 text-muted" />,
+  },
+  {
+    key: "qualifiedParcels",
+    label: "Qualified Parcels",
+    description: "Cadastral gates & verdicts",
+    source: "Loudoun GIS",
+    icon: <LandPlot className="h-3.5 w-3.5 text-success dark:text-success-night" />,
   },
 ];
 

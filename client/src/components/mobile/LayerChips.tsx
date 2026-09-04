@@ -8,6 +8,7 @@ import {
   ThermometerSnowflake,
   Grid2x2,
   Stamp,
+  LandPlot,
 } from "lucide-react";
 import { LayerVisibility } from "@/types/parcel";
 
@@ -50,6 +51,11 @@ const CHIPS: {
     key: "parcelGrid",
     short: "Grid",
     icon: <Grid2x2 className="h-3.5 w-3.5 text-muted" />,
+  },
+  {
+    key: "qualifiedParcels",
+    short: "Parcels",
+    icon: <LandPlot className="h-3.5 w-3.5 text-success dark:text-success-night" />,
   },
 ];
 
