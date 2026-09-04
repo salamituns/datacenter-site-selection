@@ -1,129 +1,149 @@
 # Data Center Site Selection Engine
 
-An end-to-end geospatial intelligence and machine learning platform to evaluate, score, and rank **10-square-kilometer parcel grids** for **100+ Megawatt hyperscale data centers**.
+An end-to-end geospatial platform for siting **100+ MW hyperscale data centers**, built on a strict evidence discipline: every value in the decision layer is traceable to a named source, and **what is not known is shown as UNKNOWN — never invented**.
+
+Two tiers run on the same map:
+
+1. **Regional screening** — 10 km² fishnet cells scored on power, water, risk, and climate factors, clustered into Prime Development Zones (HIFLD / USGS / FEMA / NOAA live data).
+2. **Parcel qualification** (Loudoun pilot) — cadastral parcels ≥20 acres run through **hard gates** (zoning use, floodway, wetlands, acreage, slope, protected land, road access) that return `PASS / CONDITIONAL / FAIL / UNKNOWN` with the rule, the affected-area percentage, and the source lineage behind every verdict.
 
 ```
-                           AI DATA CENTER SITE SELECTION ENGINE
- ┌─────────────────────────────────────────────────────────────────────────────────────────┐
- │                                                                                         │
- │   OPEN DATA SOURCES             DATA INGESTION & ML WORKER            STORAGE & API     │
- │  ┌─────────────────────┐       ┌─────────────────────────────┐       ┌────────────────┐ │
- │  │ HIFLD Transmission  │──────>│ GeoPandas Spatial Fishnet   │──────>│ PostGIS /      │ │
- │  │ & Substations (GIS) │       │ 10 km x 10 km Tessellation  │       │ Supabase       │ │
- │  └─────────────────────┘       └──────────────┬──────────────┘       │ Spatial DB     │ │
- │  ┌─────────────────────┐                      │                      └───────┬────────┘ │
- │  │ USGS NWIS Water     │──────────────────────┤                              │          │
- │  │ (dataretrieval)     │                      │                              │          │
- │  └─────────────────────┘                      ▼                              │          │
- │  ┌─────────────────────┐       ┌─────────────────────────────┐               │          │
- │  │ FEMA NRI Flood /    │──────>│ Multi-Factor Weighted       │               │          │
- │  │ USGS Seismic Maps   │       │ Constraint Scoring Engine   │               │          │
- │  └─────────────────────┘       └──────────────┬──────────────┘               │          │
- │  ┌─────────────────────┐                      │                              │          │
- │  │ NOAA Climate /      │──────────────────────┤                              │          │
- │  │ Cooling Degree Days │                      ▼                              │          │
- │  └─────────────────────┘       ┌─────────────────────────────┐               │          │
- │                                │ Scikit-learn Clustering     │───────────────┘          │
- │                                │ (DBSCAN / K-Means Zones)    │                          │
- │                                └─────────────────────────────┘                          │
- │                                                                                         │
- └───────────────────────────────────────────┬─────────────────────────────────────────────┘
-                                             │
-                                             ▼
-                             ┌───────────────────────────────┐
-                             │    NEXT.JS WEB DASHBOARD      │
-                             │  - Interactive PostGIS Layers │
-                             │  - Multi-Factor Sliders       │
-                             │  - Ranked 100+ MW Parcels     │
-                             │  - Prime Development Clusters │
-                             └───────────────────────────────┘
+ OPEN DATA                    INGESTION WORKER                  POSTGRES / SUPABASE              CLIENT
+ ───────────                  ────────────────                  ────────────────────              ──────
+ HIFLD grid      ─┐          screening cells ─┐                grid_parcels        ─┐
+ USGS NWIS/PGA    ├─(fallback→┤ + scores       │  versioned,    map features         │ anon,
+ NOAA ACIS       ─┘  marked)  └────────────────┤  staged runs   ─────────────────────┤ read-only
+                                                  │                │
+ Loudoun parcels  ─┐                            │  promote RPC   land_parcels        │ views
+ Loudoun zoning    │          parcel metrics    ├─ (atomic, ──►  parcel_metrics     │
+ county FEMAFlood  │          + gate verdicts   │  transaction) parcel_gates       │
+ NWI wetlands      ├─(fail→    with evidence    │                source_snapshots   │
+ PAD-US 4.0        │  UNKNOWN, ├────────────────┘                ingestion_runs     │
+ 3DEP DEM          │  never a  └─────────────────────────────────────────────────────┘
+ TIGER roads      ─┘  default)                                          │
+                                                                      ▼
+                                                    Next.js dashboard — verdict-shaded
+                                                    parcels, gate ledgers, evidence
+                                                    classes, diligence checklists
 ```
+
+---
+
+## The Decision Model
+
+**Four criterion kinds** govern a parcel:
+
+| Kind | Examples | Output |
+| :--- | :--- | :--- |
+| Hard gate | zoning DC-use, floodway, wetlands, contiguous acreage, slope, protected land, road access | `PASS` / `CONDITIONAL` / `FAIL` / `UNKNOWN` |
+| Scored factor | transmission/substation/road distances | metric values (never gates) |
+| Verification-required | slope, protected land, road access, wetlands | `UNKNOWN` until the evidence layer lands — no favorable default |
+| Informational | ordinance vintage, assembly potential | context metrics |
+
+**Four states.** A parcel's overall status is `FAIL` if any gate fails, `UNKNOWN` if any gate is unknown, `CONDITIONAL` if any is conditional, `PASS` only when every gate passes. (During the current USFWS outage, no parcel can be overall `PASS` — wetlands gates are honestly `UNKNOWN`.)
+
+**Evidence classes** tag every metric row: `observed` (fetched as-is), `derived` (computed from observations — overlaps, slopes, distances), `manual` (reviewed mapping such as the zoning use-table), `estimated` / `fallback` (regional screening models only — never allowed in the decision layer).
+
+**Atomic, versioned ingestion.** Each run stages every layer, records a **source snapshot** per layer (endpoint, record count, evidence class, fetched-at), and publishes in a single transaction via `promote_ingestion_run()` — cells/features are replaced region-scoped, parcels are upserted, and the previous run is superseded. A failed run is recorded as `failed` and publishes nothing.
+
+**Zoning rules are data, not code.** The Loudoun mapping (2023 ordinance + March 2025 ZOAM) lives in `constraint_rules`: by-right `PDGI/PDIP/GI/IP/MRHI`, special-exception `CLI/PDRDP/PDCH`, prohibited residential/commercial districts, `TOWNS` = town jurisdiction → `UNKNOWN`.
 
 ---
 
 ## Monorepo Structure
 
-- **[`client/`](./client/)**: Next.js 14+ frontend with TypeScript, Tailwind CSS, Lucide icons, and an interactive geospatial dashboard for rendering PostGIS map layers and constraint weighting controls.
-- **[`worker/`](./worker/)**: Python geospatial data pipeline using `geopandas`, `scikit-learn`, `dataretrieval`, and `supabase` to ingest open data, compute multi-criteria suitability scores, and cluster contiguous parcels into Prime Development Zones.
-- **[`database/`](./database/)**: Supabase SQL migrations with PostGIS extensions — parcel grids (`grid_parcels`), persisted map features (`transmission_lines`, `substations`, `observation_wells`), spatial indexes (GiST), and client-facing GeoJSON/lon-lat views.
+- **[`client/`](./client/)** — Next.js 14 + TypeScript + Tailwind + Leaflet. Regional screening dashboard **and** the parcel qualification view: verdict-shaded cadastral parcels, gate ledgers with rationales and affected areas, metrics with evidence class + source organization, unresolved-diligence checklists. Vitest suite (`npm test`).
+- **[`worker/`](./worker/)** — Python geospatial pipeline (geopandas, scikit-learn, turf-equivalent browser parity). `pipeline.py` runs the full staged→promote lifecycle; `loudoun_api.py` fetches county cadastral/regulatory layers; `overlay_layers.py` fetches the verification layers (TIGER roads, PAD-US, 3DEP slopes); `parcel_gates.py` computes metrics and gate verdicts.
+- **[`database/`](./database/)** — Supabase migrations + `tests/rls_tests.sql`, a repeatable allow/deny suite executed live as `anon` / `authenticated`.
 
 ---
 
-## Core Data Sources
+## Data Sources
 
-Every constraint layer is ingested from a live public API per survey region. When a service is unreachable, the pipeline degrades to a deterministic regional model for that layer only — it never hard-fails.
+**Regional screening** layers degrade to a deterministic regional model when unreachable — the fallback is marked `fallback` in provenance and the UI shows the demo/PostGIS chip.
 
-| Constraint | Live Source | What Is Fetched | Stored Metric |
-| :--- | :--- | :--- | :--- |
-| **Power Proximity** | [HIFLD](https://hifld-geoplatform.opendata.arcgis.com/) ArcGIS FeatureServers — `Electric_Power_Transmission_Lines` & `Electric_Substations` | In-service AC lines (≥100 kV, voltage-normalized) and named transmission substations, bounded to the survey bbox | Interconnect distance (mi), substation name / voltage (kV), grid operator |
-| **Water Availability** | [USGS NWIS](https://waterdata.usgs.gov/nwis) (`dataretrieval` SDK + REST) | Groundwater level observations (parameter 72019) per survey bbox | Water table depth (ft), availability index; well sites are persisted for the map |
-| **Seismic Hazard** | [USGS ASCE 7-16 Design Web Service](https://earthquake.usgs.gov/ws/design/) (`/ws/building-codes/asce7-16/calculate`) | Uniform-hazard Peak Ground Acceleration (2% probability of exceedance in 50 years, site class BC, risk category III) per grid centroid, cached at ~11 km precision | PGA (g) |
-| **Flood & Hurricane Risk** | [FEMA National Risk Index](https://hazards.fema.gov/nri/) — `National_Risk_Index_Counties` layer | County-level riverine + coastal flood and hurricane risk percentiles (0–100); flood = max of the two modes, hurricane nulls preserved as 0 | FEMA flood / hurricane risk scores |
-| **Ambient Cooling** | [NOAA ACIS](https://www.rcc-acis.org/) `GridData` (PRISM) | 30-year climate normals at each parcel centroid | Cooling Degree Days (base 65°F), mean ambient temp, free-cooling hours |
+| Constraint | Live source | Stored metrics |
+| :--- | :--- | :--- |
+| Power proximity | HIFLD ArcGIS FeatureServers (lines ≥100 kV, named substations) | Interconnect / substation distances (mi), operator |
+| Water availability | USGS NWIS (parameter 72019) | Water table depth, availability index |
+| Seismic hazard | USGS ASCE 7-16 design service | Uniform-hazard PGA (g) |
+| Flood/hurricane context | FEMA National Risk Index (counties) | County risk scores (context only) |
+| Ambient cooling | NOAA ACIS GridData (PRISM normals) | CDD, mean temp, free-cooling hours |
 
-The worker also persists the raw HIFLD line/substation geometries and NWIS well sites per region, so the dashboard draws the real transmission corridors, substation markers, and observation wells on the map — no demo overlays.
+**Parcel qualification** layers (Loudoun pilot) have **no fallback**: an unreachable layer yields `UNKNOWN` gates with an explicit rationale.
+
+| Gate | Source | Notes |
+| :--- | :--- | :--- |
+| Zoning DC-use | Loudoun County GIS — Zoning Ordinance districts | Dominant district per parcel overlay; rules from `constraint_rules` |
+| Contiguous acreage | Loudoun County GIS — Land Records parcels | County PIN + legal acreage; GIS acreage from planar geometry |
+| Floodway / floodplain | Loudoun County GIS — FEMAFlood (FEMA DFIRM 51107C mirror) | County mirror used because the federal NFHL endpoint throttles county-sized envelope queries; identical `FLD_ZONE`/`ZONE_SUBTY`/`SFHA_TF` attributes |
+| Wetlands | USFWS National Wetlands Inventory | Screening only; field delineation remains a diligence item |
+| Protected land | USGS PAD-US 4.0 — official Virginia geodatabase (ScienceBase) | Downloaded once, clipped, cached in `worker/cache/`; hosted national ArcGIS layers are partial subsets |
+| Slope | USGS 3DEP bare-earth DEM (`getSamples`) | Per-parcel elevation lattice → gradient-derived max/median slope % |
+| Road access | Census TIGERweb — Transportation (S1100 primary, S1200 secondary) | Nearest suitable-road distance (mi) |
+
+---
+
+## Security Model (Release 0)
+
+- **Anonymous API roles are read-only.** All write policies and write grants were revoked from `anon`/`authenticated`; ingestion requires the service role. Verified by `database/tests/rls_tests.sql` (all passing live).
+- **`security_invoker` views throughout** — client views execute with the caller's RLS, so nothing is accidentally exposed through a view.
+- **Staging tables are invisible to API roles** (401 over REST).
+- The worker exits with an error if `SUPABASE_SERVICE_ROLE_KEY` is absent for a publishing run (dry-runs work without it).
 
 ---
 
 ## Survey Regions
 
-The region selector in the dashboard maps to pipeline presets (bbox, county label, and regional grid operator):
-
-| Region | County / Area | Grid Operator | CLI |
+| Region | County / Area | Grid operator | CLI |
 | :--- | :--- | :--- | :--- |
-| **Virginia (Loudoun)** — Data Center Alley | Loudoun County | PJM Interconnection | `python pipeline.py --state VA` |
-| **Texas (Abilene)** — Stargate / CTLV corridor | Taylor County | ERCOT | `python pipeline.py --state TX` |
-| **Ohio (New Albany / Columbus)** | Franklin County | PJM Interconnection | `python pipeline.py --state OH` |
-| **Oregon (Boardman / Umatilla)** | Morrow County | Bonneville Power Administration | `python pipeline.py --state OR` |
+| **Virginia (Loudoun)** — Data Center Alley *(parcel pilot)* | Loudoun County | PJM | `python pipeline.py --state VA` |
+| **Texas (Abilene)** | Taylor County | ERCOT | `python pipeline.py --state TX` |
+| **Ohio (New Albany)** | Franklin County | PJM | `python pipeline.py --state OH` |
+| **Oregon (Boardman)** | Morrow County | BPA | `python pipeline.py --state OR` |
 
-Ad-hoc surveys are supported with `--bbox min_lon,min_lat,max_lon,max_lat --county <label>`. Re-ingesting a region replaces its parcels and map features in place.
+Ad-hoc surveys: `--bbox min_lon,min_lat,max_lon,max_lat --county <label>`. Parcel qualification currently runs for VA; other regions get screening only until their county layers land.
 
 ---
 
 ## Quick Start
 
-### 1. Database Setup (Supabase / PostGIS)
-Apply the migrations in [`database/migrations/`](./database/migrations/) to your Supabase project, in order:
-```bash
-# Using Supabase CLI
-supabase db push
-```
-- `20260831000000_init_postgis_parcels.sql` — PostGIS extension, `grid_parcels`, spatial indexes, bbox RPCs
-- `20260902000000_map_features.sql` — `transmission_lines`, `substations`, `observation_wells` + client views
+### 1. Database (Supabase / PostGIS)
 
-### 2. Python Worker (Data Ingestion & ML Pipeline)
 ```bash
-cd worker
-python3 -m venv .venv
-source .venv/bin/activate
+supabase db push        # applies database/migrations/ in order
+psql "$DB_URL" -f database/tests/rls_tests.sql   # optional: run the RLS suite
+```
+
+Key migrations: provenance schema (`data_sources`, `ingestion_runs`, `source_snapshots`), parcel tables (`land_parcels`, `parcel_metric_values`, `parcel_gate_results`), staging + `promote_ingestion_run()` RPC, client views (`v_land_parcels_map`, `v_parcel_gates`, `v_parcel_metrics`), and the security lockdown.
+
+### 2. Worker
+
+```bash
+cd worker && python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env    # set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
 
-# Ingest a region (defaults to Loudoun VA); re-runs replace that region in place
-python pipeline.py --state TX
+python pipeline.py --state VA --dry-run   # fetch + compute, publish nothing
+python pipeline.py --state VA             # staged, atomically promoted
 ```
-The worker reads `SUPABASE_URL` plus `SUPABASE_SERVICE_ROLE_KEY` (preferred) or `SUPABASE_KEY` (the anon key also works under the default RLS policies) from `worker/.env`.
 
-### 3. Next.js Dashboard Client
+Publishing requires `SUPABASE_SERVICE_ROLE_KEY` (the anon key can no longer write, by design).
+
+### 3. Client
+
 ```bash
-cd client
-npm install
-npm run dev
+cd client && npm install
+npm test        # vitest: null-safety + prime-zone semantics
+npm run dev     # http://localhost:3000
 ```
-Open [http://localhost:3000](http://localhost:3000) to access the interactive site selection dashboard.
 
-## Deployment (CI/CD)
+Environment: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (in `.env.local` locally, per-environment on Vercel).
 
-The dashboard deploys to Vercel automatically from this repository:
+---
 
-- **Production**: every push to `main` deploys to [grid.salamituns.com](https://grid.salamituns.com)
-- **Previews**: every pull request gets a SSO-protected preview URL
+## CI/CD
 
-The Next.js app lives in `client/`, which is configured as the Vercel root directory. The build requires two environment variables (set per-environment in Vercel, never in source):
-
-| Variable | Purpose |
-| :--- | :--- |
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL (PostGIS) |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public client key (protected by row-level security) |
-
-Local development reads the same variables from `client/.env.local`.
+- **Client** — Node 22 workflow: typecheck, vitest, production build on every push/PR touching `client/`.
+- **Worker** — weekly scheduled ingestion (Sundays 00:00 UTC) plus manual dispatch with state/county/dry-run inputs; needs `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` secrets.
+- **Production** — every push to `main` deploys to [grid.salamituns.com](https://grid.salamituns.com).
