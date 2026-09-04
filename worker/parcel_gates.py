@@ -97,6 +97,9 @@ def qualify_parcels(
     county_name: str,
     snapshots: Dict[str, Optional[str]],
     retrieve_time: str,
+    roads_gdf: Optional[gpd.GeoDataFrame] = None,
+    padus_gdf: Optional[gpd.GeoDataFrame] = None,
+    slopes: Optional[Dict[Any, Tuple[Optional[float], Optional[float], int]]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
     """
     Computes metrics and gates for every fetched parcel. Returns
@@ -110,6 +113,11 @@ def qualify_parcels(
 
     # Layer unions in the planar CRS for overlap math
     wetlands_union = _union(wetlands_gdf.to_crs(PLANAR_CRS)) if wetlands_gdf is not None else None
+    padus_union = _union(padus_gdf.to_crs(PLANAR_CRS)) if padus_gdf is not None else None
+    roads_planar = (
+        roads_gdf.to_crs(PLANAR_CRS)[["road_class", "geometry"]]
+        if roads_gdf is not None and len(roads_gdf) > 0 else None
+    )
     floodway_union = (
         _union(nfhl_gdf[nfhl_gdf["zone_subty"] == "FLOODWAY"].to_crs(PLANAR_CRS))
         if nfhl_gdf is not None else None
@@ -155,6 +163,14 @@ def qualify_parcels(
             how="left", distance_col="dist_m"
         )["dist_m"].groupby(level=0).min() / 1609.344
 
+    # Road access: nearest primary/secondary road (TIGER)
+    road_dist_mi: Optional[pd.Series] = None
+    if roads_planar is not None:
+        road_dist_mi = gpd.sjoin_nearest(
+            planar[["geometry"]], roads_planar[["geometry"]],
+            how="left", distance_col="dist_m"
+        )["dist_m"].groupby(level=0).min() / 1609.344
+
     # Assembly potential: abutting parcels above the source-acreage floor
     assembly: Dict[int, Tuple[int, float]] = {}
     try:
@@ -176,6 +192,9 @@ def qualify_parcels(
     acre_rule = rules.get("contiguous_acreage", {}).get("params", DEFAULT_RULE_PARAMS["contiguous_acreage"])
     flood_rule = rules.get("floodway", {}).get("params", DEFAULT_RULE_PARAMS["floodway"])
     wet_rule = rules.get("wetlands", {}).get("params", DEFAULT_RULE_PARAMS["wetlands"])
+    prot_rule = rules.get("protected_land", {}).get("params", DEFAULT_RULE_PARAMS["protected_land"])
+    slope_rule = rules.get("slope", {}).get("params", DEFAULT_RULE_PARAMS["slope"])
+    road_rule = rules.get("road_access", {}).get("params", DEFAULT_RULE_PARAMS["road_access"])
     rule_ids = {k: v.get("id") for k, v in rules.items()}
 
     parcel_records: List[Dict[str, Any]] = []
@@ -232,12 +251,28 @@ def qualify_parcels(
         wet_pct = _overlap_fraction(planar.geometry.loc[i], wetlands_union, area_m2)
         fw_pct = _overlap_fraction(planar.geometry.loc[i], floodway_union, area_m2)
         fp_pct = _overlap_fraction(planar.geometry.loc[i], floodplain_union, area_m2)
+        prot_pct = _overlap_fraction(planar.geometry.loc[i], padus_union, area_m2)
 
         if wetlands_gdf is not None:
             metric(pin, "wetland_pct", wet_pct, unit="percent", evidence="derived", layer="wetlands")
         if nfhl_gdf is not None:
             metric(pin, "floodway_pct", fw_pct, unit="percent", evidence="derived", layer="nfhl")
             metric(pin, "floodplain_pct", fp_pct, unit="percent", evidence="derived", layer="nfhl")
+        if padus_gdf is not None:
+            metric(pin, "protected_land_pct", prot_pct, unit="percent",
+                   evidence="derived", layer="padus")
+        if road_dist_mi is not None and i in road_dist_mi.index:
+            metric(pin, "road_distance_miles", road_dist_mi.loc[i], unit="miles",
+                   evidence="derived", layer="roads")
+        if slopes is not None and i in slopes:
+            smax, smed, sn = slopes[i]
+            if smax is not None:
+                metric(pin, "slope_max_pct", smax, unit="percent",
+                       evidence="derived", layer="slope",
+                       details={"n_samples": sn})
+                metric(pin, "slope_median_pct", smed, unit="percent",
+                       evidence="derived", layer="slope",
+                       details={"n_samples": sn})
 
         zr = zone_of.get(i)
         if zr is not None:
@@ -379,19 +414,77 @@ def qualify_parcels(
                  f"{wet_pct:.1f}% wetland coverage (NWI) — below the "
                  f"{wet_rule.get('conditional_pct', 5)}% screening threshold.")
 
-        # Verification-required layers: explicit UNKNOWN until evidence lands
-        gate(pin, "slope", "UNKNOWN",
-             "3DEP slope derivation pending — terrain suitability unverified.")
-        gate(pin, "protected_land", "UNKNOWN",
-             "PAD-US protected-areas overlay pending — conservation status unverified.")
-        gate(pin, "road_access", "UNKNOWN",
-             "TIGER road proximity pending — access and truck routing unverified.")
+        # Verification-required layers — verdicts when the evidence layer
+        # is present, explicit UNKNOWN when it is not.
+        if padus_gdf is None:
+            gate(pin, "protected_land", "UNKNOWN",
+                 "PAD-US protected-areas layer unavailable for this run — "
+                 "conservation status unverified.")
+        elif prot_pct > prot_rule.get("fail_pct", 0.5):
+            gate(pin, "protected_land", "FAIL",
+                 f"{prot_pct:.1f}% of the parcel overlaps PAD-US protected "
+                 f"areas (limit {prot_rule.get('fail_pct', 0.5)}%).",
+                 affected=prot_pct)
+        else:
+            gate(pin, "protected_land", "PASS",
+                 f"{prot_pct:.2f}% PAD-US protected-area overlap — below the "
+                 f"{prot_rule.get('fail_pct', 0.5)}% screening limit.")
+
+        if roads_gdf is None:
+            gate(pin, "road_access", "UNKNOWN",
+                 "TIGER road layer unavailable for this run — access and "
+                 "truck routing unverified.")
+        elif road_dist_mi is None or i not in road_dist_mi.index:
+            gate(pin, "road_access", "UNKNOWN",
+                 "No road-distance measurement for this parcel — access "
+                 "unverified.")
+        else:
+            rmi = float(road_dist_mi.loc[i])
+            if rmi > road_rule.get("fail_miles", 5):
+                gate(pin, "road_access", "FAIL",
+                     f"{rmi:.1f} mi to the nearest primary/secondary road — "
+                     f"beyond the {road_rule.get('fail_miles', 5)}-mi limit.")
+            elif rmi > road_rule.get("conditional_miles", 2):
+                gate(pin, "road_access", "CONDITIONAL",
+                     f"{rmi:.1f} mi to the nearest primary/secondary road — "
+                     f"access road extension likely required.")
+            else:
+                gate(pin, "road_access", "PASS",
+                     f"{rmi:.2f} mi to the nearest primary/secondary road.")
+
+        if slopes is None:
+            gate(pin, "slope", "UNKNOWN",
+                 "3DEP slope derivation unavailable for this run — terrain "
+                 "suitability unverified.")
+        elif i not in slopes or slopes[i][0] is None:
+            gate(pin, "slope", "UNKNOWN",
+                 "3DEP elevation sampling failed for this parcel — terrain "
+                 "suitability unverified.")
+        else:
+            smax, smed, _ = slopes[i]
+            if smax > slope_rule.get("max_fail_pct", 25):
+                gate(pin, "slope", "FAIL",
+                     f"Max slope {smax:.1f}% exceeds the "
+                     f"{slope_rule.get('max_fail_pct', 25)}% buildability limit.")
+            elif smed > slope_rule.get("median_conditional_pct", 8):
+                gate(pin, "slope", "CONDITIONAL",
+                     f"Median slope {smed:.1f}% exceeds the "
+                     f"{slope_rule.get('median_conditional_pct', 8)}% "
+                     f"threshold — significant grading expected.")
+            else:
+                gate(pin, "slope", "PASS",
+                     f"Max slope {smax:.1f}%, median {smed:.1f}% — terrain "
+                     f"suitable (3DEP-derived).")
 
     stats = {
         "parcels_qualified": n,
         "zoning_coverage_pct": zoning_coverage,
         "wetlands_layer": "present" if wetlands_gdf is not None else "missing",
         "nfhl_layer": "present" if nfhl_gdf is not None else "missing",
+        "padus_layer": "present" if padus_gdf is not None else "missing",
+        "roads_layer": "present" if roads_gdf is not None else "missing",
+        "slope_layer": "present" if slopes is not None else "missing",
+        "slope_sampled_ok": sum(1 for v in (slopes or {}).values() if v[2] > 0),
         "metric_rows": len(metric_rows),
         "gate_rows": len(gate_rows),
     }

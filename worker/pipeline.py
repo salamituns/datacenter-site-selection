@@ -38,6 +38,7 @@ from hazard_api import HazardAPI
 from loudoun_api import LoudounParcelAPI
 from parcel_gates import qualify_parcels, JURISDICTION, RULE_VERSIONS
 from runs import IngestionRun
+import overlay_layers
 
 load_dotenv()
 
@@ -372,6 +373,45 @@ def run_pipeline(
                     "of a VA run with parcels enabled)."
                 )
 
+            # Verification layers: TIGER roads, PAD-US protected areas,
+            # 3DEP slopes. Each degrades independently to UNKNOWN.
+            logger.info("Step 6b: verification layers (TIGER roads, PAD-US, 3DEP slopes)…")
+            roads_gdf = overlay_layers.fetch_tiger_roads(min_lon, min_lat, max_lon, max_lat)
+            padus_gdf = overlay_layers.fetch_padus(min_lon, min_lat, max_lon, max_lat)
+            slopes = None
+            try:
+                slopes = overlay_layers.sample_3dep_slopes(parcels_gdf)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("3DEP slope sampling failed: %s", e)
+                slopes = None
+
+            for layer_key, count, src, endpoint, note in (
+                ("roads", None if roads_gdf is None else len(roads_gdf),
+                 "census_tiger_roads",
+                 "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Transportation/MapServer",
+                 None if roads_gdf is not None else "unavailable — gate recorded UNKNOWN"),
+                ("padus", None if padus_gdf is None else len(padus_gdf),
+                 "padus",
+                 "https://www.sciencebase.gov/catalog/item/652d4f80d34e44db0e2ee45c",
+                 (None if padus_gdf is not None
+                  else "unavailable — gate recorded UNKNOWN")),
+                ("slope",
+                 None if slopes is None else sum(1 for v in slopes.values() if v[2] > 0),
+                 "usgs_3dep",
+                 "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/getSamples",
+                 (None if slopes is not None
+                  else "unavailable — gate recorded UNKNOWN")),
+            ):
+                if run is not None:
+                    snapshots[layer_key] = run.snapshot(
+                        layer=layer_key, source_key=src, endpoint_url=endpoint,
+                        record_count=count, evidence_class="observed",
+                        quality=None if count is None else {"rows": int(count)},
+                        notes=note,
+                    )
+                elif count is None:
+                    logger.warning("Layer %s unavailable — its gates will be UNKNOWN.", layer_key)
+
             rules = run.load_rules(JURISDICTION) if run is not None else {}
             parcel_records, metric_rows, gate_rows, parcel_stats = qualify_parcels(
                 parcels_gdf=parcels_gdf, zoning_gdf=zoning_gdf,
@@ -380,6 +420,7 @@ def run_pipeline(
                 subs_gdf=subs_gdf if power_live else None,
                 rules=rules, state_code=state_code, county_name=county_name,
                 snapshots=snapshots, retrieve_time=retrieve_time,
+                roads_gdf=roads_gdf, padus_gdf=padus_gdf, slopes=slopes,
             )
             logger.info("Parcel qualification: %d parcels, %d metric rows, %d gate rows.",
                         len(parcel_records), len(metric_rows), len(gate_rows))
