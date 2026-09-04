@@ -98,22 +98,34 @@ SELECT
     extensions.ST_Y(geom) AS lat
 FROM public.observation_wells;
 
--- 6. Row Level Security — public read, anon/service-role write
---    (matches the grid_parcels posture: the worker's env carries the anon key)
-ALTER TABLE public.transmission_lines ENABLE ROW LEVEL SECURITY;
+-- 6. Row Level Security — public read, service-role write
+--    (the anonymous write policies were a later, separate migration —
+--    see 20260902025419_map_features_anon_write.sql, revoked in Release 0)
+DROP POLICY IF EXISTS "Allow public read access to transmission lines"
+    ON public.transmission_lines;
 CREATE POLICY "Allow public read access to transmission lines"
     ON public.transmission_lines FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY "Allow anon and service role write access"
-    ON public.transmission_lines FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow service role full access to transmission lines"
+    ON public.transmission_lines;
+CREATE POLICY "Allow service role full access to transmission lines"
+    ON public.transmission_lines FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 ALTER TABLE public.substations ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read access to substations"
+    ON public.substations;
 CREATE POLICY "Allow public read access to substations"
     ON public.substations FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY "Allow anon and service role write access"
-    ON public.substations FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow service role full access to substations"
+    ON public.substations;
+CREATE POLICY "Allow service role full access to substations"
+    ON public.substations FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 ALTER TABLE public.observation_wells ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public read access to observation wells"
+    ON public.observation_wells;
 CREATE POLICY "Allow public read access to observation wells"
     ON public.observation_wells FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY "Allow anon and service role write access"
-    ON public.observation_wells FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow service role full access to observation wells"
+    ON public.observation_wells;
+CREATE POLICY "Allow service role full access to observation wells"
+    ON public.observation_wells FOR ALL TO service_role USING (true) WITH CHECK (true);
