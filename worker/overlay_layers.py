@@ -46,6 +46,19 @@ PADUS_VA_URL = (
 )
 PADUS_CACHE = Path(__file__).parent / "cache" / "padus_va_clip.gpkg"
 
+# Official NWI Virginia state geodatabase (USFWS ecosphere document
+# server). Used only when the NWI REST service is unreachable — the
+# WIM-hosted service has been serving error pages for extended periods.
+NWI_SERVICE_URL = (
+    "https://fwspublicservices.wim.usgs.gov/wetlandsarcgis/rest/services/"
+    "Wetlands/MapServer/0/query"
+)
+NWI_VA_URL = (
+    "https://documentst.ecosphere.fws.gov/wetlands/data/"
+    "State-Downloads/VA_geodatabase_wetlands.zip"
+)
+NWI_CACHE = Path(__file__).parent / "cache" / "nwi_va_clip.gpkg"
+
 THREEDEP_URL = (
     "https://elevation.nationalmap.gov/arcgis/rest/services/"
     "3DEPElevation/ImageServer/getSamples"
@@ -158,6 +171,118 @@ def fetch_padus(
     except Exception as e:  # noqa: BLE001
         logger.warning("PAD-US fetch failed: %s", e)
         return None
+
+
+def fetch_nwi_wetlands(
+    min_lon: float, min_lat: float, max_lon: float, max_lat: float
+) -> Tuple[Optional[gpd.GeoDataFrame], str]:
+    """
+    NWI wetland polygons for the bbox. Tries the REST service first
+    (fresh when healthy); when it is down, falls back to the official
+    Virginia state geodatabase, downloaded once and clipped/cached.
+
+    Returns (geodataframe_or_None, endpoint_that_served). A None return
+    means both routes failed — the gate stays UNKNOWN.
+    """
+    # 1. Live service probe (tiny query, short timeout).
+    session = requests.Session()
+    session.headers.update({"User-Agent": BROWSER_UA, "Accept": "application/json"})
+    probe = _paged_query(
+        session, NWI_SERVICE_URL,
+        f"{min_lon},{min_lat},{max_lon},{max_lat}",
+        out_fields="OBJECTID,ATTRIBUTE", page_size=100,
+    )
+    if probe is not None:
+        rows = []
+        for f in probe:
+            geometry = f.get("geometry")
+            if not geometry:
+                continue
+            try:
+                geom = shape(geometry)
+            except Exception:  # noqa: BLE001
+                continue
+            if geom.is_empty or not geom.is_valid:
+                geom = geom.buffer(0)
+            if not geom.is_empty:
+                rows.append({
+                    "attribute": (f.get("properties", {}) or {}).get("ATTRIBUTE"),
+                    "geometry": geom,
+                })
+        gdf = gpd.GeoDataFrame(
+            rows if rows else [], columns=["attribute", "geometry"], crs="EPSG:4326"
+        )
+        logger.info("NWI wetlands (service): %d polygons in bbox.", len(gdf))
+        return gdf, NWI_SERVICE_URL
+
+    # 2. Official state geodatabase, cached clip.
+    logger.warning("NWI service unreachable — falling back to the official "
+                   "Virginia geodatabase (download once, cached).")
+    try:
+        if NWI_CACHE.exists():
+            clip = gpd.read_file(NWI_CACHE, layer="wetlands")
+            logger.info("NWI wetlands (cached clip): %d polygons.", len(clip))
+            return clip, NWI_VA_URL
+        NWI_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / "nwi_va.zip"
+            logger.info("NWI: downloading Virginia geodatabase (~395 MB)…")
+            dl = requests.get(NWI_VA_URL, stream=True, timeout=1800,
+                              headers={"User-Agent": BROWSER_UA})
+            dl.raise_for_status()
+            with open(zip_path, "wb") as out:
+                for chunk in dl.iter_content(chunk_size=1 << 20):
+                    if chunk:
+                        out.write(chunk)
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(tmp)
+            gdb_dirs = list(Path(tmp).glob("*.gdb"))
+            if not gdb_dirs:
+                logger.warning("NWI: no geodatabase in the archive.")
+                return None, NWI_VA_URL
+            gdb = str(gdb_dirs[0])
+            import pyogrio
+
+            layers = [l[0] for l in pyogrio.list_layers(gdb)]
+            # The state GDB ships boundary + metadata layers alongside the
+            # wetland features (e.g. 'Virginia', 'VA_Wetlands',
+            # 'VA_Wetlands_Project_Metadata') — pick the feature layer.
+            preferred = [
+                l for l in layers
+                if "wetland" in l.lower() and "metadata" not in l.lower()
+                and "project" not in l.lower()
+            ]
+            layer_name = preferred[0] if preferred else layers[0]
+            logger.info("NWI: reading layer %r from %s", layer_name, Path(gdb).name)
+            info = pyogrio.read_info(gdb, layer=layer_name)
+            from pyproj import CRS
+            src_crs = CRS.from_user_input(info["crs"])
+            if src_crs.to_epsg() != 4326:
+                from pyproj import Transformer
+                tf = Transformer.from_crs("EPSG:4326", src_crs, always_xy=True)
+                bx0, by0 = tf.transform(min_lon, min_lat)
+                bx1, by1 = tf.transform(max_lon, max_lat)
+                read_bbox = (min(bx0, bx1), min(by0, by1), max(bx0, bx1), max(by0, by1))
+            else:
+                read_bbox = (min_lon, min_lat, max_lon, max_lat)
+            full = gpd.read_file(gdb, layer=layer_name, bbox=read_bbox)
+            attr_col = next(
+                (c for c in full.columns if c.upper() == "ATTRIBUTE"), None
+            )
+            clip = full.to_crs("EPSG:4326")
+            if len(clip) == 0:
+                logger.info("NWI: no wetland polygons in bbox.")
+                return None, NWI_VA_URL
+            out = gpd.GeoDataFrame({
+                "attribute": clip[attr_col] if attr_col else None,
+                "geometry": clip.geometry,
+            }, crs="EPSG:4326")
+            out.to_file(NWI_CACHE, layer="wetlands")
+            logger.info("NWI wetlands (geodatabase clip): %d polygons (cached).", len(out))
+            return out, NWI_VA_URL
+    except Exception as e:  # noqa: BLE001
+        logger.warning("NWI wetlands fetch failed: %s", e)
+        return None, NWI_VA_URL
 
 
 def sample_3dep_slopes(

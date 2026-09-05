@@ -345,6 +345,17 @@ def run_pipeline(
             parcels_gdf = layers["parcels"]
             zoning_gdf, wetlands_gdf, nfhl_gdf = layers["zoning"], layers["wetlands"], layers["nfhl"]
 
+            # NWI service down? Fall back to the official state geodatabase
+            # (download-once clip) before conceding UNKNOWN wetland gates.
+            wetlands_endpoint = loudoun.WETLANDS_URL
+            if wetlands_gdf is None:
+                wetlands_gdf, wetlands_endpoint = overlay_layers.fetch_nwi_wetlands(
+                    min_lon, min_lat, max_lon, max_lat
+                )
+                if wetlands_gdf is not None:
+                    logger.info("NWI wetlands served via the official geodatabase "
+                                "fallback — gates will use it.")
+
             for layer_key, gdf, src in (
                 ("parcels", parcels_gdf, "loudoun_parcels"),
                 ("zoning", zoning_gdf, "loudoun_zoning"),
@@ -356,7 +367,7 @@ def run_pipeline(
                         layer=layer_key, source_key=src,
                         endpoint_url={
                             "parcels": loudoun.PARCELS_URL, "zoning": loudoun.ZONING_URL,
-                            "wetlands": loudoun.WETLANDS_URL, "nfhl": loudoun.NFHL_URL,
+                            "wetlands": wetlands_endpoint, "nfhl": loudoun.NFHL_URL,
                         }[layer_key],
                         record_count=None if gdf is None else len(gdf),
                         evidence_class="observed",

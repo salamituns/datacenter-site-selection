@@ -40,7 +40,7 @@ Two tiers run on the same map:
 | Verification-required | slope, protected land, road access, wetlands | `UNKNOWN` until the evidence layer lands — no favorable default |
 | Informational | ordinance vintage, assembly potential | context metrics |
 
-**Four states.** A parcel's overall status is `FAIL` if any gate fails, `UNKNOWN` if any gate is unknown, `CONDITIONAL` if any is conditional, `PASS` only when every gate passes. (During the current USFWS outage, no parcel can be overall `PASS` — wetlands gates are honestly `UNKNOWN`.)
+**Four states.** A parcel's overall status is `FAIL` if any gate fails, `UNKNOWN` if any gate is unknown, `CONDITIONAL` if any is conditional, `PASS` only when every gate passes. Current published run: 5 parcels fully `PASS`, 80 `CONDITIONAL`, 32 `UNKNOWN` (town jurisdictions), 2,361 `FAIL`.
 
 **Evidence classes** tag every metric row: `observed` (fetched as-is), `derived` (computed from observations — overlaps, slopes, distances), `manual` (reviewed mapping such as the zoning use-table), `estimated` / `fallback` (regional screening models only — never allowed in the decision layer).
 
@@ -70,14 +70,14 @@ Two tiers run on the same map:
 | Flood/hurricane context | FEMA National Risk Index (counties) | County risk scores (context only) |
 | Ambient cooling | NOAA ACIS GridData (PRISM normals) | CDD, mean temp, free-cooling hours |
 
-**Parcel qualification** layers (Loudoun pilot) have **no fallback**: an unreachable layer yields `UNKNOWN` gates with an explicit rationale.
+**Parcel qualification** layers (Loudoun pilot) never fabricate values: an unreachable layer yields `UNKNOWN` gates with an explicit rationale. Two layers carry official-download outage fallbacks (download once → clip → cache) so an outage degrades to the same data the service would have served, not to `UNKNOWN`: FEMA flood (county mirror instead of the throttled federal NFHL) and NWI wetlands (official state geodatabase instead of the down WIM REST service).
 
 | Gate | Source | Notes |
 | :--- | :--- | :--- |
 | Zoning DC-use | Loudoun County GIS — Zoning Ordinance districts | Dominant district per parcel overlay; rules from `constraint_rules` |
 | Contiguous acreage | Loudoun County GIS — Land Records parcels | County PIN + legal acreage; GIS acreage from planar geometry |
 | Floodway / floodplain | Loudoun County GIS — FEMAFlood (FEMA DFIRM 51107C mirror) | County mirror used because the federal NFHL endpoint throttles county-sized envelope queries; identical `FLD_ZONE`/`ZONE_SUBTY`/`SFHA_TF` attributes |
-| Wetlands | USFWS National Wetlands Inventory | Screening only; field delineation remains a diligence item |
+| Wetlands | USFWS NWI — live REST service, with the official Virginia geodatabase as an outage fallback | Service-first; when WIM is down, the state GDB is downloaded once, clipped, cached (`worker/cache/`). Screening only; field delineation remains a diligence item |
 | Protected land | USGS PAD-US 4.0 — official Virginia geodatabase (ScienceBase) | Downloaded once, clipped, cached in `worker/cache/`; hosted national ArcGIS layers are partial subsets |
 | Slope | USGS 3DEP bare-earth DEM (`getSamples`) | Per-parcel elevation lattice → gradient-derived max/median slope % |
 | Road access | Census TIGERweb — Transportation (S1100 primary, S1200 secondary) | Nearest suitable-road distance (mi) |
