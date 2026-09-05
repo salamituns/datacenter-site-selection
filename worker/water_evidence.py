@@ -37,6 +37,8 @@ WATER_SERVICE_AREA_URL = (
 
 # ServiceType values that carry public water service (vs wastewater-only).
 WATER_SERVICE_TYPES = ("W", "Both")
+# ServiceType values that carry public wastewater service (companion metric).
+WASTEWATER_SERVICE_TYPES = ("WW", "Both")
 # The utility's explicit non-service polygon (AreaName).
 NOT_SERVED_AREA_NAME = "NOT Served by LW"
 

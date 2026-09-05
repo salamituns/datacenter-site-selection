@@ -302,10 +302,14 @@ def qualify_parcels(
     water_not_served_union = None
     water_layer_edited: Optional[str] = None
     water_area_of: Dict[int, Dict[str, Any]] = {}
+    ww_serving_union = None
+    ww_area_of: Dict[int, Dict[str, Any]] = {}
     if water_gdf is not None and len(water_gdf) > 0:
         serving = water_gdf[water_gdf["service_type"].isin(("W", "Both"))]
+        ww_serving = water_gdf[water_gdf["service_type"].isin(("WW", "Both"))]
         not_served = water_gdf[water_gdf["area_name"] == "NOT Served by LW"]
         water_serving_union = _union(serving.to_crs(PLANAR_CRS))
+        ww_serving_union = _union(ww_serving.to_crs(PLANAR_CRS))
         water_not_served_union = _union(not_served.to_crs(PLANAR_CRS))
         water_layer_edited = max(
             (str(d) for d in water_gdf["last_edited"].dropna()), default=None
@@ -322,6 +326,18 @@ def qualify_parcels(
                 best = inter.sort_values("area", ascending=False) \
                     .drop_duplicates("pidx").set_index("pidx")
                 water_area_of = {i: row for i, row in best.iterrows()}
+            # Wastewater companion: best wastewater-servicing area per parcel
+            ww_inter = gpd.overlay(
+                planar[["geometry"]].reset_index(names="pidx"),
+                ww_serving.to_crs(PLANAR_CRS)[
+                    ["area_name", "service_type", "geometry"]],
+                how="intersection",
+            )
+            if len(ww_inter) > 0:
+                ww_inter["area"] = ww_inter.geometry.area
+                ww_best = ww_inter.sort_values("area", ascending=False) \
+                    .drop_duplicates("pidx").set_index("pidx")
+                ww_area_of = {i: row for i, row in ww_best.iterrows()}
         except Exception as e:  # noqa: BLE001
             logger.warning("Water service-area overlay failed: %s", e)
 
@@ -667,6 +683,19 @@ def qualify_parcels(
                      f"overlap {ns_pct:.1f}%) — public water availability "
                      f"unverified.",
                      details={"layer_edited": water_layer_edited})
+
+            # Wastewater companion metrics (informational, same layer —
+            # ServiceType WW/Both areas; never a gate claim).
+            ww_pct = _overlap_fraction(
+                planar.geometry.loc[i], ww_serving_union, area_m2)
+            metric(pin, "wastewater_service_area_pct", ww_pct, unit="percent",
+                   evidence="derived", layer="water_service_areas")
+            wwa = ww_area_of.get(i)
+            if ww_pct >= float(water_rule.get("pass_overlap_pct", 50)) and wwa is not None:
+                metric(pin, "wastewater_service_provider", None,
+                       text_value=f"Loudoun Water — {wwa['area_name']}",
+                       evidence="observed", layer="water_service_areas",
+                       details={"service_type": str(wwa["service_type"])})
 
         if slopes is None:
             gate(pin, "slope", "UNKNOWN",
