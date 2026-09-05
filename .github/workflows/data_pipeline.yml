@@ -54,13 +54,16 @@ jobs:
       - name: Run Pipeline & Sync PostGIS Data
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # A push under worker/ validates the pipeline end to end without
+          # publishing: it needs no credentials, and a code change can never
+          # write to the production database on its own. Publication is
+          # reserved for the weekly cron and manual dispatch.
+          DRY_RUN: ${{ (github.event_name == 'push' || github.event.inputs.dry_run == 'true') && '--dry-run' || '' }}
         run: |
           cd worker
           STATE="${{ github.event.inputs.state || 'VA' }}"
           COUNTY="${{ github.event.inputs.county || 'Loudoun' }}"
-          DRY_RUN="${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}"
 
-          echo "Running pipeline for $COUNTY, $STATE (Dry run: $DRY_RUN)..."
+          echo "Running pipeline for $COUNTY, $STATE (dry run: ${DRY_RUN:-no})..."
           python pipeline.py --state "$STATE" --county "$COUNTY" $DRY_RUN
