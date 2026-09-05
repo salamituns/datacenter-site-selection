@@ -1,9 +1,17 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { LandParcel, ParcelQualification, GateStatus, ParcelPowerEvidence, PowerDocument } from "@/types/parcel";
+import {
+  LandParcel,
+  ParcelQualification,
+  ParcelGateRow,
+  ParcelMetricRow,
+  GateStatus,
+  ParcelPowerEvidence,
+  PowerDocument,
+} from "@/types/parcel";
 import { fetchParcelPowerEvidence, fetchPowerDocuments } from "@/lib/supabase";
-import { X, Download, ClipboardCheck, FlaskConical, Landmark, FileText, Zap, ChevronDown, ChevronUp } from "lucide-react";
+import { X, Download, ChevronDown, ChevronUp } from "lucide-react";
 
 interface ParcelQualificationModalProps {
   parcel: LandParcel | null;
@@ -27,26 +35,58 @@ function gateLabel(key: string): string {
   return GATE_LABELS[key] ?? key.replace(/_/g, " ");
 }
 
-/** Verdict chip — stamp-like, one ink per state; UNKNOWN reads as
- *  pending evidence rather than a negative. */
+/** Read order is actionability order: what blocks, then what is
+ *  conditioned, then what is merely unproven, then what is settled. */
+const STATUS_ORDER: Record<GateStatus, number> = {
+  FAIL: 0,
+  CONDITIONAL: 1,
+  UNKNOWN: 2,
+  PASS: 3,
+};
+
+/** One ink per verdict, drawn from the plat palette rather than the
+ *  generic ramp. UNKNOWN is a dashed caliper rule — pending evidence,
+ *  deliberately not a negative. */
+const VERDICT_INK: Record<
+  GateStatus,
+  { rule: string; chip: string; tint: string; ink: string }
+> = {
+  FAIL: {
+    rule: "border-l-danger dark:border-l-danger-night",
+    chip: "border-danger dark:border-danger-night",
+    tint: "bg-danger/[0.055] dark:bg-danger-night/[0.11]",
+    ink: "text-danger dark:text-danger-night",
+  },
+  CONDITIONAL: {
+    rule: "border-l-power dark:border-l-power-night",
+    chip: "border-power dark:border-power-night",
+    tint: "bg-power/[0.06] dark:bg-power-night/[0.11]",
+    ink: "text-power dark:text-power-night",
+  },
+  UNKNOWN: {
+    rule: "border-dashed border-l-border-strong",
+    chip: "border-border-strong",
+    tint: "bg-surface-raised/25",
+    ink: "text-muted",
+  },
+  PASS: {
+    rule: "border-l-success dark:border-l-success-night",
+    chip: "border-success dark:border-success-night",
+    tint: "",
+    ink: "text-success dark:text-success-night",
+  },
+};
+
+/** Verdict chip — an outline stamp, matching the bordered `Prime` chip
+ *  used in the ranked list. `lg` is the header stamp on the plat. */
 function StatusChip({ status, size = "sm" }: { status: GateStatus; size?: "sm" | "lg" }) {
-  const styles: Record<GateStatus, string> = {
-    PASS:
-      "border-success/60 bg-success/10 text-success dark:border-success-night/50 dark:bg-success-night/10 dark:text-success-night",
-    CONDITIONAL:
-      "border-power/60 bg-power/10 text-power dark:border-power-night/50 dark:bg-power-night/10 dark:text-power-night",
-    FAIL:
-      "border-danger/60 bg-danger/10 text-danger dark:border-danger-night/50 dark:bg-danger-night/10 dark:text-danger-night",
-    UNKNOWN: "border-border-strong bg-surface-raised text-muted",
-  };
-  const sizeClasses =
+  const { ink, chip } = VERDICT_INK[status];
+  const box =
     size === "lg"
-      ? "px-3 py-1 text-sm font-semibold tracking-[0.16em]"
-      : "px-1.5 py-0.5 text-[8.5px] tracking-[0.14em]";
+      ? "border-2 px-2.5 py-1 text-[13px] tracking-[0.2em]"
+      : "border px-1.5 py-px text-[8.5px] tracking-[0.14em]";
   return (
-    <span
-      className={`shrink-0 border font-mono uppercase ${sizeClasses} ${styles[status]}`}
-    >
+    <span className={`shrink-0 font-mono font-semibold uppercase ${box} ${chip} ${ink}`}>
       {status}
     </span>
   );
@@ -56,11 +96,183 @@ function fmtAcres(v: number | null): string {
   return v == null ? "Unverified" : `${Math.round(v).toLocaleString()} ac`;
 }
 
+function plural(n: number, one: string, many: string): string {
+  return n === 1 ? one : many;
+}
+
+/** Names at most two gates and defers the rest. A parcel failing six
+ *  gates still has to produce a sentence, not a paragraph — the list in
+ *  full belongs to the rows below, which are already sorted to match. */
+function nameGates(gates: ParcelGateRow[]): string {
+  const names = gates.map((g) => gateLabel(g.gate_key).toLowerCase()).sort();
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  const rest = names.length - 2;
+  return `${names[0]}, ${names[1]}, and ${rest} more ${plural(rest, "gate", "gates")}`;
+}
+
+/**
+ * The single sentence under the PIN — the whole point of the header.
+ * It answers "can I build here, and what is stopping me" before the
+ * reader touches the gate list.
+ *
+ * A parcel with no failing gate but several UNKNOWN ones is deliberately
+ * not called "clear": absent evidence is reported as absent rather than
+ * rounded up to a pass, matching how a null metric renders "Unverified".
+ */
+function verdictSummary(gates: ParcelGateRow[]): string {
+  if (gates.length === 0) return "No gates recorded for this parcel.";
+
+  const failed = gates.filter((g) => g.status === "FAIL");
+  const conditional = gates.filter((g) => g.status === "CONDITIONAL");
+  const unknown = gates.filter((g) => g.status === "UNKNOWN");
+
+  if (failed.length > 0) {
+    return `Disqualified on ${nameGates(failed)}.`;
+  }
+  if (conditional.length > 0 && unknown.length > 0) {
+    return `Conditionally viable — ${conditional.length} ${plural(
+      conditional.length,
+      "gate carries a condition",
+      "gates carry conditions"
+    )}, ${unknown.length} ${plural(unknown.length, "item", "items")} awaiting evidence.`;
+  }
+  if (conditional.length > 0) {
+    return `Conditionally viable — ${conditional.length} ${plural(
+      conditional.length,
+      "gate carries a condition",
+      "gates carry conditions"
+    )}.`;
+  }
+  if (unknown.length > 0) {
+    return `Nothing blocking, but ${unknown.length} ${plural(
+      unknown.length,
+      "gate is",
+      "gates are"
+    )} still awaiting source evidence.`;
+  }
+  return `Clear on all ${gates.length} gates.`;
+}
+
 type SheetState = "half" | "full";
 
 function snapHeights(): Record<SheetState, number> {
   const vh = typeof window === "undefined" ? 0 : window.innerHeight;
   return { half: Math.round(vh * 0.62), full: Math.round(vh * 0.92) };
+}
+
+/* ── Section rule — the only heading treatment, no decorative icon ── */
+function SectionRule({ label, aside }: { label: string; aside?: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 border-b border-border pb-1.5">
+      <h4 className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted">{label}</h4>
+      {aside && (
+        <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.1em] tabular-nums text-muted">
+          {aside}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/* ── A gate, at full weight — left verdict rule, tinted field ── */
+function BlockingGateRow({ gate }: { gate: ParcelGateRow }) {
+  const { rule, tint } = VERDICT_INK[gate.status];
+  return (
+    <div className={`border border-border/60 border-l-[3px] ${rule} ${tint} px-4 py-3.5`}>
+      <div className="flex items-start justify-between gap-3">
+        <span className="font-mono text-[11.5px] font-semibold leading-snug text-foreground">
+          {gateLabel(gate.gate_key)}
+        </span>
+        <StatusChip status={gate.status} />
+      </div>
+      {gate.rationale && (
+        <p className="mt-2 max-w-prose font-sans text-[12px] leading-[1.55] text-muted">
+          {gate.rationale}
+        </p>
+      )}
+      {gate.affected_area_pct != null && (
+        <div className="mt-2.5 flex items-baseline justify-between gap-3 border-t border-border/50 pt-2">
+          <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted">
+            Parcel area affected
+          </span>
+          <span className="font-mono text-[11px] font-semibold tabular-nums text-foreground">
+            {gate.affected_area_pct.toFixed(1)}%
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── A settled gate, at ledger weight — name, verdict, nothing else ── */
+function PassedGateRow({ gate }: { gate: ParcelGateRow }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 px-4 py-2.5">
+      <span className="font-mono text-[11px] text-foreground/80">{gateLabel(gate.gate_key)}</span>
+      <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-success dark:text-success-night">
+        Pass
+      </span>
+    </div>
+  );
+}
+
+/* ── A measured value carries its own provenance — no second table.
+ *    Numeric readings sit inline against a right-aligned figure; a long
+ *    text value (a utility name, a date range) stacks instead, so the
+ *    label and the value stop competing for the same line. ── */
+function MetricRow({ metric }: { metric: ParcelMetricRow }) {
+  const value =
+    metric.value != null
+      ? `${Number(metric.value).toLocaleString()}${
+          metric.unit === "percent" ? "%" : metric.unit ? ` ${metric.unit}` : ""
+        }`
+      : metric.text_value ?? "Unverified";
+  const source = [metric.evidence_class, metric.source_organization].filter(Boolean).join(" · ");
+  const unrecorded = metric.value == null && !metric.text_value;
+  const stacked = metric.value == null && (metric.text_value?.length ?? 0) > 16;
+
+  const label = (
+    <div className="font-mono text-[10.5px] uppercase leading-snug tracking-[0.06em] text-foreground">
+      {metric.label ?? metric.metric_key}
+    </div>
+  );
+  // Provenance wraps rather than truncating — a hidden source is worse
+  // than a second line.
+  const lineage = (
+    <div className="mt-0.5 font-mono text-[9px] uppercase leading-snug tracking-[0.08em] text-muted">
+      {source || "no source recorded"}
+    </div>
+  );
+  const figure = (
+    <div
+      className={`font-mono text-[12px] leading-snug tabular-nums ${
+        unrecorded ? "text-muted" : "text-foreground"
+      }`}
+    >
+      {value}
+    </div>
+  );
+
+  if (stacked) {
+    return (
+      <div className="border-b border-border/60 py-2.5">
+        {label}
+        <div className="mt-1">{figure}</div>
+        {lineage}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-baseline justify-between gap-4 border-b border-border/60 py-2.5">
+      <div className="min-w-0">
+        {label}
+        {lineage}
+      </div>
+      <div className="shrink-0 text-right">{figure}</div>
+    </div>
+  );
 }
 
 export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> = ({
@@ -77,11 +289,13 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
 
   type TabKey = "gate_results" | "measured_values" | "utility_documents";
   const [activeTab, setActiveTab] = useState<TabKey>("gate_results");
+  const [passAccordionOpen, setPassAccordionOpen] = useState(false);
 
   useEffect(() => {
     if (parcel) {
       setSheet("half");
       setActiveTab("gate_results");
+      setPassAccordionOpen(false);
     }
   }, [parcel?.parcel_key]);
 
@@ -112,8 +326,6 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
     };
   }, [parcel?.parcel_key]);
 
-  const [passAccordionOpen, setPassAccordionOpen] = useState(false);
-
   useEffect(() => {
     if (!parcel) return;
     const handleKey = (e: KeyboardEvent) => {
@@ -127,30 +339,19 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
 
   const gates = qualification?.gates ?? [];
   const metrics = qualification?.metrics ?? [];
-  const unknownGates = gates.filter((g) => g.status === "UNKNOWN");
-
-  // Sort gates dynamically by actionability: FAIL first, then CONDITIONAL, then UNKNOWN, then PASS
-  const STATUS_ORDER: Record<GateStatus, number> = {
-    FAIL: 0,
-    CONDITIONAL: 1,
-    UNKNOWN: 2,
-    PASS: 3,
-  };
 
   const sortedGates = [...gates].sort((a, b) => {
-    const orderDiff = (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99);
-    if (orderDiff !== 0) return orderDiff;
-    return gateLabel(a.gate_key).localeCompare(gateLabel(b.gate_key));
+    const byStatus = (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99);
+    return byStatus !== 0 ? byStatus : gateLabel(a.gate_key).localeCompare(gateLabel(b.gate_key));
   });
 
   const attentionGates = sortedGates.filter((g) => g.status !== "PASS");
   const passedGates = sortedGates.filter((g) => g.status === "PASS");
 
   const exportDossier = () => {
-    const blob = new Blob(
-      [JSON.stringify({ parcel, qualification }, null, 2)],
-      { type: "application/json" }
-    );
+    const blob = new Blob([JSON.stringify({ parcel, qualification }, null, 2)], {
+      type: "application/json",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -159,358 +360,275 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
     URL.revokeObjectURL(url);
   };
 
-  const renderGateRow = (g: any, isAccordionChild: boolean = false) => {
-    // Visual contrast: subtle tints for FAIL and CONDITIONAL
-    let rowBg = "bg-transparent";
-    let borderAccent = "border-border/70";
-    if (g.status === "FAIL") {
-      rowBg = "bg-red-500/[0.07] dark:bg-red-500/10 border-red-500/25 dark:border-red-500/30";
-      borderAccent = "border-red-500/20";
-    } else if (g.status === "CONDITIONAL") {
-      rowBg = "bg-amber-500/[0.07] dark:bg-amber-500/10 border-amber-500/25 dark:border-amber-500/30";
-      borderAccent = "border-amber-500/20";
-    } else if (g.status === "PASS" && !isAccordionChild) {
-      rowBg = "bg-emerald-500/[0.04] dark:bg-emerald-500/10 border-emerald-500/20 dark:border-emerald-500/20";
-    }
-
-    return (
-      <div
-        key={g.gate_key}
-        className={`rounded-[2px] border px-3.5 py-3.5 transition-colors ${rowBg} ${borderAccent}`}
-      >
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-xs font-semibold text-foreground">
-            {gateLabel(g.gate_key)}
-          </span>
-          <StatusChip status={g.status} />
-        </div>
-        {g.rationale && (
-          <p className="mt-1.5 font-mono text-[10.5px] leading-relaxed text-muted">
-            {g.rationale}
-            {g.affected_area_pct != null && (
-              <span className="font-semibold text-foreground">
-                {" "}
-                ({g.affected_area_pct.toFixed(1)}% of parcel affected)
-              </span>
-            )}
-          </p>
-        )}
-      </div>
-    );
-  };
+  const tabs: { key: TabKey; label: string; count: number }[] = [
+    { key: "gate_results", label: "Gates", count: gates.length },
+    { key: "measured_values", label: "Measured", count: metrics.length },
+    { key: "utility_documents", label: "Evidence", count: documents.length + evidence.length },
+  ];
 
   /* ── Qualification body — shared by the desktop modal and mobile sheet ── */
   const body = (
-    <div className="flex flex-col h-full">
-      {/* Persistent Header: PIN and overall status badge fixed at top */}
-      <div className="sticky top-0 z-20 shrink-0 border-b border-border-strong bg-surface/95 px-5 py-5 backdrop-blur lg:px-6">
-        <div className="flex items-start justify-between">
-          <div className="min-w-0 flex-1 pr-4">
-            <div className="font-mono text-[9.5px] uppercase tracking-[0.2em] text-muted">
-              Parcel Qualification Dossier
-            </div>
-            <div className="mt-2.5 flex flex-wrap items-center gap-3">
-              <h2 className="font-mono text-2xl font-bold tracking-tight text-foreground lg:text-3xl">
-                PIN {parcel.pin}
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* ── Masthead: PIN and verdict carry the page ── */}
+      <div className="sticky top-0 z-20 shrink-0 border-b border-border-strong bg-surface/95 backdrop-blur">
+        <div className="px-4 pb-3 pt-4 lg:px-6 lg:pt-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+              <h2 className="font-mono text-[26px] font-bold leading-none tracking-tight text-foreground lg:text-[32px]">
+                {parcel.pin}
               </h2>
               {parcel.overall_status && <StatusChip status={parcel.overall_status} size="lg" />}
             </div>
-            <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
-              {parcel.county_name ?? "Unsurveyed"} County, {parcel.state_code} · GIS{" "}
-              {fmtAcres(parcel.gis_acreage)} · Legal {fmtAcres(parcel.legal_acreage)}
-            </p>
+            <button
+              onClick={onClose}
+              aria-label="Close"
+              className="flex h-7 w-7 shrink-0 items-center justify-center border border-border-strong text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="flex h-8 w-8 shrink-0 items-center justify-center border border-border-strong text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
+
+          {/* The sentence that replaces reading the list */}
+          <p className="mt-2.5 max-w-prose font-display text-[15px] leading-snug text-foreground lg:text-base">
+            {qualification ? verdictSummary(gates) : "Loading qualification…"}
+          </p>
+
+          <p className="mt-2 font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted">
+            {parcel.county_name ?? "Unsurveyed"} County, {parcel.state_code}
+            {" · "}GIS {fmtAcres(parcel.gis_acreage)}
+            {" · "}Legal {fmtAcres(parcel.legal_acreage)}
+          </p>
         </div>
 
-        {/* Navigation Tabs Bar */}
-        <div className="mt-4 flex border-b border-border">
-          {[
-            { key: "gate_results", label: "Gate Results", count: gates.length },
-            { key: "measured_values", label: "Measured Values", count: metrics.length },
-            { key: "utility_documents", label: "Utility Documents", count: documents.length + evidence.length },
-          ].map((tab) => {
+        {/* Segmented tabs — inverted ink for the active plate */}
+        <div className="mx-4 mb-3 flex border border-border-strong lg:mx-6">
+          {tabs.map((tab, i) => {
             const isActive = activeTab === tab.key;
             return (
               <button
                 key={tab.key}
-                onClick={() => setActiveTab(tab.key as TabKey)}
-                className={`relative flex items-center gap-2 pb-3 pt-1 font-mono text-[11px] uppercase tracking-[0.1em] transition-colors ${
+                onClick={() => setActiveTab(tab.key)}
+                aria-current={isActive}
+                className={`flex-1 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors ${
                   isActive
-                    ? "border-b-2 border-blue-600 font-bold text-foreground dark:border-blue-500"
-                    : "border-b-2 border-transparent text-muted hover:text-foreground/80"
-                } ${tab.key !== "gate_results" ? "ml-6" : ""}`}
+                    ? "bg-foreground text-background"
+                    : "text-muted hover:bg-surface-raised/60 hover:text-foreground"
+                } ${i > 0 ? "border-l border-border-strong" : ""}`}
               >
-                <span>{tab.label}</span>
-                <span
-                  className={`rounded-full px-1.5 py-0.2 font-mono text-[9.5px] tabular-nums ${
-                    isActive
-                      ? "bg-surface-raised text-foreground font-semibold"
-                      : "bg-surface text-muted"
-                  }`}
-                >
-                  {tab.count}
-                </span>
+                {tab.label} · {tab.count}
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Tab Content Container */}
-      <div className="flex-1 overflow-y-auto">
-        {/* Tab 1: Gate Results */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* ── Gates ── */}
         {activeTab === "gate_results" && (
-          <div className="px-4 py-5 lg:px-6">
-            <div className="flex items-center justify-between">
-              <h4 className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
-                <ClipboardCheck className="h-3.5 w-3.5" />
-                Gate Results · Sorted by Actionability
-              </h4>
-              <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-muted">
-                {attentionGates.length} Attention · {passedGates.length} Passed
-              </span>
-            </div>
+          <div className="px-4 py-4 lg:px-6 lg:py-5">
+            <SectionRule
+              label="Gate results · by actionability"
+              aside={
+                gates.length === 0
+                  ? undefined
+                  : `${attentionGates.length} open · ${passedGates.length} passed`
+              }
+            />
 
-            <div className="mt-3.5 space-y-2.5">
-              {gates.length === 0 && (
-                <div className="py-3 font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
-                  No gates recorded for this parcel.
-                </div>
-              )}
+            {gates.length === 0 ? (
+              <p className="py-4 font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+                No gates recorded for this parcel.
+              </p>
+            ) : (
+              <div className="mt-3.5 space-y-2.5">
+                {attentionGates.map((g) => (
+                  <BlockingGateRow key={g.gate_key} gate={g} />
+                ))}
 
-              {/* Attention Gates: FAIL, CONDITIONAL, UNKNOWN (always open) */}
-              {attentionGates.map((g) => renderGateRow(g))}
+                {attentionGates.length === 0 && (
+                  <p className="border border-dashed border-border-strong px-4 py-3.5 font-sans text-[12px] leading-[1.55] text-muted">
+                    Nothing outstanding. Every gate on this parcel is settled.
+                  </p>
+                )}
 
-              {/* Passed Criteria Accordion */}
-              {passedGates.length > 0 && (
-                <div className="mt-3 overflow-hidden rounded-[2px] border border-border-strong bg-surface">
-                  <button
-                    onClick={() => setPassAccordionOpen((prev) => !prev)}
-                    className="flex w-full items-center justify-between bg-surface-raised/40 px-3.5 py-2.5 text-left font-mono text-[11px] uppercase tracking-[0.08em] text-foreground transition-colors hover:bg-surface-raised/80"
-                    aria-expanded={passAccordionOpen}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="h-2 w-2 rounded-full bg-success/80 dark:bg-success-night" />
-                      <span>
-                        {passAccordionOpen ? "Hide" : "View"} {passedGates.length} Passed Criteria
-                      </span>
-                    </div>
-                    {passAccordionOpen ? (
-                      <ChevronUp className="h-3.5 w-3.5 text-muted" />
-                    ) : (
-                      <ChevronDown className="h-3.5 w-3.5 text-muted" />
-                    )}
-                  </button>
-
-                  {passAccordionOpen && (
-                    <div className="divide-y divide-border/60 border-t border-border-strong p-2 space-y-2 bg-background/40">
-                      {passedGates.map((g) => renderGateRow(g, true))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Unresolved diligence items inside Gate Results */}
-            {unknownGates.length > 0 && (
-              <div className="mt-6 rounded-[2px] border border-border bg-surface-raised/40 p-4">
-                <h4 className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
-                  <Landmark className="h-3.5 w-3.5" />
-                  Unresolved Diligence Items
-                </h4>
-                <ul className="mt-2 space-y-1">
-                  {unknownGates.map((g) => (
-                    <li
-                      key={g.gate_key}
-                      className="font-mono text-[10px] leading-relaxed text-muted"
+                {passedGates.length > 0 && (
+                  <div className="border border-border-strong">
+                    <button
+                      onClick={() => setPassAccordionOpen((prev) => !prev)}
+                      aria-expanded={passAccordionOpen}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left font-mono text-[10px] uppercase tracking-[0.12em] text-muted transition-colors hover:bg-surface-raised/60 hover:text-foreground"
                     >
-                      <span className="text-foreground">{gateLabel(g.gate_key)}</span>
-                      {" — "}
-                      {g.rationale ?? "awaiting source data"}
-                    </li>
-                  ))}
-                </ul>
+                      <span>
+                        {passAccordionOpen ? "Hide" : "View"} {passedGates.length} passed criteria
+                      </span>
+                      {passAccordionOpen ? (
+                        <ChevronUp className="h-3.5 w-3.5 shrink-0" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                      )}
+                    </button>
+                    {passAccordionOpen && (
+                      <div className="divide-y divide-border/60 border-t border-border-strong">
+                        {passedGates.map((g) => (
+                          <PassedGateRow key={g.gate_key} gate={g} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
         )}
 
-        {/* Tab 2: Measured Values */}
+        {/* ── Measured values (each row carries its own lineage) ── */}
         {activeTab === "measured_values" && (
-          <div className="px-4 py-5 lg:px-6">
-            <h4 className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
-              <FlaskConical className="h-3.5 w-3.5" />
-              Measured Values · Evidence &amp; Source
-            </h4>
-            <div className="mt-3 grid grid-cols-1 gap-x-10 gap-y-5 sm:grid-cols-2">
-              <div>
-                <dl className="border-t border-border">
-                  {metrics.slice(0, Math.ceil(metrics.length / 2)).map((m) => (
-                    <div
-                      key={m.metric_key}
-                      className="flex items-baseline justify-between gap-3 border-b border-border/70 py-2"
-                    >
-                      <dt className="font-mono text-[10px] uppercase tracking-[0.06em] text-muted">
-                        {m.label ?? m.metric_key}
-                      </dt>
-                      <dd className="text-right font-mono text-[11px] tabular-nums text-foreground">
-                        {m.value != null
-                          ? `${Number(m.value).toLocaleString()}${m.unit === "percent" ? "%" : m.unit ? ` ${m.unit}` : ""}`
-                          : m.text_value ?? "Unverified"}
-                      </dd>
+          <div className="px-4 py-4 lg:px-6 lg:py-5">
+            <SectionRule
+              label="Measured values"
+              aside={metrics.length ? `${metrics.length} recorded` : undefined}
+            />
+            {metrics.length === 0 ? (
+              <p className="py-4 font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+                No measurements recorded for this parcel.
+              </p>
+            ) : (
+              <>
+                <div className="mt-1 grid grid-cols-1 gap-x-10 sm:grid-cols-2">
+                  {[
+                    metrics.slice(0, Math.ceil(metrics.length / 2)),
+                    metrics.slice(Math.ceil(metrics.length / 2)),
+                  ].map((column, i) => (
+                    <div key={i}>
+                      {column.map((m) => (
+                        <MetricRow key={m.metric_key} metric={m} />
+                      ))}
                     </div>
                   ))}
-                </dl>
-              </div>
-              <div>
-                <dl className="border-t border-border">
-                  {metrics.slice(Math.ceil(metrics.length / 2)).map((m) => (
-                    <div
-                      key={m.metric_key}
-                      className="flex items-baseline justify-between gap-3 border-b border-border/70 py-2"
-                    >
-                      <dt className="font-mono text-[10px] uppercase tracking-[0.06em] text-muted">
-                        {m.label ?? m.metric_key}
-                      </dt>
-                      <dd className="text-right font-mono text-[11px] tabular-nums text-foreground">
-                        {m.value != null
-                          ? `${Number(m.value).toLocaleString()}${m.unit === "percent" ? "%" : m.unit ? ` ${m.unit}` : ""}`
-                          : m.text_value ?? "Unverified"}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              </div>
-            </div>
-
-            {/* Evidence + source lineage */}
-            <div className="mt-6 border-t border-border pt-4">
-              <div className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted">
-                Lineage &amp; Source Attribution
-              </div>
-              <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-2 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted">
-                {metrics.map((m) => (
-                  <span key={m.metric_key} className="flex items-center gap-1.5">
-                    <span className="h-1 w-1 rounded-full bg-border-strong" />
-                    <span className="text-foreground">{m.label ?? m.metric_key}</span>
-                    <span>{m.evidence_class ?? "—"} · {m.source_organization ?? "no source"}</span>
-                  </span>
-                ))}
-              </div>
-            </div>
+                </div>
+                <p className="mt-4 max-w-prose font-sans text-[11.5px] leading-[1.55] text-muted">
+                  Each value is shown with the evidence class and organisation it came from.
+                  Where a source recorded nothing, the row reads <em>Unverified</em> — no
+                  default is substituted.
+                </p>
+              </>
+            )}
           </div>
         )}
 
-        {/* Tab 3: Utility Documents */}
+        {/* ── Evidence ── */}
         {activeTab === "utility_documents" && (
-          <div className="divide-y divide-border px-4 py-5 lg:px-6">
-            {/* Parcel-specific utility evidence */}
+          <div className="px-4 py-4 lg:px-6 lg:py-5">
             {evidence.length > 0 && (
-              <div className="pb-6">
-                <h4 className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
-                  <Zap className="h-3.5 w-3.5 text-amber-500" />
-                  Parcel-Specific Utility Evidence · Dated County Record
-                </h4>
-                <ul className="mt-3 space-y-3">
+              <div className="mb-6">
+                <SectionRule
+                  label="Parcel-specific evidence · dated county record"
+                  aside={`${evidence.length}`}
+                />
+                <ul className="mt-3 space-y-2.5">
                   {evidence.map((e) => (
                     <li
                       key={`${e.parcel_key}-${e.application_number}`}
-                      className="rounded-[2px] border border-border-strong bg-success/5 p-3.5 font-mono text-[10.5px] leading-relaxed text-muted dark:bg-success-night/5"
+                      className="border border-border/60 border-l-[3px] border-l-success bg-success/[0.05] px-4 py-3.5 dark:border-l-success-night dark:bg-success-night/[0.07]"
                     >
-                      <div className="flex flex-wrap items-baseline gap-x-2">
+                      <div className="flex flex-wrap items-baseline gap-x-2 font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
                         <a
                           href={e.source_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="font-bold text-foreground underline decoration-border-strong underline-offset-2 hover:decoration-foreground"
+                          className="text-[11px] font-semibold tracking-[0.06em] text-foreground underline decoration-border-strong underline-offset-2 hover:decoration-foreground"
                         >
                           {e.application_type} {e.application_number}
                         </a>
-                        <span>· County approval {e.approval_date}</span>
-                        {e.utility && <span className="text-foreground font-semibold">· {e.utility}</span>}
+                        <span>· approved {e.approval_date}</span>
+                        {e.utility && <span className="text-foreground">· {e.utility}</span>}
                       </div>
-                      <p className="mt-1.5 text-foreground/90">{e.utility_statement}</p>
-                      <p className="mt-1 text-muted">
-                        Source: {e.document_name} · {e.document_date} · public LandMARC record
+                      <p className="mt-2 max-w-prose font-sans text-[12px] leading-[1.55] text-foreground/90">
+                        {e.utility_statement}
                       </p>
                       {e.capacity_mw != null ? (
-                        <p className="mt-1 font-semibold text-foreground">
-                          Documented capacity: {Number(e.capacity_mw).toLocaleString()} MW
-                          {" "}— stated in the dated record, never derived.
-                        </p>
+                        <div className="mt-2.5 flex items-baseline justify-between gap-3 border-t border-border/50 pt-2">
+                          <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted">
+                            Documented capacity · stated, never derived
+                          </span>
+                          <span className="font-mono text-[11px] font-semibold tabular-nums text-foreground">
+                            {Number(e.capacity_mw).toLocaleString()} MW
+                          </span>
+                        </div>
                       ) : (
-                        <p className="mt-1">No MW figure is asserted — the record documents utility service.</p>
+                        <p className="mt-2 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted">
+                          No MW figure asserted — the record documents service only
+                        </p>
                       )}
-                      {e.notes && <p className="mt-1 text-muted/80">{e.notes}</p>}
+                      <p className="mt-2 font-mono text-[9px] uppercase tracking-[0.08em] text-muted">
+                        {e.document_name} · {e.document_date} · public LandMARC record
+                      </p>
+                      {e.notes && (
+                        <p className="mt-1.5 max-w-prose font-sans text-[11.5px] leading-[1.5] text-muted">
+                          {e.notes}
+                        </p>
+                      )}
                     </li>
                   ))}
                 </ul>
               </div>
             )}
 
-            {/* Utility documents behind the power evidence */}
-            <div className={evidence.length > 0 ? "pt-6" : ""}>
-              <h4 className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
-                <FileText className="h-3.5 w-3.5 text-blue-500" />
-                Utility Documents · Dated Regional Sources
-              </h4>
-              {documents.length === 0 ? (
-                <p className="mt-3 font-mono text-[10.5px] text-muted">
-                  No regional utility documents currently registered for this jurisdiction.
-                </p>
-              ) : (
-                <ul className="mt-3 space-y-3">
-                  {documents.map((d) => (
-                    <li
-                      key={d.doc_key}
-                      className="rounded-[2px] border border-border p-3 font-mono text-[10.5px] leading-relaxed text-muted bg-surface-raised/30"
-                    >
-                      <a
-                        href={d.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-bold text-foreground underline decoration-border-strong underline-offset-2 hover:decoration-foreground"
-                      >
-                        {d.title}
-                      </a>
-                      <span className="text-muted">
-                        {" — "}{d.publisher}
-                        {d.published_date && <> · as of {d.published_date}</>}
-                      </span>
-                      {d.summary && <p className="mt-1 text-foreground/80">{d.summary}</p>}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <p className="mt-4 font-mono text-[9px] uppercase tracking-[0.08em] text-muted">
-                Capacity figures appear only with the dated document that supports them —
-                zone-level forecasts are never parcel claims.
+            <SectionRule
+              label="Regional utility documents"
+              aside={documents.length ? `${documents.length}` : undefined}
+            />
+            {documents.length === 0 ? (
+              <p className="py-4 max-w-prose font-sans text-[12px] leading-[1.55] text-muted">
+                No regional utility documents are currently registered for this jurisdiction.
               </p>
-            </div>
+            ) : (
+              <ul className="mt-3 space-y-2.5">
+                {documents.map((d) => (
+                  <li key={d.doc_key} className="border border-border px-4 py-3.5">
+                    <a
+                      href={d.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-mono text-[11px] font-semibold text-foreground underline decoration-border-strong underline-offset-2 hover:decoration-foreground"
+                    >
+                      {d.title}
+                    </a>
+                    <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.08em] text-muted">
+                      {d.publisher}
+                      {d.published_date && <> · as of {d.published_date}</>}
+                    </div>
+                    {d.summary && (
+                      <p className="mt-2 max-w-prose font-sans text-[12px] leading-[1.55] text-muted">
+                        {d.summary}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <p className="mt-5 max-w-prose border-t border-border pt-3 font-sans text-[11.5px] leading-[1.55] text-muted">
+              Capacity figures appear only alongside the dated document that supports them.
+              Zone-level forecasts are never restated as parcel claims.
+            </p>
           </div>
         )}
       </div>
 
-      {/* Footer */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-strong px-4 py-4 lg:px-6">
-        <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted">
+      {/* ── Footer ── */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-border-strong px-4 py-3 lg:px-6">
+        <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted">
           {qualification
             ? `${gates.length} gates · ${metrics.length} metrics · lineage via ingestion run`
             : "Loading qualification…"}
         </div>
         <button
           onClick={exportDossier}
-          className="flex h-8 items-center gap-2 bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.14em] text-background transition-opacity hover:opacity-80"
+          className="flex h-7 items-center gap-2 bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.14em] text-background transition-opacity hover:opacity-80"
         >
-          <Download className="h-3.5 w-3.5" />
-          Export qualification
+          <Download className="h-3 w-3" />
+          Export
         </button>
       </div>
     </div>
@@ -561,20 +679,25 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={`Parcel ${parcel.pin} qualification`}
+        aria-label={`Parcel ${parcel.pin} qualification dossier`}
         onClick={onClose}
         className="fixed inset-0 z-[1000] hidden items-center justify-center bg-foreground/40 p-4 backdrop-blur-[2px] lg:flex"
       >
         <div
           onClick={(e) => e.stopPropagation()}
-          className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-[3px] border border-border-strong bg-surface shadow-overlay"
+          className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-[3px] border border-border-strong bg-surface shadow-overlay"
         >
           {body}
         </div>
       </div>
 
       {/* ── Mobile: qualification as a draggable bottom sheet ── */}
-      <div className="lg:hidden" role="dialog" aria-modal="true" aria-label={`Parcel ${parcel.pin} qualification`}>
+      <div
+        className="lg:hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Parcel ${parcel.pin} qualification dossier`}
+      >
         <div onClick={onClose} aria-hidden="true" className="fixed inset-0 z-[1000] bg-foreground/30" />
         <div
           style={dragH !== null ? { height: dragH, transitionProperty: "none" } : undefined}
