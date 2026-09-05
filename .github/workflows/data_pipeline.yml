@@ -29,6 +29,17 @@ jobs:
   run-pipeline:
     name: Run Ingestion, Scikit-Learn Clustering & Supabase PostGIS Sync
     runs-on: ubuntu-latest
+    # A full ingest runs ~16 minutes cold. Without this the job inherits
+    # GitHub's 360-minute default, so one hung dataset download would burn
+    # six hours of Actions minutes before anything noticed.
+    timeout-minutes: 30
+
+    env:
+      # A push under worker/ validates the pipeline end to end without
+      # publishing: it needs no credentials, and a code change can never
+      # write to the production database on its own. Publication is
+      # reserved for the weekly cron and manual dispatch.
+      DRY_RUN: ${{ (github.event_name == 'push' || github.event.inputs.dry_run == 'true') && '--dry-run' || '' }}
 
     steps:
       - name: Checkout Repository
@@ -51,15 +62,27 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Steps 6b and 6c are 78% of a cold run (~12 of ~15 minutes), almost
+      # all of it re-downloading and re-clipping the same 64 MB: PAD-US
+      # protected land, the NWI wetlands geodatabase and the PJM RTEP XML.
+      # The pipeline already reuses these from worker/cache when present.
+      #
+      # Restored for dry runs only. A publishing run must not build on a
+      # stale snapshot — RTEP upgrades change week to week — so cron and
+      # dispatch always re-download and pay the full cost deliberately.
+      - name: Restore clipped geospatial datasets
+        if: env.DRY_RUN != ''
+        uses: actions/cache@v4
+        with:
+          path: worker/cache
+          key: worker-cache-${{ hashFiles('worker/overlay_layers.py', 'worker/power_evidence.py') }}
+          restore-keys: |
+            worker-cache-
+
       - name: Run Pipeline & Sync PostGIS Data
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          # A push under worker/ validates the pipeline end to end without
-          # publishing: it needs no credentials, and a code change can never
-          # write to the production database on its own. Publication is
-          # reserved for the weekly cron and manual dispatch.
-          DRY_RUN: ${{ (github.event_name == 'push' || github.event.inputs.dry_run == 'true') && '--dry-run' || '' }}
         run: |
           cd worker
           STATE="${{ github.event.inputs.state || 'VA' }}"

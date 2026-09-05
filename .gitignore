@@ -72,3 +72,7 @@ pnpm-debug.log*
 dashboard-*.png
 survey-*.png
 *.b64
+
+# Clipped geospatial dataset cache (PAD-US, NWI, PJM RTEP) — ~64 MB of
+# regenerable downloads, restored in CI via actions/cache
+worker/cache/
