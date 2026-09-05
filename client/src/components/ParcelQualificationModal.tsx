@@ -154,6 +154,80 @@ function verdictSummary(gates: ParcelGateRow[]): string {
   return `Clear on all ${gates.length} gates.`;
 }
 
+/**
+ * Which shell to render. The desktop modal and the mobile sheet are
+ * mutually exclusive, so only one is built: rendering both and hiding
+ * one with CSS still puts it in the DOM, which duplicated every gate
+ * row and left two aria-modal dialogs in the accessibility tree.
+ * null until mounted — the modal is an overlay, so nothing is lost.
+ */
+function useIsDesktop(): boolean | null {
+  const [isDesktop, setIsDesktop] = useState<boolean | null>(null);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const sync = () => setIsDesktop(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  return isDesktop;
+}
+
+/**
+ * Moves focus into the dialog on open, keeps Tab inside it, and returns
+ * focus to whatever opened it on close — the map polygon, usually.
+ *
+ * onClose is held in a ref rather than listed as a dependency: callers
+ * pass an inline arrow, so a new identity arrives on every parent render
+ * and a dependency would tear the trap down and re-run it each time,
+ * re-capturing the opener as the dialog itself.
+ */
+function useFocusTrap(active: boolean, onClose: () => void) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!active) return;
+    openerRef.current = document.activeElement as HTMLElement | null;
+    const node = ref.current;
+    node?.focus();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== "Tab" || !node) return;
+      const focusable = node.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      // The opener can be gone — the map redraws its polygons on
+      // selection change — so only restore a node still in the document.
+      const opener = openerRef.current;
+      if (opener && document.contains(opener)) opener.focus?.();
+    };
+  }, [active]);
+
+  return ref;
+}
+
 type SheetState = "half" | "full";
 
 function snapHeights(): Record<SheetState, number> {
@@ -291,6 +365,11 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
   const [activeTab, setActiveTab] = useState<TabKey>("gate_results");
   const [passAccordionOpen, setPassAccordionOpen] = useState(false);
 
+  const isDesktop = useIsDesktop();
+  // Escape now lives in the trap, alongside the rest of the key handling.
+  const dialogRef = useFocusTrap(Boolean(parcel), onClose);
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
   useEffect(() => {
     if (parcel) {
       setSheet("half");
@@ -325,15 +404,6 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
       alive = false;
     };
   }, [parcel?.parcel_key]);
-
-  useEffect(() => {
-    if (!parcel) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [parcel, onClose]);
 
   if (!parcel) return null;
 
@@ -400,15 +470,40 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
           </p>
         </div>
 
-        {/* Segmented tabs — inverted ink for the active plate */}
-        <div className="mx-4 mb-3 flex border border-border-strong lg:mx-6">
+        {/* Segmented tabs — inverted ink for the active plate.
+            Roving tabindex: the tablist is one tab stop, arrows move
+            between the tabs inside it (WAI-ARIA tabs pattern). */}
+        <div
+          role="tablist"
+          aria-label="Qualification sections"
+          className="mx-4 mb-3 flex border border-border-strong lg:mx-6"
+          onKeyDown={(e) => {
+            const i = tabs.findIndex((t) => t.key === activeTab);
+            let next = i;
+            if (e.key === "ArrowRight") next = (i + 1) % tabs.length;
+            else if (e.key === "ArrowLeft") next = (i - 1 + tabs.length) % tabs.length;
+            else if (e.key === "Home") next = 0;
+            else if (e.key === "End") next = tabs.length - 1;
+            else return;
+            e.preventDefault();
+            setActiveTab(tabs[next].key);
+            tabRefs.current[next]?.focus();
+          }}
+        >
           {tabs.map((tab, i) => {
             const isActive = activeTab === tab.key;
             return (
               <button
                 key={tab.key}
+                ref={(el) => {
+                  tabRefs.current[i] = el;
+                }}
+                role="tab"
+                id={`qual-tab-${tab.key}`}
+                aria-selected={isActive}
+                aria-controls={`qual-panel-${tab.key}`}
+                tabIndex={isActive ? 0 : -1}
                 onClick={() => setActiveTab(tab.key)}
-                aria-current={isActive}
                 className={`flex-1 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors ${
                   isActive
                     ? "bg-foreground text-background"
@@ -425,7 +520,13 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
       <div className="min-h-0 flex-1 overflow-y-auto">
         {/* ── Gates ── */}
         {activeTab === "gate_results" && (
-          <div className="px-4 py-4 lg:px-6 lg:py-5">
+          <div
+            role="tabpanel"
+            id="qual-panel-gate_results"
+            aria-labelledby="qual-tab-gate_results"
+            tabIndex={0}
+            className="px-4 py-4 lg:px-6 lg:py-5"
+          >
             <SectionRule
               label="Gate results · by actionability"
               aside={
@@ -483,7 +584,13 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
 
         {/* ── Measured values (each row carries its own lineage) ── */}
         {activeTab === "measured_values" && (
-          <div className="px-4 py-4 lg:px-6 lg:py-5">
+          <div
+            role="tabpanel"
+            id="qual-panel-measured_values"
+            aria-labelledby="qual-tab-measured_values"
+            tabIndex={0}
+            className="px-4 py-4 lg:px-6 lg:py-5"
+          >
             <SectionRule
               label="Measured values"
               aside={metrics.length ? `${metrics.length} recorded` : undefined}
@@ -518,7 +625,13 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
 
         {/* ── Evidence ── */}
         {activeTab === "utility_documents" && (
-          <div className="px-4 py-4 lg:px-6 lg:py-5">
+          <div
+            role="tabpanel"
+            id="qual-panel-utility_documents"
+            aria-labelledby="qual-tab-utility_documents"
+            tabIndex={0}
+            className="px-4 py-4 lg:px-6 lg:py-5"
+          >
             {evidence.length > 0 && (
               <div className="mb-6">
                 <SectionRule
@@ -673,55 +786,65 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
 
   const tapAfterDrag = () => Date.now() - lastDragEnd.current < 300;
 
-  return (
-    <>
-      {/* ── Desktop: centered modal ── */}
+  // One shell or the other, never both — see useIsDesktop. Before the
+  // media query resolves there is nothing to show.
+  if (isDesktop === null) return null;
+
+  const dialogLabel = `Parcel ${parcel.pin} qualification dossier`;
+
+  /* ── Desktop: centered modal ── */
+  if (isDesktop) {
+    return (
       <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Parcel ${parcel.pin} qualification dossier`}
         onClick={onClose}
-        className="fixed inset-0 z-[1000] hidden items-center justify-center bg-foreground/40 p-4 backdrop-blur-[2px] lg:flex"
+        className="fixed inset-0 z-[1000] flex items-center justify-center bg-foreground/40 p-4 backdrop-blur-[2px]"
       >
         <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={dialogLabel}
+          tabIndex={-1}
           onClick={(e) => e.stopPropagation()}
-          className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-[3px] border border-border-strong bg-surface shadow-overlay"
+          className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-[3px] border border-border-strong bg-surface shadow-overlay outline-none"
         >
           {body}
         </div>
       </div>
+    );
+  }
 
-      {/* ── Mobile: qualification as a draggable bottom sheet ── */}
+  /* ── Mobile: qualification as a draggable bottom sheet ── */
+  return (
+    <>
+      <div onClick={onClose} aria-hidden="true" className="fixed inset-0 z-[1000] bg-foreground/30" />
       <div
-        className="lg:hidden"
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label={`Parcel ${parcel.pin} qualification dossier`}
+        aria-label={dialogLabel}
+        tabIndex={-1}
+        style={dragH !== null ? { height: dragH, transitionProperty: "none" } : undefined}
+        className={`fixed inset-x-0 bottom-0 z-[1001] flex flex-col overflow-hidden rounded-t-[6px] border-t border-border-strong bg-surface pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_rgb(0_0_0/0.10)] outline-none transition-[height] duration-300 ease-out ${
+          dragH !== null ? "" : sheet === "half" ? "h-[62svh]" : "h-[92svh]"
+        }`}
       >
-        <div onClick={onClose} aria-hidden="true" className="fixed inset-0 z-[1000] bg-foreground/30" />
-        <div
-          style={dragH !== null ? { height: dragH, transitionProperty: "none" } : undefined}
-          className={`fixed inset-x-0 bottom-0 z-[1001] flex flex-col overflow-hidden rounded-t-[6px] border-t border-border-strong bg-surface pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_rgb(0_0_0/0.10)] transition-[height] duration-300 ease-out ${
-            dragH !== null ? "" : sheet === "half" ? "h-[62svh]" : "h-[92svh]"
-          }`}
+        <button
+          onPointerDown={onHandleDown}
+          onPointerMove={onHandleMove}
+          onPointerUp={onHandleUp}
+          onPointerCancel={onHandleUp}
+          onClick={() => {
+            if (tapAfterDrag()) return;
+            setSheet(sheet === "full" ? "half" : "full");
+          }}
+          aria-label={sheet === "full" ? "Shrink qualification sheet" : "Expand qualification sheet"}
+          className="flex h-7 w-full shrink-0 touch-none select-none items-center justify-center"
         >
-          <button
-            onPointerDown={onHandleDown}
-            onPointerMove={onHandleMove}
-            onPointerUp={onHandleUp}
-            onPointerCancel={onHandleUp}
-            onClick={() => {
-              if (tapAfterDrag()) return;
-              setSheet(sheet === "full" ? "half" : "full");
-            }}
-            aria-label={sheet === "full" ? "Shrink qualification sheet" : "Expand qualification sheet"}
-            className="flex h-7 w-full shrink-0 touch-none select-none items-center justify-center"
-          >
-            <span className="h-1 w-10 rounded-full bg-border-strong" />
-          </button>
-          <div className="scrollbar-hide min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain">
-            {body}
-          </div>
+          <span className="h-1 w-10 rounded-full bg-border-strong" />
+        </button>
+        <div className="scrollbar-hide min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain">
+          {body}
         </div>
       </div>
     </>
