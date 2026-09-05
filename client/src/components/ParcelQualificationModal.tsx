@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { LandParcel, ParcelQualification, GateStatus, ParcelPowerEvidence, PowerDocument } from "@/types/parcel";
 import { fetchParcelPowerEvidence, fetchPowerDocuments } from "@/lib/supabase";
-import { X, Download, ClipboardCheck, FlaskConical, Landmark, FileText, Zap } from "lucide-react";
+import { X, Download, ClipboardCheck, FlaskConical, Landmark, FileText, Zap, ChevronDown, ChevronUp } from "lucide-react";
 
 interface ParcelQualificationModalProps {
   parcel: LandParcel | null;
@@ -29,7 +29,7 @@ function gateLabel(key: string): string {
 
 /** Verdict chip — stamp-like, one ink per state; UNKNOWN reads as
  *  pending evidence rather than a negative. */
-function StatusChip({ status }: { status: GateStatus }) {
+function StatusChip({ status, size = "sm" }: { status: GateStatus; size?: "sm" | "lg" }) {
   const styles: Record<GateStatus, string> = {
     PASS:
       "border-success/60 bg-success/10 text-success dark:border-success-night/50 dark:bg-success-night/10 dark:text-success-night",
@@ -39,9 +39,13 @@ function StatusChip({ status }: { status: GateStatus }) {
       "border-danger/60 bg-danger/10 text-danger dark:border-danger-night/50 dark:bg-danger-night/10 dark:text-danger-night",
     UNKNOWN: "border-border-strong bg-surface-raised text-muted",
   };
+  const sizeClasses =
+    size === "lg"
+      ? "px-3 py-1 text-sm font-semibold tracking-[0.16em]"
+      : "px-1.5 py-0.5 text-[8.5px] tracking-[0.14em]";
   return (
     <span
-      className={`shrink-0 border px-1.5 py-0.5 font-mono text-[8.5px] uppercase tracking-[0.14em] ${styles[status]}`}
+      className={`shrink-0 border font-mono uppercase ${sizeClasses} ${styles[status]}`}
     >
       {status}
     </span>
@@ -102,6 +106,8 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
     };
   }, [parcel?.parcel_key]);
 
+  const [passAccordionOpen, setPassAccordionOpen] = useState(false);
+
   useEffect(() => {
     if (!parcel) return;
     const handleKey = (e: KeyboardEvent) => {
@@ -117,6 +123,23 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
   const metrics = qualification?.metrics ?? [];
   const unknownGates = gates.filter((g) => g.status === "UNKNOWN");
 
+  // Sort gates dynamically by actionability: FAIL first, then CONDITIONAL, then UNKNOWN, then PASS
+  const STATUS_ORDER: Record<GateStatus, number> = {
+    FAIL: 0,
+    CONDITIONAL: 1,
+    UNKNOWN: 2,
+    PASS: 3,
+  };
+
+  const sortedGates = [...gates].sort((a, b) => {
+    const orderDiff = (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99);
+    if (orderDiff !== 0) return orderDiff;
+    return gateLabel(a.gate_key).localeCompare(gateLabel(b.gate_key));
+  });
+
+  const attentionGates = sortedGates.filter((g) => g.status !== "PASS");
+  const passedGates = sortedGates.filter((g) => g.status === "PASS");
+
   const exportDossier = () => {
     const blob = new Blob(
       [JSON.stringify({ parcel, qualification }, null, 2)],
@@ -130,22 +153,62 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
     URL.revokeObjectURL(url);
   };
 
+  const renderGateRow = (g: any, isAccordionChild: boolean = false) => {
+    // Visual contrast: subtle tints for FAIL and CONDITIONAL
+    let rowBg = "bg-transparent";
+    let borderAccent = "border-border/70";
+    if (g.status === "FAIL") {
+      rowBg = "bg-red-500/[0.07] dark:bg-red-500/10 border-red-500/25 dark:border-red-500/30";
+      borderAccent = "border-red-500/20";
+    } else if (g.status === "CONDITIONAL") {
+      rowBg = "bg-amber-500/[0.07] dark:bg-amber-500/10 border-amber-500/25 dark:border-amber-500/30";
+      borderAccent = "border-amber-500/20";
+    } else if (g.status === "PASS" && !isAccordionChild) {
+      rowBg = "bg-emerald-500/[0.04] dark:bg-emerald-500/10 border-emerald-500/20 dark:border-emerald-500/20";
+    }
+
+    return (
+      <div
+        key={g.gate_key}
+        className={`rounded-[2px] border px-3.5 py-3.5 transition-colors ${rowBg} ${borderAccent}`}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs font-semibold text-foreground">
+            {gateLabel(g.gate_key)}
+          </span>
+          <StatusChip status={g.status} />
+        </div>
+        {g.rationale && (
+          <p className="mt-1.5 font-mono text-[10.5px] leading-relaxed text-muted">
+            {g.rationale}
+            {g.affected_area_pct != null && (
+              <span className="font-semibold text-foreground">
+                {" "}
+                ({g.affected_area_pct.toFixed(1)}% of parcel affected)
+              </span>
+            )}
+          </p>
+        )}
+      </div>
+    );
+  };
+
   /* ── Qualification body — shared by the desktop modal and mobile sheet ── */
   const body = (
     <>
-      {/* Header */}
-      <div className="flex items-start justify-between border-b border-border-strong px-4 py-4 lg:px-6">
-        <div className="min-w-0">
-          <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
-            Parcel Qualification
+      {/* Header Reorganization: larger PIN & prominent overall status badge */}
+      <div className="flex items-start justify-between border-b border-border-strong px-5 py-5 lg:px-6">
+        <div className="min-w-0 flex-1 pr-4">
+          <div className="font-mono text-[9.5px] uppercase tracking-[0.2em] text-muted">
+            Parcel Qualification Dossier
           </div>
-          <div className="mt-1 flex items-center gap-2.5">
-            <h2 className="font-mono text-base font-medium tracking-tight text-foreground">
+          <div className="mt-2.5 flex flex-wrap items-center gap-3">
+            <h2 className="font-mono text-2xl font-bold tracking-tight text-foreground lg:text-3xl">
               PIN {parcel.pin}
             </h2>
-            {parcel.overall_status && <StatusChip status={parcel.overall_status} />}
+            {parcel.overall_status && <StatusChip status={parcel.overall_status} size="lg" />}
           </div>
-          <p className="mt-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+          <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
             {parcel.county_name ?? "Unsurveyed"} County, {parcel.state_code} · GIS{" "}
             {fmtAcres(parcel.gis_acreage)} · Legal {fmtAcres(parcel.legal_acreage)}
           </p>
@@ -153,48 +216,62 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
         <button
           onClick={onClose}
           aria-label="Close"
-          className="flex h-7 w-7 shrink-0 items-center justify-center border border-border-strong text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
+          className="flex h-8 w-8 shrink-0 items-center justify-center border border-border-strong text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
-      {/* Gates ledger — the decision layer */}
+      {/* Gates ledger — sorted by actionability with collapsed PASS accordion */}
       <div className="px-4 py-5 lg:px-6">
-        <h4 className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
-          <ClipboardCheck className="h-3.5 w-3.5" />
-          Gate Results
-        </h4>
-        <div className="mt-3 border-t border-border">
+        <div className="flex items-center justify-between">
+          <h4 className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
+            <ClipboardCheck className="h-3.5 w-3.5" />
+            Gate Results · Sorted by Actionability
+          </h4>
+          <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-muted">
+            {attentionGates.length} Attention · {passedGates.length} Passed
+          </span>
+        </div>
+
+        <div className="mt-3.5 space-y-2.5">
           {gates.length === 0 && (
             <div className="py-3 font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
               No gates recorded for this parcel.
             </div>
           )}
-          {gates.map((g) => (
-            <div
-              key={g.gate_key}
-              className="border-b border-border/70 py-2.5"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-xs font-medium text-foreground">
-                  {gateLabel(g.gate_key)}
-                </span>
-                <StatusChip status={g.status} />
-              </div>
-              {g.rationale && (
-                <p className="mt-1 font-mono text-[10px] leading-relaxed text-muted">
-                  {g.rationale}
-                  {g.affected_area_pct != null && (
-                    <span className="text-foreground">
-                      {" "}
-                      ({g.affected_area_pct.toFixed(1)}% of parcel affected)
-                    </span>
-                  )}
-                </p>
+
+          {/* Attention Gates: FAIL, CONDITIONAL, UNKNOWN (always open) */}
+          {attentionGates.map((g) => renderGateRow(g))}
+
+          {/* Passed Criteria Accordion */}
+          {passedGates.length > 0 && (
+            <div className="mt-3 overflow-hidden rounded-[2px] border border-border-strong bg-surface">
+              <button
+                onClick={() => setPassAccordionOpen((prev) => !prev)}
+                className="flex w-full items-center justify-between bg-surface-raised/40 px-3.5 py-2.5 text-left font-mono text-[11px] uppercase tracking-[0.08em] text-foreground transition-colors hover:bg-surface-raised/80"
+                aria-expanded={passAccordionOpen}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-success/80 dark:bg-success-night" />
+                  <span>
+                    {passAccordionOpen ? "Hide" : "View"} {passedGates.length} Passed Criteria
+                  </span>
+                </div>
+                {passAccordionOpen ? (
+                  <ChevronUp className="h-3.5 w-3.5 text-muted" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5 text-muted" />
+                )}
+              </button>
+
+              {passAccordionOpen && (
+                <div className="divide-y divide-border/60 border-t border-border-strong p-2 space-y-2 bg-background/40">
+                  {passedGates.map((g) => renderGateRow(g, true))}
+                </div>
               )}
             </div>
-          ))}
+          )}
         </div>
       </div>
 
@@ -416,7 +493,7 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
         aria-modal="true"
         aria-label={`Parcel ${parcel.pin} qualification`}
         onClick={onClose}
-        className="fixed inset-0 z-50 hidden items-center justify-center bg-foreground/40 p-4 backdrop-blur-[2px] lg:flex"
+        className="fixed inset-0 z-[1000] hidden items-center justify-center bg-foreground/40 p-4 backdrop-blur-[2px] lg:flex"
       >
         <div
           onClick={(e) => e.stopPropagation()}
@@ -428,10 +505,10 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
 
       {/* ── Mobile: qualification as a draggable bottom sheet ── */}
       <div className="lg:hidden" role="dialog" aria-modal="true" aria-label={`Parcel ${parcel.pin} qualification`}>
-        <div onClick={onClose} aria-hidden="true" className="fixed inset-0 z-40 bg-foreground/30" />
+        <div onClick={onClose} aria-hidden="true" className="fixed inset-0 z-[1000] bg-foreground/30" />
         <div
           style={dragH !== null ? { height: dragH, transitionProperty: "none" } : undefined}
-          className={`fixed inset-x-0 bottom-0 z-[41] flex flex-col overflow-hidden rounded-t-[6px] border-t border-border-strong bg-surface pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_rgb(0_0_0/0.10)] transition-[height] duration-300 ease-out ${
+          className={`fixed inset-x-0 bottom-0 z-[1001] flex flex-col overflow-hidden rounded-t-[6px] border-t border-border-strong bg-surface pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_rgb(0_0_0/0.10)] transition-[height] duration-300 ease-out ${
             dragH !== null ? "" : sheet === "half" ? "h-[62svh]" : "h-[92svh]"
           }`}
         >
