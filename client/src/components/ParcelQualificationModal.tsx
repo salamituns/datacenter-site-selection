@@ -17,6 +17,15 @@ interface ParcelQualificationModalProps {
   parcel: LandParcel | null;
   qualification: ParcelQualification | null;
   onClose: () => void;
+  /**
+   * Where to send focus on close when the element that opened the dialog
+   * is gone by then. Clicking a parcel changes the selection, which makes
+   * the map rebuild every polygon, so the clicked path is detached before
+   * the dialog has finished opening and cannot be focused. Point this at
+   * a container that outlives the selection — the map wrapper — and a
+   * keyboard user lands back where they were instead of at the page top.
+   */
+  returnFocusTo?: React.RefObject<HTMLElement | null>;
 }
 
 const GATE_LABELS: Record<string, string> = {
@@ -174,6 +183,20 @@ function useIsDesktop(): boolean | null {
 }
 
 /**
+ * Focuses a node if it is still in the document. A plain container has no
+ * tabindex and cannot take focus, so one is added: -1 keeps it out of the
+ * tab order while allowing focus to be moved there programmatically.
+ */
+function focusIfPresent(el: HTMLElement | null): boolean {
+  if (!el || el === document.body || !document.contains(el)) return false;
+  if (!el.hasAttribute("tabindex") && el.tabIndex < 0) {
+    el.setAttribute("tabindex", "-1");
+  }
+  el.focus();
+  return document.activeElement === el;
+}
+
+/**
  * Moves focus into the dialog on open, keeps Tab inside it, and returns
  * focus to whatever opened it on close — the map polygon, usually.
  *
@@ -182,15 +205,28 @@ function useIsDesktop(): boolean | null {
  * and a dependency would tear the trap down and re-run it each time,
  * re-capturing the opener as the dialog itself.
  */
-function useFocusTrap(active: boolean, onClose: () => void) {
+function useFocusTrap(
+  active: boolean,
+  onClose: () => void,
+  returnFocusTo?: React.RefObject<HTMLElement | null>
+) {
   const ref = useRef<HTMLDivElement | null>(null);
   const openerRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
+  const returnRef = useRef(returnFocusTo);
   onCloseRef.current = onClose;
+  returnRef.current = returnFocusTo;
 
   useEffect(() => {
     if (!active) return;
-    openerRef.current = document.activeElement as HTMLElement | null;
+    // body is what activeElement reports when nothing is really focused —
+    // clicking an SVG map path does not focus it — and it is not an opener
+    // worth restoring to, so record none and let the caller's anchor win.
+    const active_ = document.activeElement as HTMLElement | null;
+    openerRef.current =
+      active_ && active_ !== document.body && active_ !== document.documentElement
+        ? active_
+        : null;
     const node = ref.current;
     node?.focus();
 
@@ -218,10 +254,11 @@ function useFocusTrap(active: boolean, onClose: () => void) {
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      // The opener can be gone — the map redraws its polygons on
-      // selection change — so only restore a node still in the document.
-      const opener = openerRef.current;
-      if (opener && document.contains(opener)) opener.focus?.();
+      // Prefer the opener, fall back to the caller's anchor. Either can
+      // be gone — the map redraws its polygons on selection change — so
+      // only a node still in the document is focused.
+      focusIfPresent(openerRef.current) ||
+        focusIfPresent(returnRef.current?.current ?? null);
     };
   }, [active]);
 
@@ -353,6 +390,7 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
   parcel,
   qualification,
   onClose,
+  returnFocusTo,
 }) => {
   const [dragH, setDragH] = useState<number | null>(null);
   const [sheet, setSheet] = useState<SheetState>("half");
@@ -367,7 +405,7 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
 
   const isDesktop = useIsDesktop();
   // Escape now lives in the trap, alongside the rest of the key handling.
-  const dialogRef = useFocusTrap(Boolean(parcel), onClose);
+  const dialogRef = useFocusTrap(Boolean(parcel), onClose, returnFocusTo);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {

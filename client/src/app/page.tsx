@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
 import { Header } from "@/components/Header";
 import { LayerControls } from "@/components/LayerControls";
@@ -66,6 +66,10 @@ export default function DashboardPage() {
   // Qualified cadastral parcels (Release 1 pilot) + the open qualification dossier.
   const [landParcels, setLandParcels] = useState<LandParcel[]>([]);
   const [selectedLandParcel, setSelectedLandParcel] = useState<LandParcel | null>(null);
+  // Closing the qualification dossier cannot return focus to the parcel
+  // that opened it: changing the selection makes the map rebuild every
+  // polygon, so that node is already detached. Focus goes here instead.
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const [parcelQualification, setParcelQualification] = useState<ParcelQualification | null>(null);
 
   // Active map layers
@@ -340,7 +344,10 @@ export default function DashboardPage() {
         {/* Map: full-bleed fixed background on mobile, center column on desktop.
             Anchors the panel edge toggles, which straddle the seams to the
             side rails and stay reachable at the map edge when a rail closes. */}
-        <div className="fixed inset-0 z-0 lg:relative lg:inset-auto lg:z-auto lg:h-full lg:min-h-0">
+        <div
+          ref={mapContainerRef}
+          className="fixed inset-0 z-0 lg:relative lg:inset-auto lg:z-auto lg:h-full lg:min-h-0"
+        >
           <GeospatialMap
             parcels={displayParcels}
             layers={layers}
@@ -418,6 +425,7 @@ export default function DashboardPage() {
         parcel={selectedLandParcel}
         qualification={parcelQualification}
         onClose={() => setSelectedLandParcel(null)}
+        returnFocusTo={mapContainerRef}
       />
     </div>
   );
