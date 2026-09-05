@@ -5,7 +5,7 @@ An end-to-end geospatial platform for siting **100+ MW hyperscale data centers**
 Two tiers run on the same map:
 
 1. **Regional screening** — 10 km² fishnet cells scored on power, water, risk, and climate factors, clustered into Prime Development Zones (HIFLD / USGS / FEMA / NOAA live data).
-2. **Parcel qualification** (Loudoun pilot) — cadastral parcels ≥20 acres run through **hard gates** (zoning use, floodway, wetlands, acreage, slope, protected land, road access) that return `PASS / CONDITIONAL / FAIL / UNKNOWN` with the rule, the affected-area percentage, and the source lineage behind every verdict.
+2. **Parcel qualification** (Loudoun pilot) — cadastral parcels ≥20 acres run through **hard gates** (zoning use, floodway, wetlands, acreage, slope, protected land, road access, power capacity evidence) that return `PASS / CONDITIONAL / FAIL / UNKNOWN` with the rule, the affected-area percentage, and the source lineage behind every verdict. Power diligence (Release 2) records the serving utility, PJM Board-approved transmission upgrades with their energization dates, and the dated documents behind every capacity figure — and **removed the fabricated area-derived MW estimates**: no parcel displays a feasible MW number without a dated source that supports it.
 
 ```
  OPEN DATA                    INGESTION WORKER                  POSTGRES / SUPABASE              CLIENT
@@ -35,12 +35,12 @@ Two tiers run on the same map:
 
 | Kind | Examples | Output |
 | :--- | :--- | :--- |
-| Hard gate | zoning DC-use, floodway, wetlands, contiguous acreage, slope, protected land, road access | `PASS` / `CONDITIONAL` / `FAIL` / `UNKNOWN` |
+| Hard gate | zoning DC-use, floodway, wetlands, contiguous acreage, slope, protected land, road access, power capacity evidence | `PASS` / `CONDITIONAL` / `FAIL` / `UNKNOWN` |
 | Scored factor | transmission/substation/road distances | metric values (never gates) |
-| Verification-required | slope, protected land, road access, wetlands | `UNKNOWN` until the evidence layer lands — no favorable default |
-| Informational | ordinance vintage, assembly potential | context metrics |
+| Verification-required | slope, protected land, road access, wetlands, power capacity | `UNKNOWN` until the evidence layer lands — no favorable default |
+| Informational | ordinance vintage, assembly potential, utility documents | context metrics and dated sources |
 
-**Four states.** A parcel's overall status is `FAIL` if any gate fails, `UNKNOWN` if any gate is unknown, `CONDITIONAL` if any is conditional, `PASS` only when every gate passes. Current published run: 5 parcels fully `PASS`, 80 `CONDITIONAL`, 32 `UNKNOWN` (town jurisdictions), 2,361 `FAIL`.
+**Four states.** A parcel's overall status is `FAIL` if any gate fails, `UNKNOWN` if any gate is unknown, `CONDITIONAL` if any is conditional, `PASS` only when every gate passes. Current published run: 85 `CONDITIONAL`, 32 `UNKNOWN` (town jurisdictions), 2,361 `FAIL`, 0 `PASS` — since Release 2, the power-capacity evidence gate is `CONDITIONAL` everywhere (no parcel has a dated parcel-specific capacity source yet), so no parcel can be fully `PASS` until a utility study lands.
 
 **Evidence classes** tag every metric row: `observed` (fetched as-is), `derived` (computed from observations — overlaps, slopes, distances), `manual` (reviewed mapping such as the zoning use-table), `estimated` / `fallback` (regional screening models only — never allowed in the decision layer).
 
@@ -53,7 +53,7 @@ Two tiers run on the same map:
 ## Monorepo Structure
 
 - **[`client/`](./client/)** — Next.js 14 + TypeScript + Tailwind + Leaflet. Regional screening dashboard **and** the parcel qualification view: verdict-shaded cadastral parcels, gate ledgers with rationales and affected areas, metrics with evidence class + source organization, unresolved-diligence checklists. Vitest suite (`npm test`).
-- **[`worker/`](./worker/)** — Python geospatial pipeline (geopandas, scikit-learn, turf-equivalent browser parity). `pipeline.py` runs the full staged→promote lifecycle; `loudoun_api.py` fetches county cadastral/regulatory layers; `overlay_layers.py` fetches the verification layers (TIGER roads, PAD-US, 3DEP slopes); `parcel_gates.py` computes metrics and gate verdicts.
+- **[`worker/`](./worker/)** — Python geospatial pipeline (geopandas, scikit-learn, turf-equivalent browser parity). `pipeline.py` runs the full staged→promote lifecycle; `loudoun_api.py` fetches county cadastral/regulatory layers; `overlay_layers.py` fetches the verification layers (TIGER roads, PAD-US, 3DEP slopes, utility territories, NWI wetlands with outage fallback); `power_evidence.py` fetches PJM RTEP upgrade records (resumable XML download) and queue activity; `parcel_gates.py` computes metrics and gate verdicts.
 - **[`database/`](./database/)** — Supabase migrations + `tests/rls_tests.sql`, a repeatable allow/deny suite executed live as `anon` / `authenticated`.
 
 ---
@@ -81,6 +81,7 @@ Two tiers run on the same map:
 | Protected land | USGS PAD-US 4.0 — official Virginia geodatabase (ScienceBase) | Downloaded once, clipped, cached in `worker/cache/`; hosted national ArcGIS layers are partial subsets |
 | Slope | USGS 3DEP bare-earth DEM (`getSamples`) | Per-parcel elevation lattice → gradient-derived max/median slope % |
 | Road access | Census TIGERweb — Transportation (S1100 primary, S1200 secondary) | Nearest suitable-road distance (mi) |
+| Power capacity evidence | HIFLD Electric Retail Service Territories (utility, 2023) + PJM RTEP Project Construction Status (upgrades, dates) + PJM queue map | Serving utility (observed); Board-approved area upgrades with approval + projected energization dates (observed/derived); queue activity within 3 mi. **No parcel-level MW is displayed** — a feasible figure requires a dated parcel-specific source (utility study), and none exists yet. Zone-level forecasts (PJM 2026 Load Forecast: DOM-zone large-load 7,066 MW 2026 → 22,426 MW 2035) appear only as dated document facts. |
 
 ---
 

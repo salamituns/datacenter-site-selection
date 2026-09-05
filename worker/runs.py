@@ -147,6 +147,10 @@ class IngestionRun:
         rows = [{**r, "run_id": self.run_id} for r in records]
         self._stage("stg_observation_wells", rows)
 
+    def stage_power_rtep_upgrades(self, records: List[Dict[str, Any]]) -> None:
+        rows = [{**r, "run_id": self.run_id} for r in records]
+        self._stage("stg_power_rtep_upgrades", rows)
+
     def stage_land_parcels(self, records: List[Dict[str, Any]]) -> None:
         rows = [{**r, "run_id": self.run_id} for r in records]
         self._stage("stg_land_parcels", rows)

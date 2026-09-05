@@ -5,8 +5,9 @@ Separates the four criterion kinds the decision model needs:
   * hard gates       (zoning use, floodway, wetlands, acreage) → PASS /
                       CONDITIONAL / FAIL / UNKNOWN
   * scored factors   (distances) → metric values, not gates
-  * verification     (slope, protected land, roads) → UNKNOWN until the
-                      evidence layer lands — never a favorable default
+  * verification     (slope, protected land, roads, power capacity) →
+                      UNKNOWN until the evidence layer lands — never a
+                      favorable default
   * informational    (zoning vintage, assembly potential)
 
 Every emitted metric row carries its evidence class (observed / derived /
@@ -36,6 +37,7 @@ RULE_VERSIONS = {
     "protected_land": "v1",
     "slope": "v1",
     "road_access": "v1",
+    "power_capacity": "v1",
 }
 # Dry-run defaults — identical to the seeded constraint_rules (release0_
 # provenance migration). Live runs always read the rules from the database.
@@ -57,6 +59,7 @@ DEFAULT_RULE_PARAMS: Dict[str, Dict[str, Any]] = {
     "protected_land": {"fail_pct": 0.5},
     "slope": {"max_fail_pct": 25, "median_conditional_pct": 8},
     "road_access": {"conditional_miles": 2, "fail_miles": 5},
+    "power_capacity": {"active_statuses": ["EP", "UC", "PL"], "queue_radius_miles": 3},
 }
 
 
@@ -100,6 +103,9 @@ def qualify_parcels(
     roads_gdf: Optional[gpd.GeoDataFrame] = None,
     padus_gdf: Optional[gpd.GeoDataFrame] = None,
     slopes: Optional[Dict[Any, Tuple[Optional[float], Optional[float], int]]] = None,
+    utility_gdf: Optional[gpd.GeoDataFrame] = None,
+    rtep_df: Optional[pd.DataFrame] = None,
+    queue_gdf: Optional[gpd.GeoDataFrame] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
     """
     Computes metrics and gates for every fetched parcel. Returns
@@ -195,7 +201,61 @@ def qualify_parcels(
     prot_rule = rules.get("protected_land", {}).get("params", DEFAULT_RULE_PARAMS["protected_land"])
     slope_rule = rules.get("slope", {}).get("params", DEFAULT_RULE_PARAMS["slope"])
     road_rule = rules.get("road_access", {}).get("params", DEFAULT_RULE_PARAMS["road_access"])
+    power_rule = rules.get("power_capacity", {}).get("params", DEFAULT_RULE_PARAMS["power_capacity"])
     rule_ids = {k: v.get("id") for k, v in rules.items()}
+
+    # ── Power diligence (Release 2) ──────────────────────────────────
+    # Serving utility: the territory polygon containing the parcel centroid.
+    utility_of: Dict[int, Dict[str, str]] = {}
+    if utility_gdf is not None and len(utility_gdf) > 0:
+        try:
+            centroids = parcels_gdf.copy()
+            centroids["geometry"] = centroids.geometry.centroid
+            joined = gpd.sjoin(
+                centroids[["geometry"]], utility_gdf[["utility_name", "utility_type", "geometry"]],
+                predicate="within", how="left",
+            )
+            utility_of = {
+                i: {"name": str(r.utility_name), "type": str(r.utility_type)}
+                for i, r in joined.iterrows() if isinstance(r.utility_name, str)
+            }
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Utility territory join failed: %s", e)
+
+    # Area RTEP evidence: active Board-approved upgrades in the county area.
+    rtep_area: Optional[Dict[str, Any]] = None
+    active_statuses = power_rule.get("active_statuses", ["EP", "UC", "PL"])
+    if rtep_df is not None and len(rtep_df) > 0:
+        act = rtep_df[rtep_df["in_area"] & rtep_df["status"].isin(active_statuses)]
+        isd = sorted(str(d) for d in act["projected_in_service_date"].dropna())
+        boards = sorted(str(d) for d in act["board_approval_date"].dropna())
+        if len(act) > 0:
+            rtep_area = {
+                "active": int(len(act)),
+                "earliest_energization": isd[0] if isd else None,
+                "latest_energization": isd[-1] if isd else None,
+                "latest_board_approval": boards[-1] if boards else None,
+                "source_updated": max(
+                    (str(d) for d in rtep_df["source_updated"].dropna()), default=None
+                ),
+            }
+
+    # PJM queue activity: interconnection points within the radius.
+    queue_radius_mi = float(power_rule.get("queue_radius_miles", 3))
+    queue_counts: Optional[pd.Series] = None
+    queue_max_kv: Optional[pd.Series] = None
+    if queue_gdf is not None and len(queue_gdf) > 0:
+        try:
+            qp = queue_gdf.to_crs(PLANAR_CRS)[["voltage_kv", "geometry"]]
+            near = gpd.sjoin_nearest(
+                planar[["geometry"]], qp, how="left", distance_col="dist_m",
+                max_distance=queue_radius_mi * 1609.344,
+            )
+            near["hit"] = near["voltage_kv"].notna()
+            queue_counts = near.groupby(level=0)["hit"].sum()
+            queue_max_kv = near.groupby(level=0)["voltage_kv"].max()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Queue activity join failed: %s", e)
 
     parcel_records: List[Dict[str, Any]] = []
     metric_rows: List[Dict[str, Any]] = []
@@ -476,6 +536,95 @@ def qualify_parcels(
                      f"Max slope {smax:.1f}%, median {smed:.1f}% — terrain "
                      f"suitable (3DEP-derived).")
 
+        # Power capacity (evidence gate — a MW figure is never asserted
+        # without a dated source that supports it; none exists at parcel
+        # level today, so PASS is reserved for a future parcel-specific
+        # utility study document and is not awarded here).
+        util = utility_of.get(i)
+        q_kv = (float(queue_max_kv.loc[i])
+                if queue_max_kv is not None and i in queue_max_kv.index
+                and pd.notna(queue_max_kv.loc[i]) else None)
+        if util is not None:
+            metric(pin, "serving_utility", None, text_value=util["name"],
+                   evidence="observed", layer="utility_territories")
+            metric(pin, "serving_utility_type", None, text_value=util["type"],
+                   evidence="observed", layer="utility_territories")
+        if queue_counts is not None:
+            metric(pin, "pjm_queue_points_within_3mi",
+                   None if i not in queue_counts.index else int(queue_counts.loc[i]),
+                   unit="count", evidence="observed", layer="pjm_queue",
+                   details={"radius_miles": queue_radius_mi})
+            if q_kv is not None:
+                metric(pin, "pjm_queue_max_kv", q_kv, unit="kV",
+                       evidence="observed", layer="pjm_queue")
+
+        if rtep_area is not None:
+            metric(pin, "rtep_area_active_upgrades", rtep_area["active"],
+                   unit="count", evidence="derived", layer="rtep_upgrades",
+                   details={"statuses": active_statuses, "scope": "county area"})
+            metric(pin, "rtep_area_energization_range", None,
+                   text_value=(f"{rtep_area['earliest_energization']}.."
+                               f"{rtep_area['latest_energization']}"),
+                   evidence="derived", layer="rtep_upgrades",
+                   details={"basis": "projected in-service dates, PJM RTEP"})
+            metric(pin, "rtep_latest_board_approval", None,
+                   text_value=rtep_area["latest_board_approval"],
+                   evidence="derived", layer="rtep_upgrades")
+
+        if util is None and utility_gdf is not None:
+            evidence_level = "none"
+        elif rtep_area is not None:
+            evidence_level = "area_reinforcement"
+        elif util is not None:
+            evidence_level = "utility_identified"
+        else:
+            evidence_level = "none"
+        if evidence_level != "none":
+            metric(pin, "power_evidence_level", None, text_value=evidence_level,
+                   evidence="derived", layer="rtep_upgrades")
+
+        if utility_gdf is None and rtep_df is None:
+            gate(pin, "power_capacity", "UNKNOWN",
+                 "Power diligence layers unavailable for this run — serving "
+                 "utility and capacity evidence unverified.")
+        elif util is None:
+            gate(pin, "power_capacity", "UNKNOWN",
+                 "No electric utility service territory covers this parcel "
+                 "in the HIFLD territory layer (sourced 2023) — serving "
+                 "utility unverified.", details={"evidence_level": evidence_level})
+        elif rtep_df is None:
+            gate(pin, "power_capacity", "UNKNOWN",
+                 f"Served by {util['name']} ({util['type']}), but the PJM RTEP "
+                 f"upgrade dataset was unavailable — no dated transmission "
+                 f"evidence could be reviewed.",
+                 details={"evidence_level": evidence_level})
+        elif rtep_area is None:
+            gate(pin, "power_capacity", "UNKNOWN",
+                 f"Served by {util['name']} ({util['type']}) — no active "
+                 f"PJM Board-approved upgrades are documented in this county "
+                 f"area, so no dated source supports a capacity figure. A "
+                 f"PJM/utility large-load study is required before any MW "
+                 f"claim.", details={"evidence_level": evidence_level})
+        else:
+            gate(pin, "power_capacity", "CONDITIONAL",
+                 f"Served by {util['name']} ({util['type']}; HIFLD 2023). "
+                 f"{rtep_area['active']} PJM Board-approved transmission "
+                 f"upgrades are active in this county area (latest Board "
+                 f"approval {rtep_area['latest_board_approval']}; projected "
+                 f"energization {rtep_area['earliest_energization']}–"
+                 f"{rtep_area['latest_energization']}; PJM RTEP Construction "
+                 f"Status updated {rtep_area['source_updated']}). Area "
+                 f"evidence only — parcel-specific capacity requires a "
+                 f"PJM/utility large-load study; no MW figure is asserted.",
+                 details={
+                     "evidence_level": evidence_level,
+                     "active_upgrades": rtep_area["active"],
+                     "energization_range": (f"{rtep_area['earliest_energization']}.."
+                                            f"{rtep_area['latest_energization']}"),
+                     "board_approval": rtep_area["latest_board_approval"],
+                     "documents": ["pjm_rtep_construction_status"],
+                 })
+
     stats = {
         "parcels_qualified": n,
         "zoning_coverage_pct": zoning_coverage,
@@ -484,6 +633,10 @@ def qualify_parcels(
         "padus_layer": "present" if padus_gdf is not None else "missing",
         "roads_layer": "present" if roads_gdf is not None else "missing",
         "slope_layer": "present" if slopes is not None else "missing",
+        "utility_layer": "present" if utility_gdf is not None else "missing",
+        "rtep_layer": "present" if rtep_df is not None else "missing",
+        "rtep_area_active": (rtep_area or {}).get("active"),
+        "queue_layer": "present" if queue_gdf is not None else "missing",
         "slope_sampled_ok": sum(1 for v in (slopes or {}).values() if v[2] > 0),
         "metric_rows": len(metric_rows),
         "gate_rows": len(gate_rows),

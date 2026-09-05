@@ -27,6 +27,10 @@ BEGIN
   PERFORM count(*) FROM public.v_land_parcels;
   PERFORM count(*) FROM public.v_parcel_gates;
   PERFORM count(*) FROM public.v_parcel_metrics;
+  PERFORM count(*) FROM public.power_rtep_upgrades;
+  PERFORM count(*) FROM public.power_documents;
+  PERFORM count(*) FROM public.v_power_rtep_upgrades;
+  PERFORM count(*) FROM public.v_power_documents;
   RESET ROLE;
 
   -- 2. anon cannot mutate any ingestion data
@@ -69,6 +73,16 @@ BEGIN
       VALUES ('x', 'x', 'x', 'x');
     RAISE EXCEPTION 'anon was allowed to INSERT into constraint_rules';
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    INSERT INTO public.power_rtep_upgrades (upgrade_id, state_code, project_type, description, status, run_id)
+      VALUES ('RLS-TEST', 'VA', 'Baseline', 'x', 'IS', '00000000-0000-0000-0000-000000000000');
+    RAISE EXCEPTION 'anon was allowed to INSERT into power_rtep_upgrades';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    INSERT INTO public.power_documents (doc_key, title, publisher, doc_type, url)
+      VALUES ('rls-test', 'x', 'x', 'report', 'x');
+    RAISE EXCEPTION 'anon was allowed to INSERT into power_documents';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   RESET ROLE;
 
   -- 3. anon cannot see staging or call the publication RPCs
@@ -76,6 +90,10 @@ BEGIN
   BEGIN
     PERFORM count(*) FROM public.stg_grid_parcels;
     RAISE EXCEPTION 'anon was allowed to SELECT staging tables';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    PERFORM count(*) FROM public.stg_power_rtep_upgrades;
+    RAISE EXCEPTION 'anon was allowed to SELECT stg_power_rtep_upgrades';
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN
     PERFORM public.promote_ingestion_run('00000000-0000-0000-0000-000000000000');
@@ -102,6 +120,9 @@ BEGIN
   INSERT INTO public.stg_parcel_gate_results (parcel_key, run_id, gate_key, status, rationale)
     VALUES ('rls-test', '00000000-0000-0000-0000-000000000000', 'x', 'PASS', 'x');
   DELETE FROM public.stg_parcel_gate_results WHERE parcel_key = 'rls-test';
+  INSERT INTO public.stg_power_rtep_upgrades (upgrade_id, state_code, project_type, description, status, run_id)
+    VALUES ('rls-test', 'XX', 'Baseline', 'smoke', 'IS', '00000000-0000-0000-0000-000000000000');
+  DELETE FROM public.stg_power_rtep_upgrades WHERE upgrade_id = 'rls-test';
   RESET ROLE;
 END
 $test$;

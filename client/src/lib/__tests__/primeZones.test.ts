@@ -52,7 +52,7 @@ describe("computePrimeZones", () => {
     expect(parcelZone.has("a")).toBe(true);
   });
 
-  it("clusters nearby cells into one ranked zone with capped capacity", () => {
+  it("clusters nearby cells into one ranked zone with no capacity claim", () => {
     const parcels = [
       parcel("a", -77.50, 39.05, 88),
       parcel("b", -77.505, 39.05, 86),
@@ -63,8 +63,9 @@ describe("computePrimeZones", () => {
     const z = zones[0];
     expect(z.label).toMatch(/^Prime Zone A \(30 km² Hyper-Cluster\)$/);
     expect(z.parcelCount).toBe(3);
-    // capacity = min(1500, parcels × 200)
-    expect(z.mwCapacity).toBe(600);
+    // Release 2: zones never carry an MW figure — capacity requires a
+    // dated source per parcel, which screening never has.
+    expect("mwCapacity" in z).toBe(false);
     expect(z.avgScore).toBeCloseTo(86, 0);
     expect(parcelZone.get("a")!.id).toBe(0);
   });

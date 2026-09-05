@@ -130,10 +130,13 @@ def _grid_records(gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
             "cluster_zone_id": int(row["cluster_zone_id"]),
             "cluster_label": str(row["cluster_label"]),
             "is_prime_zone": bool(row["is_prime_zone"]),
-            "megawatt_capacity_estimate": int(row["megawatt_capacity_estimate"]),
+            "megawatt_capacity_estimate": None,
             "metadata": {
                 "ingestion_version": PIPELINE_VERSION,
-                "capacity_note": "area-derived placeholder, capacity unverified",
+                "capacity_note": (
+                    "No capacity estimate: a feasible MW figure requires a dated "
+                    "source (utility study / PJM agreement). See power documents."
+                ),
                 "sources": ["HIFLD", "USGS NWIS", "NOAA ACIS", "FEMA NRI", "USGS seismic"],
             },
         })
@@ -332,9 +335,9 @@ def run_pipeline(
         logger.info("Screening: %d cells, %d prime across %d zones.",
                     len(clustered_gdf), len(prime_parcels), len(cluster_summaries))
         for cid, s in cluster_summaries.items():
-            logger.info("★ %s: %s parcels (%s km²) | avg %s/100 | placeholder capacity %s MW",
+            logger.info("★ %s: %s parcels (%s km²) | avg %s/100",
                         s["label"], s["parcel_count"], s["total_area_sq_km"],
-                        s["avg_composite_score"], s["total_mw_capacity"])
+                        s["avg_composite_score"])
 
         # ── Loudoun parcel qualification (pilot) ───────────────────────
         parcel_stats: Dict[str, Any] = {}
@@ -424,6 +427,66 @@ def run_pipeline(
                     logger.warning("Layer %s unavailable — its gates will be UNKNOWN.", layer_key)
 
             rules = run.load_rules(JURISDICTION) if run is not None else {}
+
+            # Power diligence (Release 2): serving utility, PJM RTEP
+            # upgrade evidence, queue activity. Each degrades to UNKNOWN
+            # independently — and no MW figure is ever asserted without a
+            # dated source.
+            logger.info("Step 6c: power diligence (utility territory, PJM RTEP upgrades, queue activity)…")
+            import power_evidence
+            utility_gdf = overlay_layers.fetch_utility_territories(
+                min_lon, min_lat, max_lon, max_lat
+            )
+            rtep_df = None
+            try:
+                rtep_df = power_evidence.fetch_rtep_upgrades(state_code)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("PJM RTEP upgrade fetch failed: %s", e)
+            queue_gdf = power_evidence.fetch_pjm_queue_points(
+                min_lon, min_lat, max_lon, max_lat
+            )
+
+            for layer_key, src, endpoint, count, note in (
+                ("utility_territories", "hifld_utility_territories",
+                 overlay_layers.UTILITY_TERRITORY_URL,
+                 None if utility_gdf is None else len(utility_gdf),
+                 None if utility_gdf is not None else "unavailable — serving-utility metric skipped"),
+                ("rtep_upgrades", "pjm_rtep_upgrades",
+                 power_evidence.RTEP_XML_URL,
+                 None if rtep_df is None else len(rtep_df),
+                 None if rtep_df is not None else "unavailable — power gate recorded UNKNOWN"),
+                ("pjm_queue", "pjm_queue_map",
+                 power_evidence.QUEUE_MAP_URL,
+                 None if queue_gdf is None else len(queue_gdf),
+                 None if queue_gdf is not None else "unavailable — queue-activity metric skipped"),
+            ):
+                if run is not None:
+                    quality = None if count is None else {"rows": int(count)}
+                    if layer_key == "rtep_upgrades" and count is not None:
+                        quality = {
+                            "rows": int(count),
+                            "in_area": int(rtep_df["in_area"].sum()),
+                            "active_in_area": int(
+                                (rtep_df["in_area"]
+                                 & rtep_df["status"].isin(
+                                     rules.get("power_capacity", {}).get("params", {})
+                                     .get("active_statuses", ["EP", "UC", "PL"]))
+                                 ).sum()
+                            ),
+                        }
+                    snapshots[layer_key] = run.snapshot(
+                        layer=layer_key, source_key=src, endpoint_url=endpoint,
+                        record_count=count, evidence_class="observed",
+                        quality=quality, notes=note,
+                    )
+                elif count is None:
+                    logger.warning("Power layer %s unavailable — power gates will be UNKNOWN.", layer_key)
+
+            if rtep_df is not None and run is not None:
+                run.stage_power_rtep_upgrades(
+                    power_evidence.rtep_upsert_records(rtep_df, state_code)
+                )
+
             parcel_records, metric_rows, gate_rows, parcel_stats = qualify_parcels(
                 parcels_gdf=parcels_gdf, zoning_gdf=zoning_gdf,
                 wetlands_gdf=wetlands_gdf, nfhl_gdf=nfhl_gdf,
@@ -432,6 +495,7 @@ def run_pipeline(
                 rules=rules, state_code=state_code, county_name=county_name,
                 snapshots=snapshots, retrieve_time=retrieve_time,
                 roads_gdf=roads_gdf, padus_gdf=padus_gdf, slopes=slopes,
+                utility_gdf=utility_gdf, rtep_df=rtep_df, queue_gdf=queue_gdf,
             )
             logger.info("Parcel qualification: %d parcels, %d metric rows, %d gate rows.",
                         len(parcel_records), len(metric_rows), len(gate_rows))

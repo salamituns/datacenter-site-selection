@@ -4,6 +4,7 @@ import {
   LandParcel,
   MapFeatures,
   ParcelQualification,
+  PowerDocument,
 } from "@/types/parcel";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -250,8 +251,7 @@ function mapLandParcelRows(data: any[]): LandParcel[] {
  */
 export async function fetchParcelQualification(
   parcelKey: string
-): Promise<ParcelQualification | null> {
-  if (!supabase) return null;
+): Promise<ParcelQualification | null> {  if (!supabase) return null;
   try {
     const [gatesRes, metricsRes] = await Promise.all([
       supabase
@@ -276,6 +276,38 @@ export async function fetchParcelQualification(
   } catch (err) {
     console.error("Failed to fetch parcel qualification:", err);
     return null;
+  }
+}
+
+/**
+ * Utility documents behind the power-diligence evidence: dated sources
+ * (PJM RTEP construction status, state infrastructure report, load
+ * forecast). Every capacity/demand figure in the UI traces to one of
+ * these documents.
+ */
+export async function fetchPowerDocuments(): Promise<PowerDocument[]> {
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from("v_power_documents")
+      .select("doc_key,title,publisher,doc_type,published_date,url,summary")
+      .order("published_date", { ascending: false });
+    if (error) {
+      console.error("Failed to fetch power documents:", error);
+      return [];
+    }
+    return ((data ?? []) as any[]).map((d) => ({
+      doc_key: d.doc_key,
+      title: d.title,
+      publisher: d.publisher,
+      doc_type: d.doc_type,
+      published_date: d.published_date ?? null,
+      url: d.url,
+      summary: d.summary ?? null,
+    }));
+  } catch (err) {
+    console.error("Failed to fetch power documents:", err);
+    return [];
   }
 }
 

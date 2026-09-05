@@ -108,6 +108,21 @@ export interface ParcelQualification {
   metrics: ParcelMetricRow[];
 }
 
+// ── Power diligence (Release 2) ───────────────────────────────────────
+
+/** Dated utility document backing a power-evidence claim
+ *  (v_power_documents). A capacity figure is only ever displayed with
+ *  the document that supports it. */
+export interface PowerDocument {
+  doc_key: string;
+  title: string;
+  publisher: string;
+  doc_type: string;
+  published_date: string | null;
+  url: string;
+  summary: string | null;
+}
+
 export interface WeightFactors {
   powerWeight: number;    // e.g. 40
   waterWeight: number;    // e.g. 25
@@ -121,7 +136,6 @@ export interface ClusterSummary {
   parcel_count: number;
   avg_composite_score: number;
   total_area_sq_km: number;
-  total_mw_capacity: number;
 }
 
 // ── Map infrastructure features (real HIFLD / USGS NWIS, persisted per region) ──

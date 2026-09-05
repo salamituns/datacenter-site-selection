@@ -52,8 +52,11 @@ class SiteClusteringModel:
         Executes spatial DBSCAN clustering using Haversine distance on high-scoring candidate parcels.
 
         Returns:
-            - Enriched GeoDataFrame with `cluster_zone_id`, `cluster_label`, `is_prime_zone`, `megawatt_capacity_estimate`.
-            - Cluster summary dictionary with aggregate area, MW capacity, and boundary geometry.
+            - Enriched GeoDataFrame with `cluster_zone_id`, `cluster_label`, `is_prime_zone`.
+            - Cluster summary dictionary with aggregate area and boundary geometry.
+
+        No MW capacity is estimated: a feasible figure requires a dated
+        source (utility study / PJM agreement), which screening never has.
         """
         df = grid_gdf.copy()
 
@@ -61,7 +64,7 @@ class SiteClusteringModel:
         df["cluster_zone_id"] = -1
         df["cluster_label"] = "Secondary Candidate"
         df["is_prime_zone"] = False
-        df["megawatt_capacity_estimate"] = 100
+        df["megawatt_capacity_estimate"] = None
 
         # Filter candidate parcels exceeding score threshold
         candidate_mask = df[score_column] >= self.min_composite_score
@@ -104,13 +107,11 @@ class SiteClusteringModel:
             for rank_idx, (cid, avg_score, parcel_count) in enumerate(ranked_clusters):
                 zone_letter = chr(65 + rank_idx)  # A, B, C...
                 total_area_km2 = parcel_count * 10.0
-                mw_capacity = int(min(1500, parcel_count * 200))
                 zone_label = f"Prime Zone {zone_letter} ({int(total_area_km2)} km² Hyper-Cluster)"
 
                 mask = candidates["cluster_zone_id"] == cid
                 candidates.loc[mask, "cluster_label"] = zone_label
                 candidates.loc[mask, "is_prime_zone"] = True
-                candidates.loc[mask, "megawatt_capacity_estimate"] = mw_capacity
 
                 # Build cluster boundary polygon
                 cluster_geoms = candidates.loc[mask, "geometry"].values
@@ -123,7 +124,6 @@ class SiteClusteringModel:
                     "parcel_count": parcel_count,
                     "avg_composite_score": round(avg_score, 2),
                     "total_area_sq_km": total_area_km2,
-                    "total_mw_capacity": mw_capacity,
                     "boundary_wkt": union_geom.wkt
                 }
 
@@ -186,7 +186,6 @@ if __name__ == "__main__":
         print(f"  ★ {s['label']}:")
         print(f"     - Parcels: {s['parcel_count']} ({s['total_area_sq_km']} km²)")
         print(f"     - Avg Suitability Score: {s['avg_composite_score']}/100")
-        print(f"     - Feasible Megawatt Capacity: {s['total_mw_capacity']} MW")
 
     print("\nTop 5 Individual Parcels:")
     print(clustered[["grid_id", "composite_score", "power_score", "water_score", "cluster_label"]].head())

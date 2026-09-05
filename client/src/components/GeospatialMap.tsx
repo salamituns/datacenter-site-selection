@@ -192,7 +192,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
             fillOpacity: 0.04,
           })
             .bindTooltip(
-              `<b>${zone.label}</b><br/><span class="font-mono">${zone.parcelCount} parcels · ${zone.mwCapacity} MW</span>`,
+              `<b>${zone.label}</b><br/><span class="font-mono">${zone.parcelCount} parcels · ${zone.avgScore}/100</span>`,
               { sticky: true, className: "map-tooltip", direction: "top" }
             )
             .addTo(clusterLayer);

@@ -7,8 +7,10 @@
  *   - candidates: composite_score >= threshold
  *   - DBSCAN over centroids, eps 8.5 km (geodesic), min 2 samples
  *   - clusters ranked by mean score into zones A, B, C …
- *   - capacity = min(1500 MW, parcels × 200 MW)
  *   - boundary = convex hull of the actual cell footprints
+ *
+ * No MW capacity is computed: a feasible figure requires a dated source
+ * (utility study / PJM agreement), which screening never has.
  *
  * Runs in a useMemo off the debounced weights/threshold — DBSCAN over a few
  * hundred points is sub-millisecond, so dragging the sliders morphs the zones
@@ -27,7 +29,6 @@ export interface PrimeZone {
   label: string;
   parcelCount: number;
   avgScore: number;
-  mwCapacity: number;
   /** Convex hull over the cluster's cell footprints, [lon, lat] rings. */
   hull: { type: "Polygon"; coordinates: number[][][] } | null;
 }
@@ -117,7 +118,6 @@ export function computePrimeZones(
         Math.round(
           (members.reduce((s, p) => s + p.composite_score, 0) / members.length) * 100
         ) / 100,
-      mwCapacity: Math.min(1500, members.length * 200),
       hull: null,
     };
 

@@ -97,11 +97,8 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
     },
     {
       label: "Capacity",
-      value:
-        parcel.megawatt_capacity_estimate != null
-          ? `${parcel.megawatt_capacity_estimate}`
-          : "—",
-      sub: "MW area-derived est.",
+      value: "No claim",
+      sub: "no dated source yet",
     },
   ];
 

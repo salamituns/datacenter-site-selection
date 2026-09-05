@@ -6,7 +6,6 @@ import { REGIONS, HOME_REGION } from "@/lib/regions";
 interface HeaderProps {
   totalParcels: number;
   primeCount: number;
-  totalCapacityMW: number;
   selectedState: string;
   onStateChange: (state: string) => void;
   /** Parcel counts per region code — unsurveyed regions are disabled. */
@@ -41,7 +40,6 @@ export function BenchmarkMark({ size = 24 }: { size?: number }) {
 export const Header: React.FC<HeaderProps> = ({
   totalParcels,
   primeCount,
-  totalCapacityMW,
   selectedState,
   onStateChange,
   regionCounts,
@@ -77,10 +75,6 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="h-px w-3 bg-border-strong" />
           <span>
             <span className="text-foreground">{primeCount}</span> prime zones
-          </span>
-          <span className="h-px w-3 bg-border-strong" />
-          <span>
-            <span className="text-foreground">{totalCapacityMW.toLocaleString()}</span> MW est.
           </span>
         </div>
 

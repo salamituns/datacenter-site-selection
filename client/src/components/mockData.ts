@@ -49,7 +49,7 @@ export const INITIAL_PARCELS: GridParcel[] = [
     cluster_zone_id: 0,
     cluster_label: "Prime Zone A (2760 km² Hyper-Cluster)",
     is_prime_zone: true,
-    megawatt_capacity_estimate: 1500,
+    megawatt_capacity_estimate: null,
   },
   {
     id: "US-VA-LOUD-10KM-0266",
@@ -92,7 +92,7 @@ export const INITIAL_PARCELS: GridParcel[] = [
     cluster_zone_id: 0,
     cluster_label: "Prime Zone A (2760 km² Hyper-Cluster)",
     is_prime_zone: true,
-    megawatt_capacity_estimate: 1500,
+    megawatt_capacity_estimate: null,
   },
   {
     id: "US-VA-LOUD-10KM-0284",
@@ -135,7 +135,7 @@ export const INITIAL_PARCELS: GridParcel[] = [
     cluster_zone_id: 0,
     cluster_label: "Prime Zone A (2760 km² Hyper-Cluster)",
     is_prime_zone: true,
-    megawatt_capacity_estimate: 1500,
+    megawatt_capacity_estimate: null,
   },
   {
     id: "US-VA-LOUD-10KM-0033",
@@ -178,7 +178,7 @@ export const INITIAL_PARCELS: GridParcel[] = [
     cluster_zone_id: 0,
     cluster_label: "Prime Zone A (2760 km² Hyper-Cluster)",
     is_prime_zone: true,
-    megawatt_capacity_estimate: 1500,
+    megawatt_capacity_estimate: null,
   },
   {
     id: "US-VA-LOUD-10KM-0017",
@@ -221,7 +221,7 @@ export const INITIAL_PARCELS: GridParcel[] = [
     cluster_zone_id: 0,
     cluster_label: "Prime Zone A (2760 km² Hyper-Cluster)",
     is_prime_zone: true,
-    megawatt_capacity_estimate: 1500,
+    megawatt_capacity_estimate: null,
   },
   {
     id: "US-VA-LOUD-10KM-0305",
@@ -264,7 +264,7 @@ export const INITIAL_PARCELS: GridParcel[] = [
     cluster_zone_id: 0,
     cluster_label: "Prime Zone A (2760 km² Hyper-Cluster)",
     is_prime_zone: true,
-    megawatt_capacity_estimate: 1500,
+    megawatt_capacity_estimate: null,
   },
   {
     id: "US-VA-LOUD-10KM-0016",
@@ -307,7 +307,7 @@ export const INITIAL_PARCELS: GridParcel[] = [
     cluster_zone_id: 0,
     cluster_label: "Prime Zone A (2760 km² Hyper-Cluster)",
     is_prime_zone: true,
-    megawatt_capacity_estimate: 1500,
+    megawatt_capacity_estimate: null,
   },
   {
     id: "US-VA-LOUD-10KM-0123",
@@ -350,6 +350,6 @@ export const INITIAL_PARCELS: GridParcel[] = [
     cluster_zone_id: 0,
     cluster_label: "Prime Zone A (2760 km² Hyper-Cluster)",
     is_prime_zone: true,
-    megawatt_capacity_estimate: 1500,
+    megawatt_capacity_estimate: null,
   },
 ];

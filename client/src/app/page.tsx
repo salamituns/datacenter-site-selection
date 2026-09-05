@@ -18,7 +18,7 @@ import {
   fetchParcelQualification,
   fetchRegionCounts,
 } from "@/lib/supabase";
-import { computePrimeZones, PrimeZone } from "@/lib/primeZones";
+import { computePrimeZones } from "@/lib/primeZones";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { REGIONS, HOME_REGION } from "@/lib/regions";
 import {
@@ -276,7 +276,7 @@ export default function DashboardPage() {
               is_prime_zone: true,
               cluster_zone_id: zone.id,
               cluster_label: zone.label,
-              megawatt_capacity_estimate: zone.mwCapacity,
+              megawatt_capacity_estimate: null,
             }
           : {
               ...p,
@@ -288,13 +288,11 @@ export default function DashboardPage() {
     [computedParcels, primeResult]
   );
 
-  // Aggregate key statistics — reactive with the sliders.
+  // Aggregate key statistics — reactive with the sliders. No MW total:
+  // a feasible capacity figure requires a dated source per parcel
+  // (Release 2 power diligence), not an area-derived placeholder.
   const totalParcelsCount = displayParcels.length;
   const primeCount = primeResult.zones.length;
-  const totalCapacityMW = primeResult.zones.reduce(
-    (acc, z: PrimeZone) => acc + z.mwCapacity,
-    0
-  );
 
   // Desktop grid template tracks rail visibility so the map re-flows
   // into whatever space the visible rails leave.
@@ -312,7 +310,6 @@ export default function DashboardPage() {
       <Header
         totalParcels={totalParcelsCount}
         primeCount={primeCount}
-        totalCapacityMW={totalCapacityMW}
         selectedState={selectedState}
         onStateChange={handleStateChange}
         regionCounts={regionCounts}

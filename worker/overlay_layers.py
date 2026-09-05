@@ -64,6 +64,13 @@ THREEDEP_URL = (
     "3DEPElevation/ImageServer/getSamples"
 )
 
+# HIFLD Electric Retail Service Territories — which utility serves a
+# parcel (investor-owned / cooperative / municipal). Sourced 2023.
+UTILITY_TERRITORY_URL = (
+    "https://services6.arcgis.com/BAJNi3EgCdtQ1BCG/arcgis/rest/services/"
+    "Electric_Retail_Service_Territories/FeatureServer/0/query"
+)
+
 BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) DataCenterPipeline/3.0"
@@ -171,6 +178,53 @@ def fetch_padus(
     except Exception as e:  # noqa: BLE001
         logger.warning("PAD-US fetch failed: %s", e)
         return None
+
+
+def fetch_utility_territories(
+    min_lon: float, min_lat: float, max_lon: float, max_lat: float
+) -> Optional[gpd.GeoDataFrame]:
+    """
+    Electric utility retail service territories overlapping the bbox
+    (HIFLD, sourced 2023). One polygon per utility; the name/type feeds
+    the per-parcel serving-utility metric and the power-capacity gate.
+    """
+    session = requests.Session()
+    session.headers.update({"User-Agent": BROWSER_UA, "Accept": "application/json"})
+    features = _paged_query(
+        session, UTILITY_TERRITORY_URL,
+        f"{min_lon},{min_lat},{max_lon},{max_lat}",
+        out_fields="NAME,TYPE,STATE,SOURCEDATE,SUMMR_PEAK",
+    )
+    if features is None:
+        logger.warning("Utility territory layer unavailable this run.")
+        return None
+    rows: List[Dict[str, Any]] = []
+    for f in features:
+        geometry = f.get("geometry")
+        if not geometry:
+            continue
+        try:
+            geom = shape(geometry)
+        except Exception:  # noqa: BLE001
+            continue
+        if geom.is_empty:
+            continue
+        props = f.get("properties", {}) or {}
+        name = str(props.get("NAME") or "").strip()
+        if not name or name.upper().startswith("UNKNOWN"):
+            continue
+        rows.append({
+            "utility_name": name,
+            "utility_type": str(props.get("TYPE") or "").strip().lower().replace(" ", "_"),
+            "geometry": geom,
+        })
+    if not rows:
+        logger.warning("Utility territories: no named polygons in bbox.")
+        return None
+    gdf = gpd.GeoDataFrame(rows, crs="EPSG:4326")
+    logger.info("Utility territories: %d utilities overlapping the bbox: %s",
+                len(gdf), ", ".join(sorted(gdf.utility_name.unique())[:8]))
+    return gdf
 
 
 def fetch_nwi_wetlands(

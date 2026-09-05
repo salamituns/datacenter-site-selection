@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { LandParcel, ParcelQualification, GateStatus } from "@/types/parcel";
-import { X, Download, ClipboardCheck, FlaskConical, Landmark } from "lucide-react";
+import { LandParcel, ParcelQualification, GateStatus, PowerDocument } from "@/types/parcel";
+import { fetchPowerDocuments } from "@/lib/supabase";
+import { X, Download, ClipboardCheck, FlaskConical, Landmark, FileText } from "lucide-react";
 
 interface ParcelQualificationModalProps {
   parcel: LandParcel | null;
@@ -18,6 +19,7 @@ const GATE_LABELS: Record<string, string> = {
   slope: "Slope",
   protected_land: "Protected land",
   road_access: "Road access",
+  power_capacity: "Power capacity evidence",
 };
 
 function gateLabel(key: string): string {
@@ -65,10 +67,24 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
   const [sheet, setSheet] = useState<SheetState>("half");
   const dragStart = useRef<{ y: number; h: number } | null>(null);
   const lastDragEnd = useRef(0);
+  const [documents, setDocuments] = useState<PowerDocument[]>([]);
 
   useEffect(() => {
     if (parcel) setSheet("half");
   }, [parcel?.parcel_key]);
+
+  // Utility documents behind the power-diligence evidence — loaded once
+  // per open, small list, cached across parcels while the modal is up.
+  useEffect(() => {
+    if (!parcel || documents.length > 0) return;
+    let alive = true;
+    fetchPowerDocuments().then((docs) => {
+      if (alive) setDocuments(docs);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [parcel, documents.length]);
 
   useEffect(() => {
     if (!parcel) return;
@@ -223,6 +239,38 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
           ))}
         </div>
       </div>
+
+      {/* Utility documents behind the power evidence */}
+      {documents.length > 0 && (
+        <div className="border-t border-border px-4 py-4 lg:px-6">
+          <h4 className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
+            <FileText className="h-3.5 w-3.5" />
+            Utility Documents · Dated Sources
+          </h4>
+          <ul className="mt-2 space-y-2">
+            {documents.map((d) => (
+              <li key={d.doc_key} className="font-mono text-[10px] leading-relaxed text-muted">
+                <a
+                  href={d.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-foreground underline decoration-border-strong underline-offset-2 hover:decoration-foreground"
+                >
+                  {d.title}
+                </a>
+                {" — "}
+                {d.publisher}
+                {d.published_date && <> · as of {d.published_date}</>}
+                {d.summary && <p className="mt-0.5">{d.summary}</p>}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 font-mono text-[9px] uppercase tracking-[0.08em] text-muted">
+            Capacity figures appear only with the dated document that supports them —
+            zone-level forecasts are never parcel claims.
+          </p>
+        </div>
+      )}
 
       {/* Unresolved diligence items */}
       {unknownGates.length > 0 && (
