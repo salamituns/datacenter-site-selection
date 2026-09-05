@@ -31,6 +31,8 @@ BEGIN
   PERFORM count(*) FROM public.power_documents;
   PERFORM count(*) FROM public.v_power_rtep_upgrades;
   PERFORM count(*) FROM public.v_power_documents;
+  PERFORM count(*) FROM public.power_parcel_evidence;
+  PERFORM count(*) FROM public.v_power_parcel_evidence;
   RESET ROLE;
 
   -- 2. anon cannot mutate any ingestion data
@@ -83,6 +85,13 @@ BEGIN
       VALUES ('rls-test', 'x', 'x', 'report', 'x');
     RAISE EXCEPTION 'anon was allowed to INSERT into power_documents';
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    INSERT INTO public.power_parcel_evidence
+      (parcel_key, application_number, approval_date, utility_statement,
+       document_name, document_date, source_url)
+      VALUES ('rls-test', 'rls-test', '2020-01-01', 'x', 'x', '2020-01-01', 'x');
+    RAISE EXCEPTION 'anon was allowed to INSERT into power_parcel_evidence';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   RESET ROLE;
 
   -- 3. anon cannot see staging or call the publication RPCs
@@ -123,6 +132,11 @@ BEGIN
   INSERT INTO public.stg_power_rtep_upgrades (upgrade_id, state_code, project_type, description, status, run_id)
     VALUES ('rls-test', 'XX', 'Baseline', 'smoke', 'IS', '00000000-0000-0000-0000-000000000000');
   DELETE FROM public.stg_power_rtep_upgrades WHERE upgrade_id = 'rls-test';
+  INSERT INTO public.power_parcel_evidence
+    (parcel_key, application_number, approval_date, utility_statement,
+     document_name, document_date, source_url)
+    VALUES ('rls-test', 'rls-test', '2020-01-01', 'smoke', 'smoke.pdf', '2020-01-01', 'x');
+  DELETE FROM public.power_parcel_evidence WHERE parcel_key = 'rls-test';
   RESET ROLE;
 END
 $test$;

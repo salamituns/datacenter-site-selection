@@ -122,6 +122,22 @@ class IngestionRun:
         return {r["gate_key"]: {"id": str(r["id"]), "params": r["params"] or {}}
                 for r in (res.data or [])}
 
+    def fetch_power_parcel_evidence(self) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Curated parcel utility evidence (power_parcel_evidence) keyed by
+        parcel_key. These are the dated county records (LandMARC public
+        files) behind power_capacity PASS verdicts — manual evidence,
+        quoted verbatim, never derived.
+        """
+        res = self.client.table("v_power_parcel_evidence").select("*").execute()
+        out: Dict[str, List[Dict[str, Any]]] = {}
+        for r in res.data or []:
+            out.setdefault(r["parcel_key"], []).append(r)
+        if out:
+            logger.info("Parcel utility evidence: %d curated records for %d parcels.",
+                        sum(len(v) for v in out.values()), len(out))
+        return out
+
     # ── staged writes (chunked inserts, nothing published yet) ──────────
 
     def _stage(self, table: str, rows: List[Dict[str, Any]]) -> None:

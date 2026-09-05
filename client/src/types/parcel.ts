@@ -123,6 +123,24 @@ export interface PowerDocument {
   summary: string | null;
 }
 
+/** Parcel-specific utility evidence from a dated, approved county
+ *  application record (v_power_parcel_evidence). The quoted statement
+ *  and dates come verbatim from the public record; capacity_mw is set
+ *  only when that record states a figure. */
+export interface ParcelPowerEvidence {
+  parcel_key: string;
+  application_number: string;
+  application_type: string | null;
+  approval_date: string;
+  utility: string | null;
+  utility_statement: string;
+  capacity_mw: number | null;
+  document_name: string;
+  document_date: string;
+  source_url: string;
+  notes: string | null;
+}
+
 export interface WeightFactors {
   powerWeight: number;    // e.g. 40
   waterWeight: number;    // e.g. 25

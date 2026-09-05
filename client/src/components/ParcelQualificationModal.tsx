@@ -1,9 +1,9 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { LandParcel, ParcelQualification, GateStatus, PowerDocument } from "@/types/parcel";
-import { fetchPowerDocuments } from "@/lib/supabase";
-import { X, Download, ClipboardCheck, FlaskConical, Landmark, FileText } from "lucide-react";
+import { LandParcel, ParcelQualification, GateStatus, ParcelPowerEvidence, PowerDocument } from "@/types/parcel";
+import { fetchParcelPowerEvidence, fetchPowerDocuments } from "@/lib/supabase";
+import { X, Download, ClipboardCheck, FlaskConical, Landmark, FileText, Zap } from "lucide-react";
 
 interface ParcelQualificationModalProps {
   parcel: LandParcel | null;
@@ -68,6 +68,7 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
   const dragStart = useRef<{ y: number; h: number } | null>(null);
   const lastDragEnd = useRef(0);
   const [documents, setDocuments] = useState<PowerDocument[]>([]);
+  const [evidence, setEvidence] = useState<ParcelPowerEvidence[]>([]);
 
   useEffect(() => {
     if (parcel) setSheet("half");
@@ -85,6 +86,20 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
       alive = false;
     };
   }, [parcel, documents.length]);
+
+  // Parcel-specific utility evidence — dated county records keyed to
+  // this parcel (quoted verbatim; capacity only when the record states it).
+  useEffect(() => {
+    if (!parcel) return;
+    let alive = true;
+    setEvidence([]);
+    fetchParcelPowerEvidence(parcel.parcel_key).then((rows) => {
+      if (alive) setEvidence(rows);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [parcel?.parcel_key]);
 
   useEffect(() => {
     if (!parcel) return;
@@ -239,6 +254,47 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
           ))}
         </div>
       </div>
+
+      {/* Parcel-specific utility evidence — dated county records */}
+      {evidence.length > 0 && (
+        <div className="border-t border-border bg-success/5 px-4 py-4 dark:bg-success-night/5 lg:px-6">
+          <h4 className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
+            <Zap className="h-3.5 w-3.5" />
+            Parcel-Specific Utility Evidence · Dated County Record
+          </h4>
+          <ul className="mt-2 space-y-3">
+            {evidence.map((e) => (
+              <li key={`${e.parcel_key}-${e.application_number}`} className="font-mono text-[10px] leading-relaxed text-muted">
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <a
+                    href={e.source_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-foreground underline decoration-border-strong underline-offset-2 hover:decoration-foreground"
+                  >
+                    {e.application_type} {e.application_number}
+                  </a>
+                  <span>· County approval {e.approval_date}</span>
+                  {e.utility && <span>· {e.utility}</span>}
+                </div>
+                <p className="mt-1 text-foreground/90">{e.utility_statement}</p>
+                <p className="mt-1">
+                  Source: {e.document_name} · {e.document_date} · public LandMARC record
+                </p>
+                {e.capacity_mw != null ? (
+                  <p className="mt-1 text-foreground">
+                    Documented capacity: {Number(e.capacity_mw).toLocaleString()} MW
+                    {" "}— stated in the dated record, never derived.
+                  </p>
+                ) : (
+                  <p className="mt-1">No MW figure is asserted — the record documents utility service.</p>
+                )}
+                {e.notes && <p className="mt-1">{e.notes}</p>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Utility documents behind the power evidence */}
       {documents.length > 0 && (

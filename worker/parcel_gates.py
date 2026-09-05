@@ -106,6 +106,8 @@ def qualify_parcels(
     utility_gdf: Optional[gpd.GeoDataFrame] = None,
     rtep_df: Optional[pd.DataFrame] = None,
     queue_gdf: Optional[gpd.GeoDataFrame] = None,
+    apps_gdf: Optional[gpd.GeoDataFrame] = None,
+    parcel_evidence: Optional[Dict[str, List[Dict[str, Any]]]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
     """
     Computes metrics and gates for every fetched parcel. Returns
@@ -256,6 +258,40 @@ def qualify_parcels(
             queue_max_kv = near.groupby(level=0)["voltage_kv"].max()
         except Exception as e:  # noqa: BLE001
             logger.warning("Queue activity join failed: %s", e)
+
+    # Approved data-center legislative applications per parcel (observed):
+    # county cases (SPEX/ZMAP/ZCPA…) whose boundary overlaps the parcel.
+    # A sliver threshold keeps boundary-noise from counting.
+    apps_of: Dict[int, List[Dict[str, Any]]] = {}
+    if apps_gdf is not None and len(apps_gdf) > 0:
+        try:
+            inter = gpd.overlay(
+                planar[["geometry"]].reset_index(names="pidx"),
+                apps_gdf.to_crs(PLANAR_CRS)[
+                    ["app_number", "app_type", "approval_date", "geometry"]],
+                how="intersection",
+            )
+            if len(inter) > 0:
+                inter["area"] = inter.geometry.area
+                parcel_areas = planar.geometry.area
+                # count an application when it covers ≥5% of the parcel
+                # or ≥2 acres of it (approved project footprint, not a
+                # boundary sliver)
+                inter["counts"] = (
+                    (inter["area"] >= 0.05 * inter["pidx"].map(parcel_areas))
+                    | (inter["area"] >= 2.0 * 4046.8564224)
+                )
+                for pidx, grp in inter[inter["counts"]].groupby("pidx"):
+                    apps_of[int(pidx)] = [
+                        {"app_number": str(r.app_number), "app_type": str(r.app_type),
+                         "approval_date": str(r.approval_date)}
+                        for r in grp.itertuples()
+                    ]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Legislative application overlay failed: %s", e)
+
+    # Curated parcel utility evidence (manual, dated public records).
+    evidence_of = parcel_evidence or {}
 
     parcel_records: List[Dict[str, Any]] = []
     metric_rows: List[Dict[str, Any]] = []
@@ -557,6 +593,17 @@ def qualify_parcels(
             if q_kv is not None:
                 metric(pin, "pjm_queue_max_kv", q_kv, unit="kV",
                        evidence="observed", layer="pjm_queue")
+        if apps_gdf is not None:
+            apps_here = apps_of.get(i, [])
+            metric(pin, "dc_application_on_parcel", len(apps_here),
+                   unit="count", evidence="observed", layer="county_applications",
+                   details={"applications": apps_here} if apps_here else {})
+            if apps_here:
+                latest = max(a["approval_date"] for a in apps_here)
+                metric(pin, "dc_application_latest_approval", None,
+                       text_value=latest, evidence="observed",
+                       layer="county_applications",
+                       details={"applications": apps_here})
 
         if rtep_area is not None:
             metric(pin, "rtep_area_active_upgrades", rtep_area["active"],
@@ -571,8 +618,33 @@ def qualify_parcels(
                    text_value=rtep_area["latest_board_approval"],
                    evidence="derived", layer="rtep_upgrades")
 
+        parcel_ev = evidence_of.get(pin, [])
+        if parcel_ev:
+            # Dated parcel-specific utility evidence on file (curated from
+            # the public county record — quotes verbatim, never derived).
+            best = max(parcel_ev, key=lambda r: r.get("document_date") or "")
+            mw = best.get("capacity_mw")
+            metric(pin, "parcel_utility_evidence", None,
+                   text_value="dated_county_record", evidence="manual",
+                   layer="county_applications",
+                   details={
+                       "applications": [r.get("application_number") for r in parcel_ev],
+                       "document": best.get("document_name"),
+                       "document_date": best.get("document_date"),
+                   })
+            if mw is not None:
+                metric(pin, "parcel_utility_evidence_mw", float(mw), unit="MW",
+                       evidence="manual", layer="county_applications",
+                       details={
+                           "document": best.get("document_name"),
+                           "document_date": best.get("document_date"),
+                           "basis": "stated in the dated county record — never derived",
+                       })
+
         if util is None and utility_gdf is not None:
             evidence_level = "none"
+        elif parcel_ev:
+            evidence_level = "parcel_dated_record"
         elif rtep_area is not None:
             evidence_level = "area_reinforcement"
         elif util is not None:
@@ -583,7 +655,31 @@ def qualify_parcels(
             metric(pin, "power_evidence_level", None, text_value=evidence_level,
                    evidence="derived", layer="rtep_upgrades")
 
-        if utility_gdf is None and rtep_df is None:
+        if parcel_ev:
+            mw_note = (
+                f"The record documents a capacity figure of {float(mw):.0f} MW."
+                if mw is not None else
+                "No MW figure is asserted — the record documents utility "
+                "service, not a capacity number."
+            )
+            gate(pin, "power_capacity", "PASS",
+                 f"Dated parcel-specific utility evidence on file: approved "
+                 f"{best.get('application_type')} {best.get('application_number')} "
+                 f"(County approval {best.get('approval_date')}) — "
+                 f"\"{best.get('utility_statement')}\" "
+                 f"({best.get('document_name')}, {best.get('document_date')}; "
+                 f"public LandMARC record). {mw_note}",
+                 details={
+                     "evidence_level": evidence_level,
+                     "application_number": best.get("application_number"),
+                     "approval_date": best.get("approval_date"),
+                     "document": best.get("document_name"),
+                     "document_date": best.get("document_date"),
+                     "documented_mw": mw,
+                     "source_url": best.get("source_url"),
+                     "documents": ["pjm_rtep_construction_status"],
+                 })
+        elif utility_gdf is None and rtep_df is None:
             gate(pin, "power_capacity", "UNKNOWN",
                  "Power diligence layers unavailable for this run — serving "
                  "utility and capacity evidence unverified.")
@@ -637,6 +733,9 @@ def qualify_parcels(
         "rtep_layer": "present" if rtep_df is not None else "missing",
         "rtep_area_active": (rtep_area or {}).get("active"),
         "queue_layer": "present" if queue_gdf is not None else "missing",
+        "county_applications_layer": "present" if apps_gdf is not None else "missing",
+        "parcels_with_dc_application": len(apps_of),
+        "parcels_with_utility_evidence": len(set(evidence_of) & {p["parcel_key"] for p in parcel_records}),
         "slope_sampled_ok": sum(1 for v in (slopes or {}).values() if v[2] > 0),
         "metric_rows": len(metric_rows),
         "gate_rows": len(gate_rows),

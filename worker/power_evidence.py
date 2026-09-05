@@ -22,7 +22,7 @@ estimate. Capacity figures only ever appear as dated document facts
 
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -49,6 +49,18 @@ QUEUE_MAP_URL = (
     "https://gis.pjm.com/arcgis/rest/services/"
     "Renewables/Queue/MapServer/0/query"
 )
+
+# Loudoun County legislative applications (public ArcGIS layer): every
+# SPEX / ZMAP / ZCPA / ZMOD / SPMI case with its approval date and
+# boundary. Data-center cases are the parcel-specific path to dated
+# utility evidence (the public LandMARC file behind each case carries
+# staff reports, conditions, and proffers with utility statements).
+LEGISLATIVE_APPS_URL = (
+    "https://logis.loudoun.gov/gis/rest/services/"
+    "COL/PlanningZoning/MapServer/3/query"
+)
+# Application types that can authorize data-center use.
+DC_APP_TYPES = ("SPEX", "ZMAP", "ZCPA", "ZMOD", "SPMI", "LEGI")
 
 BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -312,4 +324,87 @@ def fetch_pjm_queue_points(
         return None
     gdf = gpd.GeoDataFrame(rows, crs="EPSG:4326")
     logger.info("PJM queue map: %d interconnection points in bbox.", len(gdf))
+    return gdf
+
+
+def fetch_legislative_applications(
+    min_lon: float, min_lat: float, max_lon: float, max_lat: float
+) -> Optional[gpd.GeoDataFrame]:
+    """
+    Approved Loudoun legislative applications for data-center use in the
+    bbox (observed evidence: application number, type, approval date,
+    boundary). These are the county cases whose public LandMARC files
+    carry dated utility statements; the curated power_parcel_evidence
+    table records those statements per parcel.
+    """
+    session = requests.Session()
+    session.headers.update({"User-Agent": BROWSER_UA, "Accept": "application/json"})
+    where = (
+        "(UPPER(LA_PROJECT_NAME) LIKE '%DATA%' OR "
+        "UPPER(LA_DESCRIPTION) LIKE '%DATA%' OR "
+        "UPPER(LA_APPLICATION_NAME) LIKE '%DATA%') "
+        "AND LA_APPROVAL_DATE IS NOT NULL"
+    )
+    bbox = f"{min_lon},{min_lat},{max_lon},{max_lat}"
+    rows: List[Dict[str, Any]] = []
+    offset = 0
+    while True:
+        params = {
+            "where": where, "geometry": bbox, "geometryType": "esriGeometryEnvelope",
+            "inSR": 4326, "outSR": 4326,
+            "outFields": ("LA_APPLICATION_NUMBER,LA_APPLICATION_TYPE,"
+                          "LA_APPROVAL_DATE,LA_PROJECT_NAME,LA_DESCRIPTION"),
+            "returnGeometry": "true", "f": "geojson",
+            "resultRecordCount": 1000, "resultOffset": offset,
+        }
+        try:
+            r = session.get(LEGISLATIVE_APPS_URL, params=params, timeout=90)
+            r.raise_for_status()
+            payload = r.json()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Legislative applications layer unavailable: %s", e)
+            return None
+        feats = payload.get("features") or []
+        for f in feats:
+            geometry = f.get("geometry")
+            if not geometry:
+                continue
+            try:
+                geom = shape(geometry)
+            except Exception:  # noqa: BLE001
+                continue
+            if geom.is_empty:
+                continue
+            props = f.get("properties", {}) or {}
+            app_type = str(props.get("LA_APPLICATION_TYPE") or "").strip()
+            if app_type not in DC_APP_TYPES:
+                continue
+            ms = props.get("LA_APPROVAL_DATE")
+            try:
+                approved = (
+                    datetime.fromtimestamp(ms / 1000, timezone.utc).date().isoformat()
+                    if ms else None
+                )
+            except Exception:  # noqa: BLE001
+                approved = None
+            if not approved:
+                continue
+            app_number = str(props.get("LA_APPLICATION_NUMBER") or "").strip()
+            if not app_number:
+                continue
+            rows.append({
+                "app_number": app_number,
+                "app_type": app_type,
+                "approval_date": approved,
+                "project_name": str(props.get("LA_PROJECT_NAME") or "").strip() or None,
+                "geometry": geom,
+            })
+        if len(feats) < 1000 or not payload.get("exceededTransferLimit"):
+            break
+        offset += 1000
+    if not rows:
+        logger.info("Legislative applications: no approved data-center cases in bbox.")
+        return None
+    gdf = gpd.GeoDataFrame(rows, crs="EPSG:4326").drop_duplicates(subset=["app_number"])
+    logger.info("Legislative applications: %d approved data-center cases in bbox.", len(gdf))
     return gdf

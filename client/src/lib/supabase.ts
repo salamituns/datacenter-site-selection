@@ -3,6 +3,7 @@ import {
   GridParcel,
   LandParcel,
   MapFeatures,
+  ParcelPowerEvidence,
   ParcelQualification,
   PowerDocument,
 } from "@/types/parcel";
@@ -307,6 +308,49 @@ export async function fetchPowerDocuments(): Promise<PowerDocument[]> {
     }));
   } catch (err) {
     console.error("Failed to fetch power documents:", err);
+    return [];
+  }
+}
+
+/**
+ * Parcel-specific utility evidence (v_power_parcel_evidence): dated,
+ * approved county application records that document utility service for
+ * a parcel. Statements are quoted verbatim from the public record; a
+ * capacity figure exists only when the record states one.
+ */
+export async function fetchParcelPowerEvidence(
+  parcelKey: string
+): Promise<ParcelPowerEvidence[]> {
+  if (!supabase || !parcelKey) return [];
+  try {
+    const { data, error } = await supabase
+      .from("v_power_parcel_evidence")
+      .select(
+        "parcel_key,application_number,application_type,approval_date," +
+        "utility,utility_statement,capacity_mw,document_name,document_date," +
+        "source_url,notes"
+      )
+      .eq("parcel_key", parcelKey)
+      .order("document_date", { ascending: false });
+    if (error) {
+      console.error("Failed to fetch parcel power evidence:", error);
+      return [];
+    }
+    return ((data ?? []) as any[]).map((d) => ({
+      parcel_key: d.parcel_key,
+      application_number: d.application_number,
+      application_type: d.application_type ?? null,
+      approval_date: d.approval_date,
+      utility: d.utility ?? null,
+      utility_statement: d.utility_statement,
+      capacity_mw: d.capacity_mw ?? null,
+      document_name: d.document_name,
+      document_date: d.document_date,
+      source_url: d.source_url,
+      notes: d.notes ?? null,
+    }));
+  } catch (err) {
+    console.error("Failed to fetch parcel power evidence:", err);
     return [];
   }
 }

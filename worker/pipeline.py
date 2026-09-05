@@ -445,6 +445,15 @@ def run_pipeline(
             queue_gdf = power_evidence.fetch_pjm_queue_points(
                 min_lon, min_lat, max_lon, max_lat
             )
+            # Approved county data-center applications (observed) and the
+            # curated parcel utility evidence behind them (dated public
+            # records — the only path to a power_capacity PASS).
+            apps_gdf = power_evidence.fetch_legislative_applications(
+                min_lon, min_lat, max_lon, max_lat
+            )
+            parcel_evidence = (
+                run.fetch_power_parcel_evidence() if run is not None else {}
+            )
 
             for layer_key, src, endpoint, count, note in (
                 ("utility_territories", "hifld_utility_territories",
@@ -459,6 +468,10 @@ def run_pipeline(
                  power_evidence.QUEUE_MAP_URL,
                  None if queue_gdf is None else len(queue_gdf),
                  None if queue_gdf is not None else "unavailable — queue-activity metric skipped"),
+                ("county_applications", "loudoun_legislative_applications",
+                 power_evidence.LEGISLATIVE_APPS_URL,
+                 None if apps_gdf is None else len(apps_gdf),
+                 None if apps_gdf is not None else "unavailable — application metrics skipped"),
             ):
                 if run is not None:
                     quality = None if count is None else {"rows": int(count)}
@@ -496,6 +509,7 @@ def run_pipeline(
                 snapshots=snapshots, retrieve_time=retrieve_time,
                 roads_gdf=roads_gdf, padus_gdf=padus_gdf, slopes=slopes,
                 utility_gdf=utility_gdf, rtep_df=rtep_df, queue_gdf=queue_gdf,
+                apps_gdf=apps_gdf, parcel_evidence=parcel_evidence,
             )
             logger.info("Parcel qualification: %d parcels, %d metric rows, %d gate rows.",
                         len(parcel_records), len(metric_rows), len(gate_rows))
