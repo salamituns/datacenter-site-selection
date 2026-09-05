@@ -455,6 +455,31 @@ def run_pipeline(
                 run.fetch_power_parcel_evidence() if run is not None else {}
             )
 
+            # Water availability (Release 3): Loudoun Water's published
+            # service-area boundary — serving areas, the explicit
+            # "NOT Served" polygon, and per-area connection records.
+            import water_evidence
+            water_gdf = water_evidence.fetch_water_service_areas(
+                min_lon, min_lat, max_lon, max_lat
+            )
+            if run is not None:
+                snapshots["water_service_areas"] = run.snapshot(
+                    layer="water_service_areas",
+                    source_key="loudoun_water_service_area",
+                    endpoint_url=water_evidence.WATER_SERVICE_AREA_URL,
+                    record_count=None if water_gdf is None else len(water_gdf),
+                    evidence_class="observed",
+                    quality=(None if water_gdf is None else {
+                        "rows": int(len(water_gdf)),
+                        "water_serving": int(
+                            water_gdf.service_type.isin(("W", "Both")).sum()),
+                    }),
+                    notes=(None if water_gdf is not None
+                           else "unavailable — water gates recorded UNKNOWN"),
+                )
+            elif water_gdf is None:
+                logger.warning("Loudoun Water service areas unavailable — water gates will be UNKNOWN.")
+
             for layer_key, src, endpoint, count, note in (
                 ("utility_territories", "hifld_utility_territories",
                  overlay_layers.UTILITY_TERRITORY_URL,
@@ -510,6 +535,7 @@ def run_pipeline(
                 roads_gdf=roads_gdf, padus_gdf=padus_gdf, slopes=slopes,
                 utility_gdf=utility_gdf, rtep_df=rtep_df, queue_gdf=queue_gdf,
                 apps_gdf=apps_gdf, parcel_evidence=parcel_evidence,
+                water_gdf=water_gdf,
             )
             logger.info("Parcel qualification: %d parcels, %d metric rows, %d gate rows.",
                         len(parcel_records), len(metric_rows), len(gate_rows))

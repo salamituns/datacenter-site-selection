@@ -20,6 +20,7 @@ const GATE_LABELS: Record<string, string> = {
   protected_land: "Protected land",
   road_access: "Road access",
   power_capacity: "Power capacity evidence",
+  water_availability: "Water availability",
 };
 
 function gateLabel(key: string): string {
