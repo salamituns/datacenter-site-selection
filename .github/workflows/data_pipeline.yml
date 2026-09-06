@@ -29,10 +29,13 @@ jobs:
   run-pipeline:
     name: Run Ingestion, Scikit-Learn Clustering & Supabase PostGIS Sync
     runs-on: ubuntu-latest
-    # A full ingest runs ~16 minutes cold. Without this the job inherits
-    # GitHub's 360-minute default, so one hung dataset download would burn
-    # six hours of Actions minutes before anything noticed.
-    timeout-minutes: 30
+    # A publishing run measured 23m25s: no cache, the NWI geodatabase
+    # fallback, and the atomic promote on top of the ingest. A dry run is
+    # ~15m. 45 leaves real headroom for a slow upstream week while still
+    # capping the job — without this it inherits GitHub's 360-minute
+    # default, so one hung download would burn six hours of Actions
+    # minutes before anything noticed.
+    timeout-minutes: 45
 
     env:
       # A push under worker/ validates the pipeline end to end without
