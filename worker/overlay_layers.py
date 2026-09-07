@@ -18,7 +18,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import json
 import logging
+import os
+import random
 import tempfile
+import time
 import zipfile
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -339,8 +342,21 @@ def fetch_nwi_wetlands(
         return None, NWI_VA_URL
 
 
+# One request per parcel, so this dominates the verification step. The
+# ceiling is USGS tolerance, not our CPU: too many workers earns 429s and
+# 5xxs, which without a retry become silently missing slope statistics.
+# Tunable without a code change; raise it only alongside the success rate
+# logged at the end of the sampling run.
+THREEDEP_WORKERS = int(os.getenv("THREEDEP_WORKERS", "12"))
+THREEDEP_ATTEMPTS = int(os.getenv("THREEDEP_ATTEMPTS", "3"))
+_THREEDEP_RETRY_STATUS = {429, 500, 502, 503, 504}
+
+
 def sample_3dep_slopes(
-    parcels_gdf: gpd.GeoDataFrame, workers: int = 6, timeout: int = 90
+    parcels_gdf: gpd.GeoDataFrame,
+    workers: int = THREEDEP_WORKERS,
+    timeout: int = 90,
+    attempts: int = THREEDEP_ATTEMPTS,
 ) -> Optional[Dict[Any, Tuple[Optional[float], Optional[float], int]]]:
     """
     Per-parcel slope statistics from the 3DEP bare-earth DEM.
@@ -351,50 +367,69 @@ def sample_3dep_slopes(
     the parcel index: (slope_max_pct, slope_median_pct, n_samples);
     entries are (None, None, 0) for parcels whose sampling failed — the
     gate stays UNKNOWN for those, never a guessed value.
+
+    A throttled or briefly failing request is retried with exponential
+    backoff and jitter. An answer of "no elevation here" is not retried:
+    it is a real result, and only a transport or server failure earns
+    another attempt. Without this, raising the worker count would buy
+    speed by converting throttling into missing gates.
     """
     session_local = _ThreadLocalSession(timeout)
 
-    def one(item) -> Tuple[Any, Optional[float], Optional[float], int]:
+    # Each task reports its own retry count and the main thread sums them:
+    # a shared counter would be a read-modify-write across workers.
+    def one(item) -> Tuple[Any, Optional[float], Optional[float], int, int]:
         idx, geom = item
-        try:
-            minx, miny, maxx, maxy = geom.bounds
-            if not (maxx > minx and maxy > miny):
-                return idx, None, None, 0
-            s = session_local.get()
-            r = s.get(
-                THREEDEP_URL,
-                params={
-                    "geometry": json.dumps({
-                        "xmin": minx, "ymin": miny, "xmax": maxx, "ymax": maxy,
-                        "spatialReference": {"wkid": 4326},
-                    }),
-                    "geometryType": "esriGeometryEnvelope",
-                    "returnFirstValueOnly": "true",
-                    "f": "json",
-                },
-                timeout=timeout,
-            )
-            r.raise_for_status()
-            data = r.json()
-            samples = data.get("samples", [])
-            if data.get("error") or not samples:
-                return idx, None, None, 0
-            stats = _slope_from_samples(samples, midlat=(miny + maxy) / 2)
-            return idx, stats[0], stats[1], stats[2]
-        except Exception:  # noqa: BLE001
-            return idx, None, None, 0
+        minx, miny, maxx, maxy = geom.bounds
+        if not (maxx > minx and maxy > miny):
+            return idx, None, None, 0, 0
+        params = {
+            "geometry": json.dumps({
+                "xmin": minx, "ymin": miny, "xmax": maxx, "ymax": maxy,
+                "spatialReference": {"wkid": 4326},
+            }),
+            "geometryType": "esriGeometryEnvelope",
+            "returnFirstValueOnly": "true",
+            "f": "json",
+        }
+        retries = 0
+        for attempt in range(attempts):
+            try:
+                r = session_local.get().get(THREEDEP_URL, params=params, timeout=timeout)
+                if r.status_code in _THREEDEP_RETRY_STATUS:
+                    raise requests.HTTPError(f"status {r.status_code}")
+                r.raise_for_status()
+                data = r.json()
+                samples = data.get("samples", [])
+                if data.get("error") or not samples:
+                    # A real answer, not a failure — do not spend retries.
+                    return idx, None, None, 0, retries
+                stats = _slope_from_samples(samples, midlat=(miny + maxy) / 2)
+                return idx, stats[0], stats[1], stats[2], retries
+            except Exception:  # noqa: BLE001
+                retries += 1
+                if attempt == attempts - 1:
+                    return idx, None, None, 0, retries
+                time.sleep(0.4 * (2 ** attempt) + random.uniform(0, 0.3))
+        return idx, None, None, 0, retries
 
     items = list(parcels_gdf.geometry.items())
     out: Dict[Any, Tuple[Optional[float], Optional[float], int]] = {}
     done = 0
+    retried = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for idx, smax, smed, n in pool.map(one, items):
+        for idx, smax, smed, n, retries in pool.map(one, items):
             out[idx] = (smax, smed, n)
+            retried += retries
             done += 1
             if done % 250 == 0:
                 logger.info("3DEP slopes: %d/%d parcels sampled.", done, len(items))
     ok = sum(1 for v in out.values() if v[2] > 0)
-    logger.info("3DEP slopes: %d/%d parcels have slope statistics.", ok, len(items))
+    logger.info(
+        "3DEP slopes: %d/%d parcels have slope statistics "
+        "(%d workers, %d transient failures retried).",
+        ok, len(items), workers, retried,
+    )
     return out
 
 
