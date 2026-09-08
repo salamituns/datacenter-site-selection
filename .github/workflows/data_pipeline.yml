@@ -96,6 +96,11 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Reads the mirrored Taylor County shapefile from this repo's
+          # releases. The district's host blocks datacenter IPs, so a CI
+          # runner cannot fetch from source; the repo is private, so the
+          # asset needs the token rather than a public download URL.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd worker
           STATE="${{ github.event.inputs.state || 'VA' }}"

@@ -29,6 +29,7 @@ WHAT IS NOT HERE, and why:
 """
 
 import logging
+import os
 import random
 import time
 from pathlib import Path
@@ -49,6 +50,17 @@ PARCEL_ZIP_URL = (
 PARCEL_CACHE = Path(__file__).parent / "cache" / "taylor_cad_parcels.zip"
 SHAPEFILE_MEMBER = "PARCELS.shp"
 
+# The district publishes on WordPress.com, which blocks datacenter IP
+# ranges: the same request that succeeds from a laptop is answered 429
+# from a CI runner, and no amount of backoff changes that. The file is
+# therefore mirrored, unmodified, as a release asset on this repository —
+# transport only. The district remains the source of record, and
+# data_sources.taylor_cad_parcels points at them rather than at the
+# mirror. The mirror is tried first in CI and the district is the
+# fallback, so a workstation with no token still fetches from source.
+MIRROR_TAG = os.getenv("TAYLOR_MIRROR_TAG", "taylor-cad-20260720")
+MIRROR_ASSET = "TaylorCAD_GIS_Shapefile_as_of_20Jul26.zip"
+
 BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -58,6 +70,50 @@ BROWSER_UA = (
 # Texas North Central (EPSG:2276), which geopandas reads from the .prj.
 AREA_CRS = "EPSG:5070"
 M2_PER_ACRE = 4046.8564224
+
+
+def _download_from_mirror(dest: Path) -> bool:
+    """
+    Fetches the mirrored shapefile from this repository's releases.
+
+    Returns False rather than raising when there is no token or no
+    mirror, so the caller falls back to the district. The repository is
+    private, so the asset is fetched through the API with the workflow's
+    token; a public download URL would 404.
+    """
+    token = os.getenv("GITHUB_TOKEN")
+    repo = os.getenv("GITHUB_REPOSITORY")
+    if not token or not repo:
+        return False
+    api = f"https://api.github.com/repos/{repo}"
+    headers = {"Authorization": f"Bearer {token}",
+               "X-GitHub-Api-Version": "2022-11-28"}
+    try:
+        rel = requests.get(f"{api}/releases/tags/{MIRROR_TAG}",
+                           headers={**headers, "Accept": "application/vnd.github+json"},
+                           timeout=60)
+        if rel.status_code != 200:
+            logger.info("No parcel mirror at tag %s — using the district.", MIRROR_TAG)
+            return False
+        asset = next((a for a in rel.json().get("assets", [])
+                      if a.get("name") == MIRROR_ASSET), None)
+        if asset is None:
+            return False
+        logger.info("Fetching Taylor CAD parcels from the repository mirror…")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with requests.get(asset["url"],
+                          headers={**headers, "Accept": "application/octet-stream"},
+                          timeout=300, stream=True) as r:
+            r.raise_for_status()
+            tmp = dest.with_suffix(".part")
+            with open(tmp, "wb") as fh:
+                for chunk in r.iter_content(chunk_size=1 << 20):
+                    fh.write(chunk)
+            tmp.replace(dest)
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.info("Parcel mirror unavailable (%s) — trying the district.", e)
+        return False
 
 
 def _download(url: str, dest: Path, attempts: int = 4) -> None:
@@ -139,7 +195,8 @@ class TaylorParcelAPI:
         """
         try:
             if not PARCEL_CACHE.exists():
-                _download(PARCEL_ZIP_URL, PARCEL_CACHE)
+                if not _download_from_mirror(PARCEL_CACHE):
+                    _download(PARCEL_ZIP_URL, PARCEL_CACHE)
 
             gdf = gpd.read_file(f"zip://{PARCEL_CACHE}!{SHAPEFILE_MEMBER}")
         except Exception as e:  # noqa: BLE001
