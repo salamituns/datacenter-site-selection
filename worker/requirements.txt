@@ -3,6 +3,8 @@ geopandas>=0.14.0
 shapely>=2.0.0
 pyproj>=3.6.0
 pandas>=2.1.0
+# Reads the county assessment roll, published only as .xlsx (Release 4b)
+openpyxl>=3.1.0
 numpy>=1.26.0
 
 # USGS National Water Information System API

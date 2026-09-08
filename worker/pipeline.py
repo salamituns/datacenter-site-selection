@@ -480,6 +480,31 @@ def run_pipeline(
             elif water_gdf is None:
                 logger.warning("Loudoun Water service areas unavailable — water gates will be UNKNOWN.")
 
+            # Commercial underwriting (Release 4b): the county assessment
+            # roll — land and improvement value, the taxable base, the
+            # county's own estimated levy, and the land-use deferral that
+            # carries a roll-back liability on conversion.
+            import assessment_evidence
+            assessments = assessment_evidence.fetch_assessments()
+            if run is not None:
+                snapshots["assessment"] = run.snapshot(
+                    layer="assessment",
+                    source_key="loudoun_assessment_roll",
+                    endpoint_url=assessment_evidence.ASSESSMENT_XLSX_URL,
+                    record_count=None if assessments is None else len(assessments),
+                    evidence_class="observed",
+                    quality=(None if assessments is None else {
+                        "rows": int(len(assessments)),
+                        "assessment_year": assessment_evidence.ASSESSMENT_YEAR,
+                        "in_land_use_deferral": int(
+                            (assessments["deferred_value"].fillna(0) > 0).sum()),
+                    }),
+                    notes=(None if assessments is not None
+                           else "unavailable — assessment values recorded UNKNOWN"),
+                )
+            elif assessments is None:
+                logger.warning("Assessment roll unavailable — value metrics will be UNKNOWN.")
+
             for layer_key, src, endpoint, count, note in (
                 ("utility_territories", "hifld_utility_territories",
                  overlay_layers.UTILITY_TERRITORY_URL,
@@ -535,7 +560,7 @@ def run_pipeline(
                 roads_gdf=roads_gdf, padus_gdf=padus_gdf, slopes=slopes,
                 utility_gdf=utility_gdf, rtep_df=rtep_df, queue_gdf=queue_gdf,
                 apps_gdf=apps_gdf, parcel_evidence=parcel_evidence,
-                water_gdf=water_gdf,
+                water_gdf=water_gdf, assessments=assessments,
             )
             logger.info("Parcel qualification: %d parcels, %d metric rows, %d gate rows.",
                         len(parcel_records), len(metric_rows), len(gate_rows))

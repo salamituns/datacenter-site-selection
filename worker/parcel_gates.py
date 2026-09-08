@@ -23,6 +23,8 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import MultiPolygon
 
+from assessment_evidence import assessment_of
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("parcel_gates")
 
@@ -161,6 +163,7 @@ def qualify_parcels(
     apps_gdf: Optional[gpd.GeoDataFrame] = None,
     parcel_evidence: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     water_gdf: Optional[gpd.GeoDataFrame] = None,
+    assessments: Optional[pd.DataFrame] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
     """
     Computes metrics and gates for every fetched parcel. Returns
@@ -453,6 +456,58 @@ def qualify_parcels(
         # ── metrics ───────────────────────────────────────────────────
         metric(pin, "total_acreage", gis_acreage, unit="acres", evidence="derived",
                layer="parcels", details={"basis": "GIS geometry", "legal_acreage": legal_acreage})
+
+        # ── Release 4b: the county assessment roll ─────────────────────
+        # The assessor's own figures, carried verbatim. A parcel absent
+        # from the roll emits nothing at all rather than zeroes, which
+        # would read as "worthless" instead of "unrecorded".
+        assessed = assessment_of(assessments, str(row["pin"]))
+        if assessed is not None:
+            prov = {"source": assessed["source"],
+                    "assessment_year": assessed["assessment_year"]}
+            for key, mkey, unit in (
+                ("land_value", "assessed_land_value_usd", "USD"),
+                ("building_value", "assessed_building_value_usd", "USD"),
+                ("total_value", "assessed_total_value_usd", "USD"),
+                ("taxable_value", "assessed_taxable_value_usd", "USD"),
+                ("annual_tax", "annual_property_tax_usd", "USD"),
+            ):
+                if assessed[key] is not None:
+                    metric(pin, mkey, assessed[key], unit=unit,
+                           evidence="observed", layer="assessment", details=prov)
+
+            if assessed["assessment_class"]:
+                metric(pin, "assessment_class", None,
+                       text_value=assessed["assessment_class"],
+                       evidence="observed", layer="assessment", details=prov)
+
+            # Land value per acre — the comparable an underwriter reads
+            # first, and the only derived figure in this block.
+            if assessed["land_value"] is not None and gis_acreage > 0:
+                metric(pin, "assessed_land_value_per_acre_usd",
+                       assessed["land_value"] / gis_acreage, unit="USD/acre",
+                       evidence="derived", layer="assessment",
+                       details={**prov,
+                                "basis": "fair market land value / GIS acreage"})
+
+            # Land-use deferral. Recorded even when zero: "assessed at full
+            # fair market value" is a real finding for a buyer, and its
+            # absence would be indistinguishable from an unread roll.
+            if assessed["deferred_value"] is not None:
+                metric(pin, "land_use_deferred_value_usd",
+                       assessed["deferred_value"], unit="USD",
+                       evidence="observed", layer="assessment",
+                       details={**prov,
+                                "program": "Code of Virginia 58.1-3230 et seq.",
+                                "conversion_liability": (
+                                    "A change to a more intensive use triggers "
+                                    "roll-back taxes under 58.1-3237: the five "
+                                    "most recent complete tax years of deferred "
+                                    "tax, plus simple interest."),
+                                "land_use_value": assessed["land_use_value"]})
+                metric(pin, "in_land_use_deferral", None,
+                       text_value="yes" if assessed["in_land_use_deferral"] else "no",
+                       evidence="observed", layer="assessment", details=prov)
 
         wet_pct = _overlap_fraction(planar.geometry.loc[i], wetlands_union, area_m2)
         fw_pct = _overlap_fraction(planar.geometry.loc[i], floodway_union, area_m2)
