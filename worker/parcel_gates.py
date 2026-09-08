@@ -16,6 +16,7 @@ layers produce UNKNOWN gates with an explicit rationale, never silence.
 """
 
 import logging
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 import geopandas as gpd
@@ -64,6 +65,55 @@ DEFAULT_RULE_PARAMS: Dict[str, Dict[str, Any]] = {
     "water_availability": {"pass_overlap_pct": 50, "conditional_overlap_pct": 5},
 }
 
+
+
+def _round_half_away(x: float) -> int:
+    """
+    Rounds like Postgres numeric rounding, half away from zero.
+
+    Python's int() truncates and round() goes half-to-even, so both drift
+    from the same percentile computed in SQL — a p90 of 47.5 becomes 47
+    here and 48 there. These figures get cross-checked against the database
+    sooner or later, and the two answers have to agree.
+    """
+    return int(math.floor(x + 0.5)) if x >= 0 else int(math.ceil(x - 0.5))
+
+
+def _rtep_schedule_slip(rtep_df: pd.DataFrame, min_sample: int = 30
+                        ) -> Optional[Dict[str, Any]]:
+    """
+    How well the transmission area actually delivers against its own dates.
+
+    PJM publishes both a projected and an actual in-service date for
+    completed upgrades, so schedule risk here is a track record rather than
+    a guess: the slip distribution of upgrades that have already energised.
+    Negative days mean delivered early.
+
+    Prefers the survey area's own history and falls back to the full
+    dataset only when the local sample is too small to say anything; the
+    scope used is returned so the caller can state which it was. Returns
+    None when neither sample qualifies — an unknown record, not a
+    reassuring default.
+    """
+    if rtep_df is None or len(rtep_df) == 0:
+        return None
+    for scope, frame in (("county area", rtep_df[rtep_df["in_area"]]),
+                         ("PJM dataset", rtep_df)):
+        proj = pd.to_datetime(frame["projected_in_service_date"], errors="coerce")
+        actual = pd.to_datetime(frame["actual_in_service_date"], errors="coerce")
+        slip = (actual - proj).dt.days.dropna()
+        if len(slip) < min_sample:
+            continue
+        return {
+            "scope": scope,
+            "sample": int(len(slip)),
+            "median_days": _round_half_away(float(slip.median())),
+            "p90_days": _round_half_away(float(slip.quantile(0.9))),
+            "on_time_pct": round(float((slip <= 0).mean() * 100), 1),
+            "basis": ("completed upgrades with both a projected and an actual "
+                      "in-service date, PJM RTEP"),
+        }
+    return None
 
 def _to_multi_wkt(geom) -> str:
     """WKT for the MultiPolygon column (single polygons wrapped)."""
@@ -236,6 +286,7 @@ def qualify_parcels(
         isd = sorted(str(d) for d in act["projected_in_service_date"].dropna())
         boards = sorted(str(d) for d in act["board_approval_date"].dropna())
         if len(act) > 0:
+            cost = act["cost_estimate_musd"].dropna()
             rtep_area = {
                 "active": int(len(act)),
                 "earliest_energization": isd[0] if isd else None,
@@ -243,6 +294,14 @@ def qualify_parcels(
                 "latest_board_approval": boards[-1] if boards else None,
                 "source_updated": max(
                     (str(d) for d in rtep_df["source_updated"].dropna()), default=None
+                ),
+                # PJM's own Board-approved cost estimates, summed. These are
+                # PJM estimates for the transmission area, not actual spend and
+                # not attributable to any one parcel.
+                "cost_musd": round(float(cost.sum()), 1) if len(cost) else None,
+                "cost_reported": int(len(cost)),
+                "schedule": _rtep_schedule_slip(
+                    rtep_df, int(power_rule.get("slip_min_sample", 30))
                 ),
             }
 
@@ -766,6 +825,33 @@ def qualify_parcels(
             metric(pin, "rtep_latest_board_approval", None,
                    text_value=rtep_area["latest_board_approval"],
                    evidence="derived", layer="rtep_upgrades")
+
+            # ── Release 4a: commercial signal from the same dated record ──
+            # Area figures, never parcel claims: this is what the serving
+            # transmission area is spending and how well it hits its dates.
+            if rtep_area.get("cost_musd") is not None:
+                metric(pin, "rtep_area_upgrade_cost_musd",
+                       rtep_area["cost_musd"], unit="USD millions",
+                       evidence="derived", layer="rtep_upgrades",
+                       details={
+                           "scope": "county area",
+                           "upgrades_costed": rtep_area["cost_reported"],
+                           "basis": ("sum of PJM Board-approved project cost "
+                                     "estimates for active in-area upgrades"),
+                           "caveat": ("PJM's own estimates, not actual spend, "
+                                      "and not attributable to a single parcel"),
+                       })
+            sched = rtep_area.get("schedule")
+            if sched:
+                metric(pin, "rtep_area_schedule_slip_median_days",
+                       sched["median_days"], unit="days",
+                       evidence="derived", layer="rtep_upgrades", details=sched)
+                metric(pin, "rtep_area_schedule_slip_p90_days",
+                       sched["p90_days"], unit="days",
+                       evidence="derived", layer="rtep_upgrades", details=sched)
+                metric(pin, "rtep_area_on_time_pct", sched["on_time_pct"],
+                       unit="percent", evidence="derived",
+                       layer="rtep_upgrades", details=sched)
 
         parcel_ev = evidence_of.get(pin, [])
         if parcel_ev:
