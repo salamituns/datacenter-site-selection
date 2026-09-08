@@ -13,6 +13,9 @@ import { LayerVisibility } from "@/types/parcel";
 interface LayerControlsProps {
   layers: LayerVisibility;
   onToggleLayer: (layerKey: keyof LayerVisibility) => void;
+  /** Region in view. The parcel layer names the county that publishes it,
+   *  which differs per region and does not exist in all of them. */
+  selectedState?: string;
 }
 
 interface LayerConfig {
@@ -70,10 +73,25 @@ const LAYER_CONFIGS: LayerConfig[] = [
     key: "qualifiedParcels",
     label: "Qualified Parcels",
     description: "Cadastral gates & verdicts",
-    source: "Loudoun GIS",
+    // Filled per region — see PARCEL_SOURCE.
+    source: "",
     icon: <LandPlot className="h-3.5 w-3.5 text-success dark:text-success-night" />,
   },
 ];
+
+/**
+ * Who publishes the cadastre, by region. Each jurisdiction is a separate
+ * adapter against a separate authority, so the layer names the one it is
+ * actually reading rather than a single county that happened to be first.
+ *
+ * A region absent here has no parcel pilot: the layer is empty there, and
+ * saying so is more useful than an unexplained blank map.
+ */
+const PARCEL_SOURCE: Record<string, string> = {
+  VA: "Loudoun County GIS",
+  OH: "Franklin County Auditor",
+  TX: "Taylor CAD",
+};
 
 /** Square instrument switch — a slide plate, not a pill. */
 function ToggleSwitch({ checked }: { checked: boolean }) {
@@ -96,7 +114,11 @@ function ToggleSwitch({ checked }: { checked: boolean }) {
   );
 }
 
-export const LayerControls: React.FC<LayerControlsProps> = ({ layers, onToggleLayer }) => {
+export const LayerControls: React.FC<LayerControlsProps> = ({
+  layers,
+  onToggleLayer,
+  selectedState,
+}) => {
   const visibleCount = Object.values(layers).filter(Boolean).length;
 
   return (
@@ -131,7 +153,11 @@ export const LayerControls: React.FC<LayerControlsProps> = ({ layers, onToggleLa
                     {layer.label}
                   </div>
                   <div className="mt-0.5 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted">
-                    {layer.source} · {layer.description}
+                    {layer.key === "qualifiedParcels"
+                      ? (PARCEL_SOURCE[selectedState ?? ""]
+                          ? `${PARCEL_SOURCE[selectedState ?? ""]} · ${layer.description}`
+                          : "No parcel survey in this region")
+                      : `${layer.source} · ${layer.description}`}
                   </div>
                 </div>
               </div>

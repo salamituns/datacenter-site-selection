@@ -377,7 +377,11 @@ export default function DashboardPage() {
             leftRailOpen ? "lg:block" : "lg:hidden"
           }`}
         >
-          <LayerControls layers={layers} onToggleLayer={handleToggleLayer} />
+          <LayerControls
+            layers={layers}
+            onToggleLayer={handleToggleLayer}
+            selectedState={selectedState}
+          />
           <ConstraintSliders
             weights={weights}
             onWeightChange={setWeights}
