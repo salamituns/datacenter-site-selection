@@ -68,6 +68,24 @@ export default function DashboardPage() {
   // Qualified cadastral parcels (Release 1 pilot) + the open qualification dossier.
   const [landParcels, setLandParcels] = useState<LandParcel[]>([]);
   const [selectedLandParcel, setSelectedLandParcel] = useState<LandParcel | null>(null);
+
+  /**
+   * The two dossiers read different things — a 10 km screening cell and a
+   * cadastral parcel — and only one can be the subject at a time.
+   *
+   * They used to be independent, which the centred modals hid: one simply
+   * covered the other. Docked side by side the overlap became visible,
+   * with two panels claiming the same edge. Selecting either now clears
+   * the other, so the panel always answers "what did I just click".
+   */
+  const selectGridCell = (p: GridParcel | null) => {
+    setSelectedLandParcel(null);
+    setSelectedParcel(p);
+  };
+  const selectLandParcel = (p: LandParcel | null) => {
+    setSelectedParcel(null);
+    setSelectedLandParcel(p);
+  };
   // Closing the qualification dossier cannot return focus to the parcel
   // that opened it: changing the selection makes the map rebuild every
   // polygon, so that node is already detached. Focus goes here instead.
@@ -78,7 +96,8 @@ export default function DashboardPage() {
   // parcel clear of it.
   const [dossierWidth, setDossierWidth] = useState(0);
   useEffect(() => {
-    if (!selectedLandParcel) { setDossierWidth(0); return; }
+    // Either dossier docks to the same edge, so either one covers the map.
+    if (!selectedLandParcel && !selectedParcel) { setDossierWidth(0); return; }
     const measure = () => {
       const el = document.querySelector<HTMLElement>("[data-dossier-panel]");
       setDossierWidth(el?.offsetWidth ?? 0);
@@ -90,7 +109,7 @@ export default function DashboardPage() {
       cancelAnimationFrame(id);
       window.removeEventListener("resize", measure);
     };
-  }, [selectedLandParcel]);
+  }, [selectedLandParcel, selectedParcel]);
 
   // Shortlist (Release 4d): the set of sites under active comparison.
   // Held as parcel_keys and resolved against landParcels, so a stale key
@@ -421,13 +440,13 @@ export default function DashboardPage() {
             parcels={displayParcels}
             layers={layers}
             selectedParcel={selectedParcel}
-            onSelectParcel={setSelectedParcel}
+            onSelectParcel={selectGridCell}
             isLiveSupabase={isLivePostgis}
             mapFeatures={mapFeatures}
             primeZones={primeResult.zones}
             landParcels={layers.qualifiedParcels ? landParcels : []}
             selectedLandParcel={selectedLandParcel}
-            onSelectLandParcel={setSelectedLandParcel}
+            onSelectLandParcel={selectLandParcel}
             revealInsetRight={dossierWidth}
           />
           {/* Rail chevrons hide while either dossier modal is open — they sit
@@ -462,7 +481,7 @@ export default function DashboardPage() {
           <RankedParcelsList
             parcels={displayParcels}
             selectedParcel={selectedParcel}
-            onSelectParcel={setSelectedParcel}
+            onSelectParcel={selectGridCell}
           />
         </div>
       </main>
@@ -478,7 +497,7 @@ export default function DashboardPage() {
         primeThreshold={primeThreshold}
         onPrimeThresholdChange={setPrimeThreshold}
         selectedParcel={selectedParcel}
-        onSelectParcel={setSelectedParcel}
+        onSelectParcel={selectGridCell}
         selectedState={selectedState}
         onStateChange={handleStateChange}
         regionCounts={regionCounts}
@@ -488,13 +507,13 @@ export default function DashboardPage() {
       />
 
       {/* Detailed site dossier */}
-      <ParcelDetailModal parcel={selectedParcel} onClose={() => setSelectedParcel(null)} />
+      <ParcelDetailModal parcel={selectedParcel} onClose={() => selectGridCell(null)} />
 
       {/* Parcel qualification dossier (Release 1) */}
       <ParcelQualificationModal
         parcel={selectedLandParcel}
         qualification={parcelQualification}
-        onClose={() => setSelectedLandParcel(null)}
+        onClose={() => selectLandParcel(null)}
         returnFocusTo={mapContainerRef}
         isShortlisted={
           selectedLandParcel != null &&

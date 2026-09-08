@@ -301,21 +301,24 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
 
   return (
     <>
-      {/* ── Desktop: centered modal (lg and up, unchanged behavior) ── */}
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Parcel ${parcel.grid_id} details`}
-        onClick={onClose}
-        className="fixed inset-0 z-50 hidden items-center justify-center bg-foreground/40 p-4 backdrop-blur-[2px] lg:flex"
+      {/* ── Desktop: docked beside the map, like the parcel dossier ──────
+          Same reasoning: a centred sheet behind a dimming backdrop puts
+          the map out of reach, so comparing two cells meant closing and
+          reopening. Docked, the map stays live and clicking another cell
+          swaps what this is reading.
+
+          A region rather than a dialog, and no focus trap, because the
+          page behind it is not inert — telling a screen reader otherwise,
+          or trapping Tab here, would put the map out of reach in exactly
+          the way the backdrop used to. ── */}
+      <aside
+        role="region"
+        aria-label={`Screening cell ${parcel.grid_id} dossier`}
+        data-dossier-panel
+        className="fixed right-0 top-0 z-50 hidden h-full w-[min(34rem,42vw)] flex-col overflow-y-auto border-l border-border-strong bg-surface shadow-overlay lg:flex"
       >
-        <div
-          onClick={(e) => e.stopPropagation()}
-          className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-[3px] border border-border-strong bg-surface shadow-overlay"
-        >
-          {dossierBody}
-        </div>
-      </div>
+        {dossierBody}
+      </aside>
 
       {/* ── Mobile: dossier as a draggable bottom sheet ── */}
       <div className="lg:hidden" role="dialog" aria-modal="true" aria-label={`Parcel ${parcel.grid_id} details`}>

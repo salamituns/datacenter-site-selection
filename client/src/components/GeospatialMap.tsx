@@ -426,8 +426,10 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
    */
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map || !selectedLandParcel) return;
-    const geom = selectedLandParcel.geojson_geom;
+    // Whichever dossier is open, keep its subject clear of the panel.
+    const subject = selectedLandParcel ?? selectedParcel;
+    if (!map || !subject) return;
+    const geom = subject.geojson_geom;
     if (!geom?.coordinates) return;
 
     const parts: number[][][] =
@@ -464,7 +466,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
     // A function of which parcel is selected and how much of the map the
     // panel covers, not of everything else the map redraws.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedLandParcel?.parcel_key, revealInsetRight, mapReady]);
+  }, [selectedLandParcel?.parcel_key, selectedParcel?.grid_id, revealInsetRight, mapReady]);
 
   return (
     <div className="relative h-full min-h-[360px] w-full overflow-hidden rounded-[3px] border border-border-strong bg-background">
