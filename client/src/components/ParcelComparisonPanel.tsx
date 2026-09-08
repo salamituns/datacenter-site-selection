@@ -334,7 +334,7 @@ export const ParcelComparisonPanel: React.FC<Props> = ({
                         );
                       })}
                     </Row>
-                    <Row label="Site preparation" note="Range, not an estimate — the unit cost is a placeholder.">
+                    <Row label="Site preparation" note="AACE Class 5 screening band, from this parcel's acreage and measured slope. Clearing and earthwork only.">
                       {rows.map((c) => {
                         const lo = num(c, "site_prep_cost_low_usd");
                         const hi = num(c, "site_prep_cost_high_usd");

@@ -20,6 +20,7 @@ The two estimates are deliberately not equally confident, and say so:
 """
 
 import logging
+import math
 import os
 from typing import Any, Dict, List, Optional
 
@@ -54,8 +55,16 @@ def load_assumptions(client: Any = None) -> Dict[str, Dict[str, Any]]:
     try:
         rows = (client.table("cost_assumptions")
                 .select("assumption_key,assumption_version,params,basis,"
-                        "source_url,source_org,unit,valid_from")
-                .order("valid_from", desc=True).execute().data or [])
+                        "source_url,source_org,unit,valid_from,valid_to,created_at")
+                # Superseded rows stay in the table — history is the point of
+                # a versioned ledger — but only a currently valid one may
+                # price anything. created_at breaks the tie when two versions
+                # share a valid_from, which they do when a revision lands the
+                # same day as the original.
+                .is_("valid_to", "null")
+                .order("valid_from", desc=True)
+                .order("created_at", desc=True)
+                .execute().data or [])
     except Exception as e:  # noqa: BLE001
         logger.warning("Cost assumptions unavailable (%s) — estimates skipped.", e)
         return {}
@@ -110,32 +119,115 @@ def rollback_tax_exposure(deferred_value: Optional[float],
     }
 
 
+SQFT_PER_ACRE = 43560.0
+CUFT_PER_CY = 27.0
+
+
+def _graded_cut_cy(pad_acres: float, slope_pct: float,
+                   terrace_relief_ft: float, max_terraces: int) -> Dict[str, Any]:
+    """
+    Cut volume to grade a pad, in cubic yards, allowing for terracing.
+
+    Levelling a square pad to a single plane costs slope * side^3 / 8. On
+    any real site that is a fiction: an 80-acre pad on a 4% grade falls
+    about 75 feet corner to corner, and no one cuts 37 feet to flatten it.
+    Campuses are built in steps.
+
+    Splitting the pad into N terraces across the fall line divides the
+    earthwork by N, since each step levels a shorter run. N is set by how
+    much relief a single step may carry, and then capped: a hyperscale
+    campus needs large contiguous pads and cannot be stepped indefinitely.
+    The cap is what keeps the estimate sensitive to terrain — past it, a
+    steeper site really is moving more earth.
+
+    Returns the volume with the terrace count used, so the estimate can be
+    read back rather than taken on faith.
+    """
+    side_ft = (pad_acres * SQFT_PER_ACRE) ** 0.5
+    relief_ft = (slope_pct / 100.0) * side_ft
+    single_plane_cy = (slope_pct / 100.0) * (side_ft ** 3) / 8.0 / CUFT_PER_CY
+    wanted = math.ceil(relief_ft / terrace_relief_ft) if terrace_relief_ft > 0 else 1
+    terraces = max(1, min(wanted, max_terraces))
+    return {
+        "cut_cubic_yards": single_plane_cy / terraces,
+        "terraces": terraces,
+        "terraces_wanted": max(1, wanted),
+        "site_relief_ft": relief_ft,
+        "terrace_capped": wanted > terraces,
+    }
+
+
 def site_prep_cost(developable_acres: Optional[float],
+                   median_slope_pct: Optional[float],
                    assumption: Optional[Dict[str, Any]]
                    ) -> Optional[Dict[str, Any]]:
     """
-    Clearing and rough grading over the developable area, as a range.
+    Clearing and mass earthwork for a graded pad, as an AACE Class 5
+    screening estimate.
 
-    Deliberately returns a low and a high with no expected value between
-    them. The underlying unit cost is not authoritative, and a midpoint
-    would invent a precision the source does not support.
+    AACE International 18R-97 classifies an estimate made at 0-2% project
+    definition by parametric methods, for go/no-go screening, as Class 5,
+    and gives it an expected accuracy of -50% to +100%. That is exactly
+    what this is, so the published band is applied rather than a range
+    invented for the purpose — the low and high are the standard's, not
+    ours.
+
+    Quantities come from the parcel's own measurements: developable
+    acreage, and median slope sampled per parcel from the 3DEP elevation
+    model. Two sites of equal size and different terrain therefore price
+    differently, which a flat per-acre rate could never show.
+
+    Returns None when slope is unsampled. Earthwork is most of the cost on
+    any site with relief, so an area-only figure would understate a steep
+    parcel while looking just as confident.
     """
-    if developable_acres is None or developable_acres <= 0 or assumption is None:
+    if (developable_acres is None or developable_acres <= 0
+            or median_slope_pct is None or assumption is None):
         return None
     p = assumption["params"]
-    lo, hi = float(p["usd_per_acre_low"]), float(p["usd_per_acre_high"])
-    acres = float(developable_acres)
+    pad = min(float(developable_acres), float(p["graded_pad_cap_acres"]))
+    grade = _graded_cut_cy(pad, float(median_slope_pct),
+                           float(p["terrace_relief_ft"]), int(p["max_terraces"]))
+    cy = grade["cut_cubic_yards"]
+
+    clearing = pad * float(p["clearing_usd_per_acre"])
+    earthwork = cy * float(p["earthwork_usd_per_cy"])
+    base = clearing + earthwork
+    lo = base * (1.0 + float(p["accuracy_low_pct"]) / 100.0)
+    hi = base * (1.0 + float(p["accuracy_high_pct"]) / 100.0)
+
     return {
-        "low": round(acres * lo, 2),
-        "high": round(acres * hi, 2),
+        "low": round(lo, 2),
+        "high": round(hi, 2),
+        "base": round(base, 2),
         "details": {
             **_cite(assumption),
-            "formula": "contiguous_developable_acreage * usd_per_acre",
-            "inputs": {"developable_acres": round(acres, 3),
-                       "usd_per_acre_low": lo, "usd_per_acre_high": hi},
+            "method": ("AACE International 18R-97 Class 5 parametric estimate; "
+                       "accuracy band -50%/+100% is the standard's own for this "
+                       "level of project definition"),
+            "formula": ("clearing = pad_acres * usd_per_acre; "
+                        "earthwork = (slope * sqrt(pad_area)^3 / 8 / terraces) "
+                        "* usd_per_cy; "
+                        "band applied to their sum"),
+            "inputs": {
+                "developable_acres": round(float(developable_acres), 3),
+                "graded_pad_acres": round(pad, 3),
+                "median_slope_pct": round(float(median_slope_pct), 3),
+                "clearing_usd_per_acre": p["clearing_usd_per_acre"],
+                "earthwork_usd_per_cy": p["earthwork_usd_per_cy"],
+            },
+            "quantities": {
+            "cut_cubic_yards": round(cy),
+            "terraces_assumed": grade["terraces"],
+            "site_relief_ft": round(grade["site_relief_ft"], 1),
+            # True where terrain wanted more steps than a campus can take,
+            # which is where a steeper site genuinely costs more.
+            "terrace_cap_reached": grade["terrace_capped"],
+        },
+            "components_usd": {"clearing": round(clearing, 2),
+                               "earthwork": round(earthwork, 2)},
+            "point_estimate_usd": round(base, 2),
             "scope": p.get("scope"),
             "excludes": p.get("excludes", []),
-            "confidence": ("low — placeholder unit cost, replace with your "
-                           "own cost model before relying on it"),
         },
     }

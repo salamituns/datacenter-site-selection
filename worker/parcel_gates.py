@@ -464,6 +464,10 @@ def qualify_parcels(
         # The assessor's own figures, carried verbatim. A parcel absent
         # from the roll emits nothing at all rather than zeroes, which
         # would read as "worthless" instead of "unrecorded".
+        # Reset per parcel: a carried-over slope would silently price this
+        # site off the last one's terrain.
+        median_slope_pct: Optional[float] = None
+
         assessed = assessment_of(assessments, str(row["pin"]))
         if assessed is not None:
             prov = {"source": assessed["source"],
@@ -530,6 +534,7 @@ def qualify_parcels(
                    evidence="derived", layer="roads")
         if slopes is not None and i in slopes:
             smax, smed, sn = slopes[i]
+            median_slope_pct = smed
             if smax is not None:
                 metric(pin, "slope_max_pct", smax, unit="percent",
                        evidence="derived", layer="slope",
@@ -598,7 +603,7 @@ def qualify_parcels(
                        details=rb["details"])
 
         sp = underwriting.site_prep_cost(
-            max(developable, 0.0), assumptions.get("site_prep"))
+            max(developable, 0.0), median_slope_pct, assumptions.get("site_prep"))
         if sp is not None:
             # A range, never a midpoint: the unit cost is not authoritative
             # and an expected value would invent precision it cannot carry.
