@@ -70,6 +70,40 @@ DEFAULT_RULE_PARAMS: Dict[str, Dict[str, Any]] = {
 
 
 
+def _num(v: Any) -> Optional[float]:
+    """
+    A float the JSON encoder will accept, or None.
+
+    `x is None` is not enough. Values arriving through pandas carry NaN
+    where a source had nothing, NaN is not None, and float(NaN) serialises
+    to a bare `NaN` token that is not valid JSON — which is how the first
+    Ohio publish died after a complete run. Infinities go the same way.
+    """
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(f) or math.isinf(f) else f
+
+
+def _json_safe(obj: Any) -> Any:
+    """
+    Recursively replaces NaN and infinity with None inside a details
+    payload. Assessment and incentive records come straight off a
+    dataframe, so they carry NaN wherever the county had no value, and
+    details is serialised to jsonb verbatim.
+    """
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, float):
+        return None if math.isnan(obj) or math.isinf(obj) else obj
+    return obj
+
+
 def _round_half_away(x: float) -> int:
     """
     Rounds like Postgres numeric rounding, half away from zero.
@@ -421,13 +455,15 @@ def qualify_parcels(
         metric_rows.append({
             "parcel_key": pin,
             "metric_key": key,
-            "value": None if value is None else round(float(value), 4),
+            # NaN and infinity are not JSON, and pandas produces NaN
+            # wherever a source had no value.
+            "value": (lambda f: None if f is None else round(f, 4))(_num(value)),
             "text_value": text_value,
             "unit": unit,
             "evidence_class": evidence,
             "source_snapshot_id": snapshots.get(layer),
             "retrieved_at": retrieve_time,
-            "details": details or {},
+            "details": _json_safe(details or {}),
         })
 
     def gate(pin: str, key: str, status: str, rationale: str,
@@ -459,7 +495,8 @@ def qualify_parcels(
             "county_name": county_name,
             "geom": _to_multi_wkt(geom),
             "gis_acreage": round(gis_acreage, 3),
-            "legal_acreage": None if legal_acreage is None else round(float(legal_acreage), 3),
+            "legal_acreage": (lambda f: None if f is None else round(f, 3))(
+                _num(legal_acreage)),
         })
 
         # ── metrics ───────────────────────────────────────────────────
