@@ -207,6 +207,21 @@ def qualify_parcels(
     Computes metrics and gates for every fetched parcel. Returns
     (parcel_records, metric_rows, gate_rows, stats) ready for staging.
     """
+    # A duplicated parcel id survives the whole run and only fails at the
+    # write, where the staged upsert hits "ON CONFLICT DO UPDATE cannot
+    # affect row a second time" after fifteen minutes of work. Cheaper to
+    # catch it here, and loudly: a jurisdiction whose ids are not unique
+    # needs its adapter looked at, not a silent last-one-wins.
+    if parcels_gdf is not None and len(parcels_gdf) > 0:
+        dupes = parcels_gdf["pin"].duplicated(keep="first")
+        if dupes.any():
+            offenders = sorted(set(parcels_gdf.loc[dupes, "pin"].astype(str)))
+            logger.warning(
+                "Duplicate parcel ids from the source (%d rows across %d ids: %s) — "
+                "keeping the first of each. The adapter should be filtering these.",
+                int(dupes.sum()), len(offenders), ", ".join(offenders[:5]))
+            parcels_gdf = parcels_gdf[~dupes]
+
     n = len(parcels_gdf)
     assumptions = assumptions or {}
     incentives_of = parcel_incentives or {}

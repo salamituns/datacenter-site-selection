@@ -29,6 +29,7 @@ data, not a defect to be papered over with an assumption.
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import geopandas as gpd
@@ -106,6 +107,15 @@ class FranklinParcelAPI:
     # screened on the same threshold rather than on different ones.
     MIN_SOURCE_ACRES = 20.0
 
+    # A real Franklin County parcel id is three digits, a dash, then six,
+    # optionally suffixed. The layer also carries mapped areas that are not
+    # parcels at all and share placeholder ids — OUT OF CO, VNP-RR,
+    # VNP-WATER, VNP-KNOWN — for out-of-county slivers, railroad corridors
+    # and water bodies. None of them carries an assessment, several share
+    # one id, and left in they would be qualified as candidate sites: the
+    # engine would have scored rivers and rail rights-of-way as land.
+    PARCEL_ID_RE = re.compile(r"^\d{3}-\d{6}(-\d+)?$")
+
     PARCEL_FIELDS = (
         "PARCELID,STATEDAREA,ACRES,CLASSCD,CLASSDSCRP,"
         "LNDVALUEBASE,BLDVALUEBASE,TOTVALUEBASE,CAUVLNDBASE,CAUV,"
@@ -161,6 +171,7 @@ class FranklinParcelAPI:
         if features is None:
             return None
         rows: List[Dict[str, Any]] = []
+        skipped: List[str] = []
         for f in features:
             props = f.get("properties") or {}
             pin = str(props.get("PARCELID") or "").strip()
@@ -178,6 +189,9 @@ class FranklinParcelAPI:
             # CAUV is a flag string in this service; anything other than a
             # clear negative is treated as enrolled, and the CAUV land
             # value is what quantifies it.
+            if not self.PARCEL_ID_RE.match(pin):
+                skipped.append(pin)
+                continue
             cauv_flag = str(props.get("CAUV") or "").strip().upper()
             rows.append({
                 "pin": pin,
@@ -195,6 +209,9 @@ class FranklinParcelAPI:
         if not rows:
             logger.warning("Franklin parcels: no features returned.")
             return None
+        if skipped:
+            logger.info("Franklin parcels: skipped %d non-parcel features (%s).",
+                        len(skipped), ", ".join(sorted(set(skipped))))
         gdf = _reconcile_legal_acreage(gpd.GeoDataFrame(rows, crs="EPSG:4326"))
         resolved = int(gdf["legal_acreage"].notna().sum())
         logger.info("Franklin parcels: %d parcels >= %g acres (GIS); "
