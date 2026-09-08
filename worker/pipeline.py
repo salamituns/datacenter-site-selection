@@ -399,11 +399,19 @@ def run_pipeline(
                                 "facilities_within_25mi", "networks_within_25mi",
                                 "best_networks_within_25mi"]].add_prefix("ixp_")
                 )
+                # A region can be entirely outside the metro radius —
+                # Taylor County is 138 miles from the nearest facility — in
+                # which case the whole column is NaN and max() is NaN too.
+                # That is the finding, not an error, so it is reported
+                # rather than cast.
+                best = clustered_gdf["ixp_best_networks_within_25mi"].max()
                 logger.info(
                     "Interconnection: %d/%d cells matched a facility; "
-                    "best in reach across the region %s networks.",
-                    int(clustered_gdf["ixp_facility"].notna().sum()), len(clustered_gdf),
-                    int(clustered_gdf["ixp_best_networks_within_25mi"].max()),
+                    "best peering in reach across the region: %s.",
+                    int(clustered_gdf["ixp_facility"].notna().sum()),
+                    len(clustered_gdf),
+                    "none within 25 mi" if pd.isna(best)
+                    else f"{int(best)} networks",
                 )
         else:
             logger.warning("PeeringDB unavailable — screening interconnection omitted.")
