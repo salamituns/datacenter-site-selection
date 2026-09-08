@@ -50,6 +50,20 @@ export interface GridParcel {
   cluster_label: string | null;
   is_prime_zone: boolean;
   megawatt_capacity_estimate: number | null;
+
+  // 5. Interconnection (PeeringDB) — every region, not only the parcel pilots
+  ixp_nearest_facility: string | null;
+  ixp_nearest_distance_miles: number | null;
+  /** Round trip light needs through fibre over the straight line. A floor
+   *  no route can beat, not a forecast. */
+  ixp_latency_floor_ms: number | null;
+  ixp_networks_at_nearest: number | null;
+  ixp_facilities_within_25mi: number | null;
+  ixp_networks_within_25mi: number | null;
+  /** Networks at the largest facility in reach — usually what decides
+   *  whether real peering is available, since the nearest facility is
+   *  often not the significant one. */
+  ixp_best_networks_within_25mi: number | null;
 }
 
 export interface LayerVisibility {

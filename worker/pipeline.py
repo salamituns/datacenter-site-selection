@@ -21,6 +21,7 @@ import os
 import sys
 import argparse
 import logging
+import math
 import traceback
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
@@ -36,6 +37,7 @@ from clustering_model import SiteClusteringModel
 from hifld_api import HIFLDPowerAPI
 from hazard_api import HazardAPI
 from loudoun_api import LoudounParcelAPI
+import network_evidence
 from parcel_gates import qualify_parcels, RULE_VERSIONS
 from runs import IngestionRun
 import overlay_layers
@@ -68,6 +70,11 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
         "grid_operator": "Bonneville Power Administration",
     },
 }
+
+# Equal-area projection for the screening grid. The parcel tier uses a
+# local UTM zone, which is right for one county and wrong for a country;
+# the screening grid spans four regions, so it measures in CONUS Albers.
+SCREENING_PLANAR_CRS = "EPSG:5070"
 
 # Regions with a cadastral parcel pilot, mapped to the jurisdiction whose
 # rules and cost assumptions govern them. Adding a region is an adapter
@@ -105,6 +112,29 @@ def _get_supabase_client() -> Optional[Any]:
     return create_client(supabase_url, service_key)
 
 
+def _text_or_none(v: Any) -> Optional[str]:
+    """Empty and NaN both mean the source had nothing to say."""
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return None
+    t = str(v).strip()
+    return t or None
+
+
+def _round_or_none(v: Any, places: int) -> Optional[float]:
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(f) or math.isinf(f) else round(f, places)
+
+
+def _int_or_none(v: Any) -> Optional[int]:
+    f = _round_or_none(v, 0)
+    return None if f is None else int(f)
+
+
 def _grid_records(gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
     """Builds staged screening-cell records from the scored grid."""
     records: List[Dict[str, Any]] = []
@@ -139,6 +169,18 @@ def _grid_records(gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
             "cluster_label": str(row["cluster_label"]),
             "is_prime_zone": bool(row["is_prime_zone"]),
             "megawatt_capacity_estimate": None,
+            # Interconnection. Absent rather than zero when PeeringDB was
+            # unreachable or the cell matched nothing: zero networks would
+            # read as "nothing here", which is a finding, not a gap.
+            "ixp_nearest_facility": _text_or_none(row.get("ixp_facility")),
+            "ixp_nearest_distance_miles": _round_or_none(row.get("ixp_distance_miles"), 3),
+            "ixp_latency_floor_ms": _round_or_none(
+                None if pd.isna(row.get("ixp_distance_miles"))
+                else network_evidence.latency_floor_ms(float(row["ixp_distance_miles"])), 4),
+            "ixp_networks_at_nearest": _int_or_none(row.get("ixp_net_count")),
+            "ixp_facilities_within_25mi": _int_or_none(row.get("ixp_facilities_within_25mi")),
+            "ixp_networks_within_25mi": _int_or_none(row.get("ixp_networks_within_25mi")),
+            "ixp_best_networks_within_25mi": _int_or_none(row.get("ixp_best_networks_within_25mi")),
             "metadata": {
                 "ingestion_version": PIPELINE_VERSION,
                 "capacity_note": (
@@ -338,6 +380,33 @@ def run_pipeline(
         logger.info("Step 5: Scoring & clustering…")
         scored_gdf = grid_parser.calculate_composite_scores(grid_gdf)
         clustered_gdf, cluster_summaries = clustering_model.fit_prime_zones_dbscan(scored_gdf)
+
+        # ── Interconnection, every region ──────────────────────────────
+        # PeeringDB is national and the screening grid covers all four
+        # regions, so this runs here rather than only on the parcel tier —
+        # which exists for two of them. Power says whether a site can be
+        # built; interconnection says whether it is worth building, and a
+        # region with no parcel pilot still deserves that answer.
+        screening_facilities = network_evidence.fetch_facilities()
+        if screening_facilities is not None:
+            planar_cells = clustered_gdf.to_crs(SCREENING_PLANAR_CRS)
+            near_cells = network_evidence.nearest_facilities(
+                planar_cells, screening_facilities, SCREENING_PLANAR_CRS
+            )
+            if near_cells is not None:
+                clustered_gdf = clustered_gdf.join(
+                    near_cells[["facility", "net_count", "distance_miles",
+                                "facilities_within_25mi", "networks_within_25mi",
+                                "best_networks_within_25mi"]].add_prefix("ixp_")
+                )
+                logger.info(
+                    "Interconnection: %d/%d cells matched a facility; "
+                    "best in reach across the region %s networks.",
+                    int(clustered_gdf["ixp_facility"].notna().sum()), len(clustered_gdf),
+                    int(clustered_gdf["ixp_best_networks_within_25mi"].max()),
+                )
+        else:
+            logger.warning("PeeringDB unavailable — screening interconnection omitted.")
 
         prime_parcels = clustered_gdf[clustered_gdf["is_prime_zone"] == True]  # noqa: E712
         logger.info("Screening: %d cells, %d prime across %d zones.",
@@ -543,7 +612,6 @@ def run_pipeline(
             # Interconnection (Release 5): PeeringDB's public register of
             # where networks actually meet. Power decides whether a site can
             # be built; interconnection decides whether it is worth building.
-            import network_evidence
             facilities = network_evidence.fetch_facilities()
             if run is not None:
                 snapshots["interconnection"] = run.snapshot(

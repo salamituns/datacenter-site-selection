@@ -188,6 +188,13 @@ export function mapGridParcelRow(item: any): GridParcel | null {
     cluster_label: str(item.cluster_label),
     is_prime_zone: Boolean(item.is_prime_zone),
     megawatt_capacity_estimate: num(item.megawatt_capacity_estimate),
+    ixp_nearest_facility: str(item.ixp_nearest_facility),
+    ixp_nearest_distance_miles: num(item.ixp_nearest_distance_miles),
+    ixp_latency_floor_ms: num(item.ixp_latency_floor_ms),
+    ixp_networks_at_nearest: num(item.ixp_networks_at_nearest),
+    ixp_facilities_within_25mi: num(item.ixp_facilities_within_25mi),
+    ixp_networks_within_25mi: num(item.ixp_networks_within_25mi),
+    ixp_best_networks_within_25mi: num(item.ixp_best_networks_within_25mi),
   };
 }
 

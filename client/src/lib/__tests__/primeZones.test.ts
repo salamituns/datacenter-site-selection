@@ -34,6 +34,13 @@ function parcel(id: string, lon: number, lat: number, score: number): GridParcel
     cluster_label: null,
     is_prime_zone: false,
     megawatt_capacity_estimate: null,
+  ixp_nearest_facility: null,
+  ixp_nearest_distance_miles: null,
+  ixp_latency_floor_ms: null,
+  ixp_networks_at_nearest: null,
+  ixp_facilities_within_25mi: null,
+  ixp_networks_within_25mi: null,
+  ixp_best_networks_within_25mi: null,
   };
 }
 
