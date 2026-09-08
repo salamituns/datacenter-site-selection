@@ -120,6 +120,13 @@ input[type="range"]::-moz-range-track {
   font: inherit;
 }
 
+/* Right-edge Leaflet controls step aside for a docked dossier, which
+   otherwise sits on top of the zoom buttons and the attribution. */
+.leaflet-right {
+  margin-right: var(--dossier-inset, 0px);
+  transition: margin-right 300ms ease;
+}
+
 /* Mobile: pinch-to-zoom replaces the zoom buttons, which would fight the
    floating top bar for space (Apple/Google Maps pattern). */
 @media (max-width: 1023px) {

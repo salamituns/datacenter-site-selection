@@ -315,7 +315,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
         role="region"
         aria-label={`Screening cell ${parcel.grid_id} dossier`}
         data-dossier-panel
-        className="fixed right-0 top-0 z-50 hidden h-full w-[min(34rem,42vw)] flex-col overflow-y-auto border-l border-border-strong bg-surface shadow-overlay lg:flex"
+        className="fixed right-0 top-16 z-50 hidden h-[calc(100vh-4rem)] w-[min(34rem,42vw)] flex-col overflow-y-auto border-l border-border-strong bg-surface shadow-overlay lg:flex"
       >
         {dossierBody}
       </aside>

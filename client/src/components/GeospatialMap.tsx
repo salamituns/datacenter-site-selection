@@ -469,7 +469,12 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
   }, [selectedLandParcel?.parcel_key, selectedParcel?.grid_id, revealInsetRight, mapReady]);
 
   return (
-    <div className="relative h-full min-h-[360px] w-full overflow-hidden rounded-[3px] border border-border-strong bg-background">
+    <div
+      // Leaflet places zoom and attribution against the right edge; the
+      // variable lets globals.css move them clear of a docked panel.
+      style={{ ["--dossier-inset" as string]: `${revealInsetRight}px` }}
+      className="relative h-full min-h-[360px] w-full overflow-hidden rounded-[3px] border border-border-strong bg-background"
+    >
       <div ref={mapContainerRef} className="absolute inset-0 z-0 h-full w-full" />
 
       {/* Graticule corner marks */}
@@ -500,7 +505,11 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
       </div>
 
       {/* Map key */}
-      <div className="absolute bottom-3 right-3 z-[500] border border-border-strong bg-surface/95 px-3 py-2 shadow-plate backdrop-blur">
+      <div
+        // Steps aside for a docked dossier rather than hiding under it.
+        style={{ right: `calc(0.75rem + ${revealInsetRight}px)` }}
+        className="absolute bottom-3 z-[500] border border-border-strong bg-surface/95 px-3 py-2 shadow-plate backdrop-blur transition-[right] duration-300"
+      >
         <div className="font-mono text-[8.5px] uppercase tracking-[0.18em] text-muted">
           Suitability
         </div>

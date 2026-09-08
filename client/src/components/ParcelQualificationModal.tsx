@@ -1287,7 +1287,7 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
         aria-label={dialogLabel}
         tabIndex={-1}
         data-dossier-panel
-        className="fixed right-0 top-0 z-[1000] flex h-full w-[min(34rem,42vw)] flex-col overflow-hidden border-l border-border-strong bg-surface shadow-overlay outline-none"
+        className="fixed right-0 top-16 z-[1000] flex h-[calc(100vh-4rem)] w-[min(34rem,42vw)] flex-col overflow-hidden border-l border-border-strong bg-surface shadow-overlay outline-none"
       >
         {body}
       </aside>
