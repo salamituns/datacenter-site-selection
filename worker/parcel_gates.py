@@ -663,9 +663,9 @@ def qualify_parcels(
                        text_value=f'{nf["facility"]} ({nf["operator"]})',
                        evidence="observed", layer="interconnection",
                        details={**prov, "city": nf["city"],
-                                "networks_present": int(nf["net_count"]),
-                                "carriers_present": int(nf["carrier_count"]),
-                                "exchanges_present": int(nf["ix_count"])})
+                                "networks_present": _num(nf["net_count"]),
+                                "carriers_present": _num(nf["carrier_count"]),
+                                "exchanges_present": _num(nf["ix_count"])})
                 metric(pin, "ixp_nearest_distance_miles",
                        float(nf["distance_miles"]), unit="miles",
                        evidence="derived", layer="interconnection", details=prov)
@@ -679,25 +679,30 @@ def qualify_parcels(
                                 "reading": ("a floor, not a forecast — no route is shorter "
                                             "than the straight line, and real paths run "
                                             "roughly 1.3-1.5x longer before switching")})
-                metric(pin, "ixp_networks_at_nearest", int(nf["net_count"]),
-                       unit="count", evidence="observed", layer="interconnection",
-                       details=prov)
-            if pd.notna(nf["networks_within_25mi"]):
-                metric(pin, "ixp_facilities_within_25mi",
-                       int(nf["facilities_within_25mi"]), unit="count",
-                       evidence="derived", layer="interconnection",
-                       details={"radius_miles": 25, "source": "PeeringDB"})
-                metric(pin, "ixp_networks_within_25mi",
-                       int(nf["networks_within_25mi"]), unit="count",
-                       evidence="derived", layer="interconnection",
-                       details={"radius_miles": 25, "source": "PeeringDB"})
-                metric(pin, "ixp_best_facility_networks_within_25mi",
-                       int(nf["best_networks_within_25mi"]), unit="count",
-                       evidence="derived", layer="interconnection",
-                       details={"radius_miles": 25, "source": "PeeringDB",
-                                "basis": ("largest facility in reach — the nearest one "
-                                          "can be a single-tenant room while a carrier "
-                                          "hotel sits a mile further out")})
+                nets = _num(nf["net_count"])
+                if nets is not None:
+                    metric(pin, "ixp_networks_at_nearest", int(nets),
+                           unit="count", evidence="observed",
+                           layer="interconnection", details=prov)
+            # Each field is guarded on itself. A parcel with nothing inside
+            # the radius has a real zero for the counts and NO best at all,
+            # because there is no facility to take a maximum of — every
+            # Taylor County parcel is like this, the nearest facility being
+            # 138 miles away. Guarding all three on one of them cast that
+            # NaN and killed the run.
+            radius = {"radius_miles": 25, "source": "PeeringDB"}
+            for key, mkey, extra in (
+                ("facilities_within_25mi", "ixp_facilities_within_25mi", {}),
+                ("networks_within_25mi", "ixp_networks_within_25mi", {}),
+                ("best_networks_within_25mi", "ixp_best_facility_networks_within_25mi",
+                 {"basis": ("largest facility in reach — the nearest one can be a "
+                            "single-tenant room while a carrier hotel sits a mile "
+                            "further out")}),
+            ):
+                v = _num(nf[key])
+                if v is not None:
+                    metric(pin, mkey, int(v), unit="count", evidence="derived",
+                           layer="interconnection", details={**radius, **extra})
 
         if slopes is not None and i in slopes:
             smax, smed, sn = slopes[i]

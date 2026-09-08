@@ -85,6 +85,9 @@ PARCEL_PILOTS: Dict[str, str] = {
     # Central Ohio is a PJM market, so power diligence, the national
     # overlays and PeeringDB all carry over unchanged.
     "OH": "Franklin County, OH",
+    # Abilene is in ERCOT, so unlike Ohio nothing from the PJM power
+    # diligence layer carries over and that gate stays UNKNOWN.
+    "TX": "Taylor County, TX",
 }
 
 logging.basicConfig(
@@ -437,6 +440,9 @@ def run_pipeline(
             if state_code == "OH":
                 from franklin_api import FranklinParcelAPI
                 county_api: Any = FranklinParcelAPI()
+            elif state_code == "TX":
+                from taylor_api import TaylorParcelAPI
+                county_api = TaylorParcelAPI()
             else:
                 county_api = LoudounParcelAPI()
             layers = county_api.fetch_all(min_lon, min_lat, max_lon, max_lat)

@@ -78,7 +78,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: worker/cache
-          key: worker-cache-${{ hashFiles('worker/overlay_layers.py', 'worker/power_evidence.py', 'worker/assessment_evidence.py', 'worker/network_evidence.py', 'worker/franklin_api.py') }}
+          key: worker-cache-${{ hashFiles('worker/overlay_layers.py', 'worker/power_evidence.py', 'worker/assessment_evidence.py', 'worker/network_evidence.py', 'worker/franklin_api.py', 'worker/taylor_api.py') }}
           restore-keys: |
             worker-cache-
 
