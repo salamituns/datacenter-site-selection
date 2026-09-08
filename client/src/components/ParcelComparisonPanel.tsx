@@ -26,7 +26,7 @@ type Axis = "cost" | "timing" | "evidence" | "risk";
 
 const AXES: { key: Axis; label: string; blurb: string }[] = [
   { key: "cost", label: "Cost", blurb: "What the land and the ground work are likely to take" },
-  { key: "timing", label: "Timing", blurb: "What the serving area's delivery record implies" },
+  { key: "timing", label: "Timing", blurb: "What the serving area's delivery record implies, and how close the networks are" },
   { key: "evidence", label: "Evidence", blurb: "How much of the verdict is measured rather than inferred" },
   { key: "risk", label: "Risk", blurb: "What could break the thesis outright" },
 ];
@@ -398,6 +398,45 @@ export const ParcelComparisonPanel: React.FC<Props> = ({
                       {rows.map((c) => {
                         const v = num(c, "rtep_area_on_time_pct");
                         return <Cell key={c.parcel.parcel_key}>{v == null ? "—" : `${v}%`}</Cell>;
+                      })}
+                    </Row>
+                    <Row label="Latency floor" note="Round trip light needs to the nearest facility. Cannot be beaten; real routes run 1.3-1.5x longer.">
+                      {rows.map((c) => {
+                        const v = num(c, "ixp_latency_floor_ms");
+                        return <Cell key={c.parcel.parcel_key}>{v == null ? "—" : `${v.toFixed(2)} ms`}</Cell>;
+                      })}
+                    </Row>
+                    <Row label="Nearest interconnection" note="Closest carrier hotel or colocation facility.">
+                      {rows.map((c) => {
+                        const d = num(c, "ixp_nearest_distance_miles");
+                        const n = num(c, "ixp_networks_at_nearest");
+                        return (
+                          <Cell key={c.parcel.parcel_key}>
+                            {d == null ? "—" : `${d.toFixed(1)} mi`}
+                            {n != null && (
+                              <span className="block font-mono text-[9.5px] text-muted">
+                                {n.toLocaleString()} networks there
+                              </span>
+                            )}
+                          </Cell>
+                        );
+                      })}
+                    </Row>
+                    <Row label="Peering in reach" note="Best facility within 25 miles — the nearest is often not the significant one.">
+                      {rows.map((c) => {
+                        const best = num(c, "ixp_best_facility_networks_within_25mi");
+                        const tot = num(c, "ixp_networks_within_25mi");
+                        const fac = num(c, "ixp_facilities_within_25mi");
+                        return (
+                          <Cell key={c.parcel.parcel_key}>
+                            {best == null ? "—" : `${best.toLocaleString()} networks`}
+                            {tot != null && fac != null && (
+                              <span className="block font-mono text-[9.5px] text-muted">
+                                {tot.toLocaleString()} across {fac} facilities
+                              </span>
+                            )}
+                          </Cell>
+                        );
                       })}
                     </Row>
                     <Row label="Upgrade cost (area)" note="PJM's own Board-approved estimates, not spend, and not this parcel's bill.">

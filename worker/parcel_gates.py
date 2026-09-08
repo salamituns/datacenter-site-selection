@@ -23,6 +23,7 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import MultiPolygon
 
+import network_evidence
 import underwriting
 from assessment_evidence import assessment_of
 
@@ -166,6 +167,7 @@ def qualify_parcels(
     water_gdf: Optional[gpd.GeoDataFrame] = None,
     assessments: Optional[pd.DataFrame] = None,
     assumptions: Optional[Dict[str, Dict[str, Any]]] = None,
+    facilities: Optional[gpd.GeoDataFrame] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
     """
     Computes metrics and gates for every fetched parcel. Returns
@@ -439,6 +441,9 @@ def qualify_parcels(
             "details": details or {},
         })
 
+    # Interconnection (Release 5): nearest facility and metro density.
+    network_of = network_evidence.nearest_facilities(planar, facilities, PLANAR_CRS)
+
     for i, row in parcels_gdf.iterrows():
         pin = f"{state_code}-{county_name.upper().replace(' ', '-')}-{row['pin']}"
         geom = row.geometry
@@ -532,6 +537,51 @@ def qualify_parcels(
         if road_dist_mi is not None and i in road_dist_mi.index:
             metric(pin, "road_distance_miles", road_dist_mi.loc[i], unit="miles",
                    evidence="derived", layer="roads")
+        # ── Release 5: interconnection ────────────────────────────────
+        if network_of is not None and i in network_of.index:
+            nf = network_of.loc[i]
+            if pd.notna(nf["facility"]):
+                prov = {"source": "PeeringDB", "facility_updated": nf["updated"]}
+                metric(pin, "ixp_nearest_facility", None,
+                       text_value=f'{nf["facility"]} ({nf["operator"]})',
+                       evidence="observed", layer="interconnection",
+                       details={**prov, "city": nf["city"],
+                                "networks_present": int(nf["net_count"]),
+                                "carriers_present": int(nf["carrier_count"]),
+                                "exchanges_present": int(nf["ix_count"])})
+                metric(pin, "ixp_nearest_distance_miles",
+                       float(nf["distance_miles"]), unit="miles",
+                       evidence="derived", layer="interconnection", details=prov)
+                metric(pin, "ixp_latency_floor_ms",
+                       network_evidence.latency_floor_ms(float(nf["distance_miles"])),
+                       unit="ms", evidence="derived", layer="interconnection",
+                       details={**prov,
+                                "basis": ("round trip for light through fibre over the "
+                                          "straight-line distance; c / n with n = 1.4682 "
+                                          "for standard single-mode fibre"),
+                                "reading": ("a floor, not a forecast — no route is shorter "
+                                            "than the straight line, and real paths run "
+                                            "roughly 1.3-1.5x longer before switching")})
+                metric(pin, "ixp_networks_at_nearest", int(nf["net_count"]),
+                       unit="count", evidence="observed", layer="interconnection",
+                       details=prov)
+            if pd.notna(nf["networks_within_25mi"]):
+                metric(pin, "ixp_facilities_within_25mi",
+                       int(nf["facilities_within_25mi"]), unit="count",
+                       evidence="derived", layer="interconnection",
+                       details={"radius_miles": 25, "source": "PeeringDB"})
+                metric(pin, "ixp_networks_within_25mi",
+                       int(nf["networks_within_25mi"]), unit="count",
+                       evidence="derived", layer="interconnection",
+                       details={"radius_miles": 25, "source": "PeeringDB"})
+                metric(pin, "ixp_best_facility_networks_within_25mi",
+                       int(nf["best_networks_within_25mi"]), unit="count",
+                       evidence="derived", layer="interconnection",
+                       details={"radius_miles": 25, "source": "PeeringDB",
+                                "basis": ("largest facility in reach — the nearest one "
+                                          "can be a single-tenant room while a carrier "
+                                          "hotel sits a mile further out")})
+
         if slopes is not None and i in slopes:
             smax, smed, sn = slopes[i]
             median_slope_pct = smed

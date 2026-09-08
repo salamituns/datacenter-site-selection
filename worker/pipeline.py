@@ -511,6 +511,28 @@ def run_pipeline(
             import underwriting
             assumptions = underwriting.load_assumptions(client)
 
+            # Interconnection (Release 5): PeeringDB's public register of
+            # where networks actually meet. Power decides whether a site can
+            # be built; interconnection decides whether it is worth building.
+            import network_evidence
+            facilities = network_evidence.fetch_facilities()
+            if run is not None:
+                snapshots["interconnection"] = run.snapshot(
+                    layer="interconnection",
+                    source_key="peeringdb_facilities",
+                    endpoint_url=network_evidence.PEERINGDB_FAC_URL,
+                    record_count=None if facilities is None else len(facilities),
+                    evidence_class="observed",
+                    quality=(None if facilities is None else {
+                        "facilities": int(len(facilities)),
+                        "networks_present_total": int(facilities.net_count.sum()),
+                    }),
+                    notes=(None if facilities is not None
+                           else "unavailable — interconnection metrics omitted"),
+                )
+            elif facilities is None:
+                logger.warning("PeeringDB unavailable — interconnection metrics omitted.")
+
             for layer_key, src, endpoint, count, note in (
                 ("utility_territories", "hifld_utility_territories",
                  overlay_layers.UTILITY_TERRITORY_URL,
@@ -567,7 +589,7 @@ def run_pipeline(
                 utility_gdf=utility_gdf, rtep_df=rtep_df, queue_gdf=queue_gdf,
                 apps_gdf=apps_gdf, parcel_evidence=parcel_evidence,
                 water_gdf=water_gdf, assessments=assessments,
-                assumptions=assumptions,
+                assumptions=assumptions, facilities=facilities,
             )
             logger.info("Parcel qualification: %d parcels, %d metric rows, %d gate rows.",
                         len(parcel_records), len(metric_rows), len(gate_rows))
