@@ -23,6 +23,7 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import MultiPolygon
 
+import underwriting
 from assessment_evidence import assessment_of
 
 logging.basicConfig(level=logging.INFO)
@@ -164,12 +165,14 @@ def qualify_parcels(
     parcel_evidence: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     water_gdf: Optional[gpd.GeoDataFrame] = None,
     assessments: Optional[pd.DataFrame] = None,
+    assumptions: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
     """
     Computes metrics and gates for every fetched parcel. Returns
     (parcel_records, metric_rows, gate_rows, stats) ready for staging.
     """
     n = len(parcels_gdf)
+    assumptions = assumptions or {}
     logger.info("Qualifying %d Loudoun parcels…", n)
 
     planar = parcels_gdf.to_crs(PLANAR_CRS)
@@ -579,6 +582,30 @@ def qualify_parcels(
         metric(pin, "contiguous_developable_acreage", max(developable, 0.0), unit="acres",
                evidence="derived", layer="parcels",
                details={"wetland_pct": round(wet_pct, 3), "floodway_pct": round(fw_pct, 3)})
+
+        # ── Release 4c: estimated costs, each citing its assumption ────
+        # These are the only `estimated` rows in the system. Each carries
+        # the observed inputs and the assumption that priced them, so the
+        # number can always be taken apart rather than merely believed.
+        if assessed is not None and assessed["deferred_value"] is not None:
+            rb = underwriting.rollback_tax_exposure(
+                assessed["deferred_value"], assumptions.get("land_use_rollback"))
+            if rb is not None:
+                # Emitted even at zero: "no roll-back exposure" is a real
+                # finding for a buyer, not an absence of analysis.
+                metric(pin, "land_use_rollback_tax_usd", rb["value"], unit="USD",
+                       evidence="estimated", layer="assessment",
+                       details=rb["details"])
+
+        sp = underwriting.site_prep_cost(
+            max(developable, 0.0), assumptions.get("site_prep"))
+        if sp is not None:
+            # A range, never a midpoint: the unit cost is not authoritative
+            # and an expected value would invent precision it cannot carry.
+            metric(pin, "site_prep_cost_low_usd", sp["low"], unit="USD",
+                   evidence="estimated", layer="parcels", details=sp["details"])
+            metric(pin, "site_prep_cost_high_usd", sp["high"], unit="USD",
+                   evidence="estimated", layer="parcels", details=sp["details"])
 
         # ── gates ─────────────────────────────────────────────────────
         # Zoning / data-center use

@@ -505,6 +505,12 @@ def run_pipeline(
             elif assessments is None:
                 logger.warning("Assessment roll unavailable — value metrics will be UNKNOWN.")
 
+            # Cost assumptions (Release 4c): the versioned, cited inputs
+            # behind every estimated figure. Absent, the estimates are
+            # skipped rather than computed from hard-coded numbers.
+            import underwriting
+            assumptions = underwriting.load_assumptions(client)
+
             for layer_key, src, endpoint, count, note in (
                 ("utility_territories", "hifld_utility_territories",
                  overlay_layers.UTILITY_TERRITORY_URL,
@@ -561,6 +567,7 @@ def run_pipeline(
                 utility_gdf=utility_gdf, rtep_df=rtep_df, queue_gdf=queue_gdf,
                 apps_gdf=apps_gdf, parcel_evidence=parcel_evidence,
                 water_gdf=water_gdf, assessments=assessments,
+                assumptions=assumptions,
             )
             logger.info("Parcel qualification: %d parcels, %d metric rows, %d gate rows.",
                         len(parcel_records), len(metric_rows), len(gate_rows))
