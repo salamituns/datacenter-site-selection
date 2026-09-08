@@ -11,7 +11,7 @@ import {
   PowerDocument,
 } from "@/types/parcel";
 import { fetchParcelPowerEvidence, fetchPowerDocuments } from "@/lib/supabase";
-import { X, Download, ChevronDown, ChevronUp, Scale } from "lucide-react";
+import { X, Download, ChevronDown, ChevronUp, Scale, Info } from "lucide-react";
 
 interface ParcelQualificationModalProps {
   parcel: LandParcel | null;
@@ -291,6 +291,367 @@ function SectionRule({ label, aside }: { label: string; aside?: string }) {
   );
 }
 
+
+/* ══ Bento primitives ══════════════════════════════════════════════════
+   Separation comes from space and type weight, not rules. The palette is
+   the project's own tokens rather than a fixed slate ramp, because this
+   surface has to survive the blueprint night theme as well as paper. ── */
+
+function Card({ children, span = "", label, info }: {
+  children: React.ReactNode; span?: string; label?: string; info?: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className={`relative rounded-xl bg-surface-raised/40 p-5 ${span}`}>
+      {(label || info) && (
+        <header className="mb-3 flex items-start justify-between gap-2">
+          {label && (
+            <h4 className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted">
+              {label}
+            </h4>
+          )}
+          {info && (
+            <button
+              onClick={() => setOpen((v) => !v)}
+              aria-expanded={open}
+              aria-label={open ? "Hide detail" : "Show detail"}
+              className={`-mt-1 -mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors ${
+                open ? "bg-foreground/10 text-foreground" : "text-muted hover:text-foreground"
+              }`}
+            >
+              <Info className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </header>
+      )}
+      {children}
+      {/* Provenance is disclosed, never dropped: the reader can always get
+          back to where a number came from, it just no longer competes with
+          the number itself for attention. */}
+      {info && open && (
+        <div className="mt-4 border-t border-border/50 pt-3 font-sans text-[11.5px] leading-[1.55] text-muted">
+          {info}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** A number that reads first, with its name underneath in a quieter voice. */
+function Stat({ value, label, sub, tone = "default" }: {
+  value: React.ReactNode; label: string; sub?: string;
+  tone?: "default" | "danger" | "warn" | "good" | "muted";
+}) {
+  const ink = {
+    default: "text-foreground",
+    danger: "text-danger dark:text-danger-night",
+    warn: "text-power dark:text-power-night",
+    good: "text-success dark:text-success-night",
+    muted: "text-muted",
+  }[tone];
+  return (
+    <div>
+      <div className={`font-mono text-[22px] font-semibold leading-none tabular-nums ${ink}`}>
+        {value}
+      </div>
+      <div className="mt-1.5 font-mono text-[9.5px] uppercase tracking-[0.12em] text-muted">
+        {label}
+      </div>
+      {sub && (
+        <div className="mt-0.5 font-sans text-[11px] leading-snug text-muted">{sub}</div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A thin proportion bar. Reads as telemetry rather than a table cell, and
+ * shows an absent measurement as an empty track rather than a zero one —
+ * nothing measured and none present are different findings.
+ */
+function Bar({ label, pct, tone = "neutral", suffix = "%" }: {
+  label: string; pct: number | null;
+  tone?: "neutral" | "danger" | "warn" | "good"; suffix?: string;
+}) {
+  const fill = {
+    neutral: "bg-foreground/40",
+    danger: "bg-danger dark:bg-danger-night",
+    warn: "bg-power dark:bg-power-night",
+    good: "bg-success dark:bg-success-night",
+  }[tone];
+  const width = pct == null ? 0 : Math.max(1.5, Math.min(100, pct));
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+          {label}
+        </span>
+        <span className={`font-mono text-[11.5px] tabular-nums ${
+          pct == null ? "text-muted" : "text-foreground"
+        }`}>
+          {pct == null ? "not measured" : `${pct.toFixed(1)}${suffix}`}
+        </span>
+      </div>
+      <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-foreground/[0.07]">
+        {pct != null && (
+          <div className={`h-full rounded-full ${fill}`} style={{ width: `${width}%` }} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Dot({ status }: { status: GateStatus }) {
+  const tone = {
+    PASS: "bg-success dark:bg-success-night",
+    CONDITIONAL: "bg-power dark:bg-power-night",
+    FAIL: "bg-danger dark:bg-danger-night",
+    UNKNOWN: "bg-border-strong",
+  }[status];
+  return <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone}`} aria-hidden="true" />;
+}
+
+function Pill({ tone, children }: {
+  tone: "danger" | "warn" | "good" | "muted"; children: React.ReactNode;
+}) {
+  const cls = {
+    danger: "bg-danger/12 text-danger dark:bg-danger-night/15 dark:text-danger-night",
+    warn: "bg-power/12 text-power dark:bg-power-night/15 dark:text-power-night",
+    good: "bg-success/12 text-success dark:bg-success-night/15 dark:text-success-night",
+    muted: "bg-foreground/[0.06] text-muted",
+  }[tone];
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[9.5px] font-semibold uppercase tracking-[0.12em] ${cls}`}>
+      {children}
+    </span>
+  );
+}
+
+
+/* ══ Overview — the at-a-glance layer ══════════════════════════════════
+   Everything here answers "should I keep reading". The gate list, the
+   full measurement table and the source documents stay one tab away
+   rather than on the page: 55 metrics is a reference, not a briefing. ── */
+
+/**
+ * "2025-12-31..2032-06-01" is a machine range, and at headline size it
+ * wraps to three lines and pushes the rest of its card off screen. The
+ * window is what matters at a glance, not the days.
+ */
+function fmtWindow(range: string | null): string | null {
+  if (!range) return null;
+  const [from, to] = range.split("..");
+  const month = (d?: string) => {
+    if (!d) return null;
+    const t = new Date(d);
+    return isNaN(t.getTime())
+      ? d
+      : t.toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+  };
+  const a = month(from), b = month(to);
+  return a && b ? `${a} – ${b}` : a ?? b ?? range;
+}
+
+function OverviewPanel({ parcel, gates, metrics }: {
+  parcel: LandParcel; gates: ParcelGateRow[]; metrics: ParcelMetricRow[];
+}) {
+  const num = (k: string): number | null => {
+    const v = metrics.find((m) => m.metric_key === k)?.value;
+    return v == null ? null : Number(v);
+  };
+  const text = (k: string): string | null =>
+    metrics.find((m) => m.metric_key === k)?.text_value ?? null;
+
+  const failed = gates.filter((g) => g.status === "FAIL");
+  const conditional = gates.filter((g) => g.status === "CONDITIONAL");
+  const unknown = gates.filter((g) => g.status === "UNKNOWN");
+
+  const acres = num("total_acreage");
+  const developable = num("contiguous_developable_acreage");
+  const land = num("assessed_land_value_usd");
+  const rollback = num("land_use_rollback_tax_usd");
+  const prepLo = num("site_prep_cost_low_usd");
+  const prepHi = num("site_prep_cost_high_usd");
+  const entryLo = [land, rollback, prepLo].every((v) => v != null)
+    ? land! + rollback! + prepLo! : null;
+  const entryHi = entryLo != null && prepHi != null ? land! + rollback! + prepHi! : null;
+
+  const latency = num("ixp_latency_floor_ms");
+  const peers = num("ixp_best_facility_networks_within_25mi");
+  const slipP90 = num("rtep_area_schedule_slip_p90_days");
+
+  const usd = (v: number | null) =>
+    v == null ? "—"
+      : Math.abs(v) >= 1e6 ? `$${(v / 1e6).toFixed(1)}M`
+      : Math.abs(v) >= 1e3 ? `$${(v / 1e3).toFixed(0)}k` : `$${v.toFixed(0)}`;
+
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
+      {/* Verdict — the only card that is never absent */}
+      <Card span="lg:col-span-3" label="Verdict">
+        <div className="flex flex-wrap items-center gap-2">
+          {failed.length > 0
+            ? <Pill tone="danger">{failed.length} blocking</Pill>
+            : <Pill tone="good">nothing blocking</Pill>}
+          {conditional.length > 0 && <Pill tone="warn">{conditional.length} conditional</Pill>}
+          {unknown.length > 0 && <Pill tone="muted">{unknown.length} unproven</Pill>}
+        </div>
+        {failed.length > 0 && (
+          <ul className="mt-4 space-y-1.5">
+            {failed.map((g) => (
+              <li key={g.gate_key} className="flex items-center gap-2">
+                <Dot status="FAIL" />
+                <span className="font-sans text-[12.5px] text-foreground">
+                  {gateLabel(g.gate_key)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {failed.length === 0 && unknown.length > 0 && (
+          <p className="mt-4 max-w-prose font-sans text-[12px] leading-[1.55] text-muted">
+            No gate blocks this site, but {unknown.length}{" "}
+            {unknown.length === 1 ? "is" : "are"} still awaiting source evidence — not a
+            pass, just not yet a failure.
+          </p>
+        )}
+      </Card>
+
+      {/* Site */}
+      <Card span="lg:col-span-3" label="Site">
+        <div className="grid grid-cols-2 gap-5">
+          <Stat value={acres == null ? "—" : Math.round(acres).toLocaleString()} label="Total acres" />
+          <Stat
+            value={developable == null ? "—" : Math.round(developable).toLocaleString()}
+            label="Developable"
+            sub={acres && developable ? `${((developable / acres) * 100).toFixed(0)}% of the parcel` : undefined}
+            tone={acres && developable && developable / acres < 0.6 ? "warn" : "default"}
+          />
+        </div>
+      </Card>
+
+      {/* Physical constraints, as proportion bars */}
+      <Card
+        span="lg:col-span-3"
+        label="Constraints"
+        info="Share of the parcel each constraint covers, measured from the source layer. An empty track means the layer was not available for this region, which is different from a zero."
+      >
+        <div className="space-y-3.5">
+          <Bar label="Wetland" pct={num("wetland_pct")} tone="warn" />
+          <Bar label="Floodway" pct={num("floodway_pct")} tone="danger" />
+          <Bar label="Protected land" pct={num("protected_land_pct")} tone="warn" />
+          <Bar label="Median slope" pct={num("slope_median_pct")} tone="neutral" />
+        </div>
+      </Card>
+
+      {/* Cost */}
+      <Card
+        span="lg:col-span-3"
+        label="Indicative entry cost"
+        info="Assessed land value plus roll-back tax exposure plus site preparation. Site prep is an AACE Class 5 screening estimate at -50%/+100%, so the span is the standard's, not a guess. Blank where any term is unrecorded — a total missing a term would compare two different things."
+      >
+        {entryLo == null ? (
+          <Stat value="—" label="Not priced here" tone="muted"
+                sub="One or more terms is unrecorded in this jurisdiction." />
+        ) : (
+          <>
+            <Stat value={`${usd(entryLo)} – ${usd(entryHi)}`} label="Land + roll-back + site prep" />
+            <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2">
+              <span className="font-mono text-[10.5px] text-muted">
+                land <span className="text-foreground">{usd(land)}</span>
+              </span>
+              <span className="font-mono text-[10.5px] text-muted">
+                roll-back{" "}
+                <span className={rollback ? "text-power dark:text-power-night" : "text-foreground"}>
+                  {rollback ? usd(rollback) : "none"}
+                </span>
+              </span>
+              <span className="font-mono text-[10.5px] text-muted">
+                prep <span className="text-foreground">{usd(prepLo)}–{usd(prepHi)}</span>
+              </span>
+            </div>
+          </>
+        )}
+      </Card>
+
+      {/* Connectivity */}
+      <Card
+        span="lg:col-span-2"
+        label="Interconnection"
+        info="Latency floor is the round trip light itself needs through fibre over the straight-line distance — a bound no route can beat, not a forecast. Peering is the largest facility within 25 miles, which usually decides whether real interconnection is available."
+      >
+        <Stat
+          value={latency == null ? "—" : `${latency.toFixed(2)} ms`}
+          label="Latency floor"
+          tone={latency == null ? "muted" : latency < 0.5 ? "good" : "warn"}
+        />
+        <div className="mt-4">
+          <Stat
+            value={peers == null ? "none in reach" : peers.toLocaleString()}
+            label="Networks at best facility"
+            tone={peers == null ? "danger" : peers >= 100 ? "good" : "warn"}
+          />
+        </div>
+      </Card>
+
+      {/* Power timing */}
+      <Card
+        span="lg:col-span-2"
+        label="Power delivery"
+        info="From the serving transmission area's own record: the projected in-service window for active upgrades, and how late that area has historically run against its own dates."
+      >
+        <Stat
+          value={
+            <span className="text-[14px] leading-tight">
+              {fmtWindow(text("rtep_area_energization_range")) ?? "—"}
+            </span>
+          }
+          label="Energization window"
+          tone={text("rtep_area_energization_range") ? "default" : "muted"}
+        />
+        <div className="mt-4">
+          <Stat
+            value={slipP90 == null ? "—" : `${slipP90 > 0 ? "+" : ""}${slipP90} d`}
+            label="p90 schedule slip"
+            tone={slipP90 == null ? "muted" : slipP90 > 90 ? "warn" : "good"}
+          />
+        </div>
+      </Card>
+
+      {/* Evidence quality — how much of the verdict is actually measured */}
+      <Card
+        span="lg:col-span-2"
+        label="Evidence"
+        info="Counted, not scored. Two sites can share a verdict and differ entirely in how much of it was measured rather than inferred or modelled."
+      >
+        <div className="space-y-3">
+          {(["observed", "derived", "estimated"] as const).map((cls) => {
+            const n = metrics.filter((m) => m.evidence_class === cls).length;
+            return (
+              <div key={cls} className="flex items-baseline justify-between">
+                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+                  {cls}
+                </span>
+                <span className={`font-mono text-[13px] tabular-nums ${
+                  n === 0 ? "text-muted" : "text-foreground"
+                }`}>{n}</span>
+              </div>
+            );
+          })}
+          <div className="flex items-baseline justify-between border-t border-border/50 pt-3">
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+              Gates unproven
+            </span>
+            <span className={`font-mono text-[13px] tabular-nums ${
+              unknown.length === 0 ? "text-muted" : "text-power dark:text-power-night"
+            }`}>{unknown.length}</span>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 /* ── A gate, at full weight — left verdict rule, tinted field ── */
 function BlockingGateRow({ gate }: { gate: ParcelGateRow }) {
   const { rule, tint } = VERDICT_INK[gate.status];
@@ -406,8 +767,8 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
   const [documents, setDocuments] = useState<PowerDocument[]>([]);
   const [evidence, setEvidence] = useState<ParcelPowerEvidence[]>([]);
 
-  type TabKey = "gate_results" | "measured_values" | "utility_documents";
-  const [activeTab, setActiveTab] = useState<TabKey>("gate_results");
+  type TabKey = "overview" | "gate_results" | "measured_values" | "utility_documents";
+  const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [passAccordionOpen, setPassAccordionOpen] = useState(false);
 
   const isDesktop = useIsDesktop();
@@ -418,7 +779,7 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
   useEffect(() => {
     if (parcel) {
       setSheet("half");
-      setActiveTab("gate_results");
+      setActiveTab("overview");
       setPassAccordionOpen(false);
     }
   }, [parcel?.parcel_key]);
@@ -475,7 +836,10 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
     URL.revokeObjectURL(url);
   };
 
-  const tabs: { key: TabKey; label: string; count: number }[] = [
+  const tabs: { key: TabKey; label: string; count: number | null }[] = [
+    // No count on Overview: it is a reading of the parcel, not a list of
+    // things, and a number there would invite counting rather than reading.
+    { key: "overview", label: "Overview", count: null },
     { key: "gate_results", label: "Gates", count: gates.length },
     { key: "measured_values", label: "Measured", count: metrics.length },
     { key: "utility_documents", label: "Evidence", count: documents.length + evidence.length },
@@ -555,7 +919,7 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
                     : "text-muted hover:bg-surface-raised/60 hover:text-foreground"
                 } ${i > 0 ? "border-l border-border-strong" : ""}`}
               >
-                {tab.label} · {tab.count}
+                {tab.count == null ? tab.label : `${tab.label} · ${tab.count}`}
               </button>
             );
           })}
@@ -563,6 +927,19 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* ── Overview: the at-a-glance layer ── */}
+        {activeTab === "overview" && (
+          <div
+            role="tabpanel"
+            id="qual-panel-overview"
+            aria-labelledby="qual-tab-overview"
+            tabIndex={0}
+            className="px-4 py-5 lg:px-6"
+          >
+            <OverviewPanel parcel={parcel} gates={gates} metrics={metrics} />
+          </div>
+        )}
+
         {/* ── Gates ── */}
         {activeTab === "gate_results" && (
           <div
@@ -774,8 +1151,10 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
         )}
       </div>
 
-      {/* ── Footer ── */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-border-strong px-4 py-3 lg:px-6">
+      {/* ── Action bar ──────────────────────────────────────────────────
+          Floats over the scrolling content on a blurred ground, so the
+          actions stay reachable without a rule cutting the page in two. ── */}
+      <div className="sticky bottom-0 z-20 flex shrink-0 flex-wrap items-center justify-between gap-3 bg-surface/80 px-4 py-3 backdrop-blur-md lg:px-6">
         <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted">
           {qualification
             ? `${gates.length} gates · ${metrics.length} metrics · lineage via ingestion run`
@@ -786,10 +1165,10 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
             <button
               onClick={onToggleShortlist}
               aria-pressed={isShortlisted}
-              className={`flex h-7 items-center gap-2 border px-3 font-mono text-[10px] uppercase tracking-[0.14em] transition-colors ${
+              className={`flex h-8 items-center gap-2 rounded-lg px-3.5 font-mono text-[10px] uppercase tracking-[0.14em] transition-colors ${
                 isShortlisted
-                  ? "border-accent-600 text-accent-600 dark:border-accent-400 dark:text-accent-400"
-                  : "border-border-strong text-muted hover:text-foreground"
+                  ? "bg-accent-600/12 text-accent-600 dark:bg-accent-400/15 dark:text-accent-400"
+                  : "text-muted hover:bg-surface-raised hover:text-foreground"
               }`}
             >
               <Scale className="h-3 w-3" />
@@ -798,7 +1177,7 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
           )}
           <button
             onClick={exportDossier}
-            className="flex h-7 items-center gap-2 bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.14em] text-background transition-opacity hover:opacity-80"
+            className="flex h-8 items-center gap-2 rounded-lg bg-foreground px-3.5 font-mono text-[10px] uppercase tracking-[0.14em] text-background transition-opacity hover:opacity-80"
           >
             <Download className="h-3 w-3" />
             Export
