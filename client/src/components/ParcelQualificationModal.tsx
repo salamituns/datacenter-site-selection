@@ -11,7 +11,7 @@ import {
   PowerDocument,
 } from "@/types/parcel";
 import { fetchParcelPowerEvidence, fetchPowerDocuments } from "@/lib/supabase";
-import { X, Download, ChevronDown, ChevronUp } from "lucide-react";
+import { X, Download, ChevronDown, ChevronUp, Scale } from "lucide-react";
 
 interface ParcelQualificationModalProps {
   parcel: LandParcel | null;
@@ -26,6 +26,11 @@ interface ParcelQualificationModalProps {
    * keyboard user lands back where they were instead of at the page top.
    */
   returnFocusTo?: React.RefObject<HTMLElement | null>;
+  /** Whether this parcel is already on the shortlist. */
+  isShortlisted?: boolean;
+  /** Omitted where shortlisting does not apply — the control then hides
+   *  rather than rendering as a dead button. */
+  onToggleShortlist?: () => void;
 }
 
 const GATE_LABELS: Record<string, string> = {
@@ -391,6 +396,8 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
   qualification,
   onClose,
   returnFocusTo,
+  isShortlisted = false,
+  onToggleShortlist,
 }) => {
   const [dragH, setDragH] = useState<number | null>(null);
   const [sheet, setSheet] = useState<SheetState>("half");
@@ -774,13 +781,29 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
             ? `${gates.length} gates · ${metrics.length} metrics · lineage via ingestion run`
             : "Loading qualification…"}
         </div>
-        <button
-          onClick={exportDossier}
-          className="flex h-7 items-center gap-2 bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.14em] text-background transition-opacity hover:opacity-80"
-        >
-          <Download className="h-3 w-3" />
-          Export
-        </button>
+        <div className="flex items-center gap-2">
+          {onToggleShortlist && (
+            <button
+              onClick={onToggleShortlist}
+              aria-pressed={isShortlisted}
+              className={`flex h-7 items-center gap-2 border px-3 font-mono text-[10px] uppercase tracking-[0.14em] transition-colors ${
+                isShortlisted
+                  ? "border-accent-600 text-accent-600 dark:border-accent-400 dark:text-accent-400"
+                  : "border-border-strong text-muted hover:text-foreground"
+              }`}
+            >
+              <Scale className="h-3 w-3" />
+              {isShortlisted ? "Shortlisted" : "Shortlist"}
+            </button>
+          )}
+          <button
+            onClick={exportDossier}
+            className="flex h-7 items-center gap-2 bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.14em] text-background transition-opacity hover:opacity-80"
+          >
+            <Download className="h-3 w-3" />
+            Export
+          </button>
+        </div>
       </div>
     </div>
   );

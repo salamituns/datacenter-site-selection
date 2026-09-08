@@ -8,6 +8,8 @@ import { ConstraintSliders } from "@/components/ConstraintSliders";
 import { RankedParcelsList } from "@/components/RankedParcelsList";
 import { ParcelDetailModal } from "@/components/ParcelDetailModal";
 import { ParcelQualificationModal } from "@/components/ParcelQualificationModal";
+import { ParcelComparisonPanel } from "@/components/ParcelComparisonPanel";
+import { Scale } from "lucide-react";
 import { PanelEdgeToggle } from "@/components/PanelEdgeToggle";
 import { MobileLayout } from "@/components/mobile/MobileLayout";
 import { INITIAL_PARCELS } from "@/components/mockData";
@@ -70,6 +72,41 @@ export default function DashboardPage() {
   // that opened it: changing the selection makes the map rebuild every
   // polygon, so that node is already detached. Focus goes here instead.
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Shortlist (Release 4d): the set of sites under active comparison.
+  // Held as parcel_keys and resolved against landParcels, so a stale key
+  // from a previous region simply drops out rather than rendering a ghost.
+  const [shortlistKeys, setShortlistKeys] = useState<string[]>([]);
+  const [compareOpen, setCompareOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("shortlist");
+      if (saved) setShortlistKeys(JSON.parse(saved));
+    } catch {
+      // Private mode or blocked storage — the shortlist is a convenience,
+      // not state worth failing the page over.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("shortlist", JSON.stringify(shortlistKeys));
+    } catch {
+      // As above: losing persistence must not break shortlisting.
+    }
+  }, [shortlistKeys]);
+
+  const shortlisted = useMemo(
+    () => shortlistKeys
+      .map((k) => landParcels.find((p) => p.parcel_key === k))
+      .filter((p): p is LandParcel => p !== undefined),
+    [shortlistKeys, landParcels]
+  );
+
+  const toggleShortlist = (key: string) =>
+    setShortlistKeys((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]);
   const [parcelQualification, setParcelQualification] = useState<ParcelQualification | null>(null);
 
   // Active map layers
@@ -426,7 +463,50 @@ export default function DashboardPage() {
         qualification={parcelQualification}
         onClose={() => setSelectedLandParcel(null)}
         returnFocusTo={mapContainerRef}
+        isShortlisted={
+          selectedLandParcel != null &&
+          shortlistKeys.includes(selectedLandParcel.parcel_key)
+        }
+        onToggleShortlist={
+          selectedLandParcel
+            ? () => toggleShortlist(selectedLandParcel.parcel_key)
+            : undefined
+        }
       />
+
+      {/* Shortlist comparison — the surface the release exists for. */}
+      {compareOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Shortlist comparison"
+          onClick={() => setCompareOpen(false)}
+          className="fixed inset-0 z-[1100] flex items-end justify-center bg-foreground/40 p-0 backdrop-blur-[2px] lg:items-center lg:p-6"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-t-[6px] border border-border-strong bg-surface shadow-overlay lg:h-[85vh] lg:rounded-[3px]"
+          >
+            <ParcelComparisonPanel
+              parcels={shortlisted}
+              onRemove={(k) => setShortlistKeys((p) => p.filter((x) => x !== k))}
+              onClear={() => setShortlistKeys([])}
+              onClose={() => setCompareOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Shortlist dock — only present once something is on it. */}
+      {shortlisted.length > 0 && !compareOpen && !selectedLandParcel && (
+        <button
+          onClick={() => setCompareOpen(true)}
+          className="fixed bottom-5 left-1/2 z-[900] flex -translate-x-1/2 items-center gap-2.5 border border-border-strong bg-foreground px-4 py-2.5 font-mono text-[11px] uppercase tracking-[0.14em] text-background shadow-overlay transition-opacity hover:opacity-90"
+        >
+          <Scale className="h-3.5 w-3.5" />
+          Compare {shortlisted.length} {shortlisted.length === 1 ? "site" : "sites"}
+        </button>
+      )}
     </div>
   );
 }

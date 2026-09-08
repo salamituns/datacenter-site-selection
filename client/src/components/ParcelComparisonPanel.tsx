@@ -1,0 +1,493 @@
+"use client";
+
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  GateStatus,
+  JurisdictionProgram,
+  LandParcel,
+  ParcelComparison,
+  ParcelMetricRow,
+} from "@/types/parcel";
+import { fetchJurisdictionPrograms, fetchParcelComparison } from "@/lib/supabase";
+import { X, Trash2, Download } from "lucide-react";
+
+interface Props {
+  parcels: LandParcel[];
+  onRemove: (parcelKey: string) => void;
+  onClear: () => void;
+  onClose: () => void;
+}
+
+/* The four axes the shortlist exists to answer. Cost and timing are the
+   obvious ones; evidence quality and thesis-breaking risk are the two a
+   suitability score cannot express, and they are given equal weight
+   here rather than relegated to a footnote. */
+type Axis = "cost" | "timing" | "evidence" | "risk";
+
+const AXES: { key: Axis; label: string; blurb: string }[] = [
+  { key: "cost", label: "Cost", blurb: "What the land and the ground work are likely to take" },
+  { key: "timing", label: "Timing", blurb: "What the serving area's delivery record implies" },
+  { key: "evidence", label: "Evidence", blurb: "How much of the verdict is measured rather than inferred" },
+  { key: "risk", label: "Risk", blurb: "What could break the thesis outright" },
+];
+
+const VERDICT_INK: Record<GateStatus, string> = {
+  PASS: "text-success dark:text-success-night border-success dark:border-success-night",
+  CONDITIONAL: "text-power dark:text-power-night border-power dark:border-power-night",
+  FAIL: "text-danger dark:text-danger-night border-danger dark:border-danger-night",
+  UNKNOWN: "text-muted border-border-strong",
+};
+
+function metric(c: ParcelComparison, key: string): ParcelMetricRow | undefined {
+  return c.qualification?.metrics.find((m) => m.metric_key === key);
+}
+
+function num(c: ParcelComparison, key: string): number | null {
+  const v = metric(c, key)?.value;
+  return v == null ? null : Number(v);
+}
+
+function usd(v: number | null, digits = 0): string {
+  if (v == null) return "—";
+  if (Math.abs(v) >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(v) >= 1_000) return `$${(v / 1_000).toFixed(digits ? 1 : 0)}k`;
+  return `$${v.toFixed(0)}`;
+}
+
+/** A dash is not the same as a zero. Unverified means the source had no
+ *  value; zero means the source recorded one. */
+function acres(v: number | null): string {
+  return v == null ? "—" : `${Math.round(v).toLocaleString()} ac`;
+}
+
+function Row({ label, note, children }: {
+  label: string; note?: string; children: React.ReactNode;
+}) {
+  return (
+    <tr className="border-b border-border/60 align-baseline">
+      <th scope="row" className="sticky left-0 z-10 bg-surface py-2.5 pr-4 text-left">
+        <span className="block font-mono text-[10px] uppercase tracking-[0.06em] text-foreground">
+          {label}
+        </span>
+        {note && (
+          <span className="mt-0.5 block max-w-[15rem] font-sans text-[10.5px] leading-snug text-muted">
+            {note}
+          </span>
+        )}
+      </th>
+      {children}
+    </tr>
+  );
+}
+
+function Cell({ children, dim }: { children: React.ReactNode; dim?: boolean }) {
+  return (
+    <td className={`py-2.5 pr-5 text-right font-mono text-[11.5px] tabular-nums ${
+      dim ? "text-muted" : "text-foreground"
+    }`}>
+      {children}
+    </td>
+  );
+}
+
+export const ParcelComparisonPanel: React.FC<Props> = ({
+  parcels, onRemove, onClear, onClose,
+}) => {
+  const [rows, setRows] = useState<ParcelComparison[]>([]);
+  const [programs, setPrograms] = useState<JurisdictionProgram[]>([]);
+  const [axis, setAxis] = useState<Axis>("cost");
+  const [loading, setLoading] = useState(false);
+
+  const keys = parcels.map((p) => p.parcel_key).join(",");
+
+  useEffect(() => {
+    if (parcels.length === 0) { setRows([]); return; }
+    let alive = true;
+    setLoading(true);
+    fetchParcelComparison(parcels)
+      .then((r) => { if (alive) setRows(r); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keys]);
+
+  useEffect(() => {
+    const code = parcels[0]?.state_code;
+    if (!code) return;
+    let alive = true;
+    fetchJurisdictionPrograms(code).then((p) => { if (alive) setPrograms(p); });
+    return () => { alive = false; };
+  }, [parcels[0]?.state_code]);
+
+  /* Site-prep is carried as a low/high pair with no midpoint, because the
+     unit cost behind it is a placeholder rather than a published schedule.
+     The table shows the span for the same reason. */
+  const totals = useMemo(() => rows.map((c) => {
+    const land = num(c, "assessed_land_value_usd");
+    const rollback = num(c, "land_use_rollback_tax_usd");
+    const lo = num(c, "site_prep_cost_low_usd");
+    const hi = num(c, "site_prep_cost_high_usd");
+    const known = [land, rollback, lo].filter((v) => v != null).length;
+    return {
+      land, rollback, lo, hi,
+      // Only summed when every component is present: a total quietly
+      // missing a term would compare two different things.
+      entryLow: known === 3 ? (land! + rollback! + lo!) : null,
+      entryHigh: known === 3 && hi != null ? (land! + rollback! + hi!) : null,
+    };
+  }), [rows]);
+
+  const exportCsv = () => {
+    const head = ["field", ...rows.map((r) => r.parcel.pin)];
+    const line = (label: string, vals: (string | number | null)[]) =>
+      [label, ...vals.map((v) => (v == null ? "" : String(v)))].join(",");
+    const body = [
+      line("verdict", rows.map((r) => r.parcel.overall_status ?? "")),
+      line("gis_acres", rows.map((r) => r.parcel.gis_acreage ?? "")),
+      line("assessed_land_value_usd", rows.map((r) => num(r, "assessed_land_value_usd"))),
+      line("land_use_rollback_tax_usd", rows.map((r) => num(r, "land_use_rollback_tax_usd"))),
+      line("site_prep_cost_low_usd", rows.map((r) => num(r, "site_prep_cost_low_usd"))),
+      line("site_prep_cost_high_usd", rows.map((r) => num(r, "site_prep_cost_high_usd"))),
+      line("annual_property_tax_usd", rows.map((r) => num(r, "annual_property_tax_usd"))),
+      line("rtep_area_schedule_slip_p90_days", rows.map((r) => num(r, "rtep_area_schedule_slip_p90_days"))),
+      line("failing_gates", rows.map((r) =>
+        (r.qualification?.gates.filter((g) => g.status === "FAIL").length ?? 0))),
+      line("unknown_gates", rows.map((r) => r.evidence.unknownGates)),
+      line("estimated_metrics", rows.map((r) => r.evidence.estimated)),
+    ];
+    const blob = new Blob([[head.join(","), ...body].join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "shortlist-comparison.csv"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-surface">
+      {/* Masthead */}
+      <div className="shrink-0 border-b border-border-strong px-4 pb-3 pt-4 lg:px-6">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="font-mono text-[20px] font-bold leading-none tracking-tight text-foreground lg:text-[24px]">
+              Shortlist
+            </h2>
+            <p className="mt-2 max-w-prose font-display text-[14px] leading-snug text-foreground">
+              {parcels.length === 0
+                ? "No sites shortlisted yet."
+                : `${parcels.length} ${parcels.length === 1 ? "site" : "sites"}, compared on what a suitability score cannot say.`}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {rows.length > 0 && (
+              <button onClick={exportCsv} aria-label="Export comparison"
+                className="flex h-7 items-center gap-1.5 border border-border-strong px-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted transition-colors hover:text-foreground">
+                <Download className="h-3 w-3" /> CSV
+              </button>
+            )}
+            {parcels.length > 0 && (
+              <button onClick={onClear}
+                className="flex h-7 items-center gap-1.5 border border-border-strong px-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted transition-colors hover:text-danger">
+                <Trash2 className="h-3 w-3" /> Clear
+              </button>
+            )}
+            <button onClick={onClose} aria-label="Close comparison"
+              className="flex h-7 w-7 items-center justify-center border border-border-strong text-muted transition-colors hover:bg-surface-raised hover:text-foreground">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {parcels.length > 0 && (
+          <div className="mt-3 flex border border-border-strong">
+            {AXES.map((a, i) => (
+              <button key={a.key} onClick={() => setAxis(a.key)}
+                aria-current={axis === a.key}
+                className={`flex-1 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors ${
+                  axis === a.key
+                    ? "bg-foreground text-background"
+                    : "text-muted hover:bg-surface-raised/60 hover:text-foreground"
+                } ${i > 0 ? "border-l border-border-strong" : ""}`}>
+                {a.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto px-4 py-4 lg:px-6">
+        {parcels.length === 0 ? (
+          <p className="max-w-prose font-sans text-[12px] leading-[1.55] text-muted">
+            Open a parcel from the map and add it to the shortlist. Sites can then
+            be compared side by side on cost, timing, evidence quality and the
+            risks that would break the thesis outright — the things a single
+            suitability score flattens away.
+          </p>
+        ) : loading && rows.length === 0 ? (
+          <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted">
+            Resolving shortlist…
+          </p>
+        ) : (
+          <>
+            <p className="mb-3 max-w-prose font-sans text-[11.5px] leading-[1.5] text-muted">
+              {AXES.find((a) => a.key === axis)?.blurb}.
+            </p>
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="border-b border-border-strong">
+                  <th className="sticky left-0 z-10 bg-surface py-2 pr-4 text-left font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
+                    Site
+                  </th>
+                  {rows.map((c) => (
+                    <th key={c.parcel.parcel_key} className="py-2 pr-5 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <span className="font-mono text-[12px] font-bold text-foreground">
+                          {c.parcel.pin}
+                        </span>
+                        <button onClick={() => onRemove(c.parcel.parcel_key)}
+                          aria-label={`Remove ${c.parcel.pin}`}
+                          className="text-muted transition-colors hover:text-danger">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                      {c.parcel.overall_status && (
+                        <span className={`mt-1 inline-block border px-1.5 py-px font-mono text-[8.5px] font-semibold uppercase tracking-[0.14em] ${VERDICT_INK[c.parcel.overall_status]}`}>
+                          {c.parcel.overall_status}
+                        </span>
+                      )}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {axis === "cost" && (
+                  <>
+                    <tr className="border-b border-border/60">
+                      <th scope="row" className="sticky left-0 z-10 bg-surface py-2.5 pr-4 text-left font-mono text-[10px] uppercase tracking-[0.06em] text-foreground">
+                        Acreage
+                      </th>
+                      {rows.map((c) => (
+                        <Cell key={c.parcel.parcel_key}>{acres(c.parcel.gis_acreage)}</Cell>
+                      ))}
+                    </tr>
+                    <Row label="Assessed land value" note="Assessor's opinion, not a sale price.">
+                      {rows.map((c) => (
+                        <Cell key={c.parcel.parcel_key}>{usd(num(c, "assessed_land_value_usd"))}</Cell>
+                      ))}
+                    </Row>
+                    <Row label="Land value / acre">
+                      {rows.map((c) => (
+                        <Cell key={c.parcel.parcel_key}>
+                          {usd(num(c, "assessed_land_value_per_acre_usd"), 1)}
+                        </Cell>
+                      ))}
+                    </Row>
+                    <Row label="Annual property tax" note="The county's own estimate.">
+                      {rows.map((c) => (
+                        <Cell key={c.parcel.parcel_key}>{usd(num(c, "annual_property_tax_usd"))}</Cell>
+                      ))}
+                    </Row>
+                    <Row label="Roll-back tax exposure" note="Triggered on conversion where the parcel is in land-use deferral.">
+                      {rows.map((c) => {
+                        const v = num(c, "land_use_rollback_tax_usd");
+                        return (
+                          <Cell key={c.parcel.parcel_key} dim={v === 0}>
+                            {v === 0 ? "none" : usd(v)}
+                          </Cell>
+                        );
+                      })}
+                    </Row>
+                    <Row label="Site preparation" note="Range, not an estimate — the unit cost is a placeholder.">
+                      {rows.map((c) => {
+                        const lo = num(c, "site_prep_cost_low_usd");
+                        const hi = num(c, "site_prep_cost_high_usd");
+                        return (
+                          <Cell key={c.parcel.parcel_key}>
+                            {lo == null ? "—" : `${usd(lo)} – ${usd(hi)}`}
+                          </Cell>
+                        );
+                      })}
+                    </Row>
+                    <tr className="border-t-2 border-border-strong">
+                      <th scope="row" className="sticky left-0 z-10 bg-surface py-3 pr-4 text-left">
+                        <span className="block font-mono text-[10px] font-bold uppercase tracking-[0.06em] text-foreground">
+                          Indicative entry cost
+                        </span>
+                        <span className="mt-0.5 block max-w-[15rem] font-sans text-[10.5px] leading-snug text-muted">
+                          Land + roll-back + site prep. Blank where any term is unrecorded — a
+                          total missing a term would compare two different things.
+                        </span>
+                      </th>
+                      {totals.map((t, i) => (
+                        <Cell key={rows[i].parcel.parcel_key}>
+                          {t.entryLow == null
+                            ? "—"
+                            : `${usd(t.entryLow)} – ${usd(t.entryHigh)}`}
+                        </Cell>
+                      ))}
+                    </tr>
+                  </>
+                )}
+
+                {axis === "timing" && (
+                  <>
+                    <Row label="Energization window" note="Projected in-service dates for active upgrades in the serving area.">
+                      {rows.map((c) => (
+                        <Cell key={c.parcel.parcel_key}>
+                          {metric(c, "rtep_area_energization_range")?.text_value ?? "—"}
+                        </Cell>
+                      ))}
+                    </Row>
+                    <Row label="Active upgrades (area)">
+                      {rows.map((c) => (
+                        <Cell key={c.parcel.parcel_key}>
+                          {num(c, "rtep_area_active_upgrades") ?? "—"}
+                        </Cell>
+                      ))}
+                    </Row>
+                    <Row label="Median slip" note="Track record, not forecast. Negative means delivered early.">
+                      {rows.map((c) => {
+                        const v = num(c, "rtep_area_schedule_slip_median_days");
+                        return <Cell key={c.parcel.parcel_key}>{v == null ? "—" : `${v > 0 ? "+" : ""}${v} d`}</Cell>;
+                      })}
+                    </Row>
+                    <Row label="p90 slip" note="The tail a schedule should be underwritten against.">
+                      {rows.map((c) => {
+                        const v = num(c, "rtep_area_schedule_slip_p90_days");
+                        return <Cell key={c.parcel.parcel_key}>{v == null ? "—" : `${v > 0 ? "+" : ""}${v} d`}</Cell>;
+                      })}
+                    </Row>
+                    <Row label="Delivered on time">
+                      {rows.map((c) => {
+                        const v = num(c, "rtep_area_on_time_pct");
+                        return <Cell key={c.parcel.parcel_key}>{v == null ? "—" : `${v}%`}</Cell>;
+                      })}
+                    </Row>
+                    <Row label="Upgrade cost (area)" note="PJM's own Board-approved estimates, not spend, and not this parcel's bill.">
+                      {rows.map((c) => {
+                        const v = num(c, "rtep_area_upgrade_cost_musd");
+                        return <Cell key={c.parcel.parcel_key} dim>{v == null ? "—" : `$${v.toLocaleString()}M`}</Cell>;
+                      })}
+                    </Row>
+                  </>
+                )}
+
+                {axis === "evidence" && (
+                  <>
+                    <Row label="Observed" note="Read from a source record.">
+                      {rows.map((c) => <Cell key={c.parcel.parcel_key}>{c.evidence.observed}</Cell>)}
+                    </Row>
+                    <Row label="Derived" note="Computed from observed inputs.">
+                      {rows.map((c) => <Cell key={c.parcel.parcel_key}>{c.evidence.derived}</Cell>)}
+                    </Row>
+                    <Row label="Estimated" note="Modelled against a named assumption. Treat with the least confidence.">
+                      {rows.map((c) => (
+                        <Cell key={c.parcel.parcel_key} dim={c.evidence.estimated === 0}>
+                          {c.evidence.estimated}
+                        </Cell>
+                      ))}
+                    </Row>
+                    <Row label="Gates still unproven" note="Awaiting source data — not a failure, but not a pass either.">
+                      {rows.map((c) => (
+                        <Cell key={c.parcel.parcel_key} dim={c.evidence.unknownGates === 0}>
+                          {c.evidence.unknownGates}
+                        </Cell>
+                      ))}
+                    </Row>
+                  </>
+                )}
+
+                {axis === "risk" && (
+                  <>
+                    <Row label="Failing gates" note="Any one of these disqualifies the site as it stands.">
+                      {rows.map((c) => {
+                        const f = c.qualification?.gates.filter((g) => g.status === "FAIL") ?? [];
+                        return (
+                          <Cell key={c.parcel.parcel_key} dim={f.length === 0}>
+                            {f.length === 0 ? "none" : f.length}
+                          </Cell>
+                        );
+                      })}
+                    </Row>
+                    <Row label="What fails">
+                      {rows.map((c) => {
+                        const f = c.qualification?.gates.filter((g) => g.status === "FAIL") ?? [];
+                        return (
+                          <td key={c.parcel.parcel_key} className="py-2.5 pr-5 text-right font-sans text-[11px] leading-snug text-danger dark:text-danger-night">
+                            {f.length === 0 ? <span className="text-muted">—</span>
+                              : f.map((g) => g.gate_key.replace(/_/g, " ")).join(", ")}
+                          </td>
+                        );
+                      })}
+                    </Row>
+                    <Row label="Conditional gates" note="Passable, but only with work.">
+                      {rows.map((c) => {
+                        const n = c.qualification?.gates.filter((g) => g.status === "CONDITIONAL").length ?? 0;
+                        return <Cell key={c.parcel.parcel_key} dim={n === 0}>{n === 0 ? "none" : n}</Cell>;
+                      })}
+                    </Row>
+                    <Row label="In land-use deferral" note="Conversion triggers roll-back tax under Code of Virginia 58.1-3237.">
+                      {rows.map((c) => {
+                        const t = metric(c, "in_land_use_deferral")?.text_value;
+                        return (
+                          <Cell key={c.parcel.parcel_key} dim={t !== "yes"}>
+                            {t == null ? "—" : t}
+                          </Cell>
+                        );
+                      })}
+                    </Row>
+                  </>
+                )}
+              </tbody>
+            </table>
+
+            {/* Jurisdiction programs — identical across these sites, so shown
+                once beneath the table rather than repeated per column. */}
+            {programs.length > 0 && (
+              <div className="mt-6 border-t border-border pt-4">
+                <h4 className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
+                  Statutory programs · {parcels[0]?.state_code} · same for every site here
+                </h4>
+                <div className="mt-3 space-y-2.5">
+                  {programs.map((p) => (
+                    <div key={p.program_key}
+                      className={`border border-border/60 border-l-[3px] px-4 py-3 ${
+                        p.kind === "levy"
+                          ? "border-l-danger bg-danger/[0.05] dark:border-l-danger-night dark:bg-danger-night/[0.07]"
+                          : "border-l-success bg-success/[0.05] dark:border-l-success-night dark:bg-success-night/[0.07]"
+                      }`}>
+                      <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <span className="font-mono text-[11px] font-semibold text-foreground">
+                          {p.program_name}
+                        </span>
+                        <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted">
+                          {p.kind === "levy" ? "cost" : p.kind} · {p.authority}
+                        </span>
+                      </div>
+                      <p className="mt-1.5 max-w-prose font-sans text-[11.5px] leading-[1.5] text-muted">
+                        {p.summary}
+                      </p>
+                      {p.policy_risk && (
+                        <p className="mt-1.5 max-w-prose font-sans text-[11.5px] leading-[1.5] text-foreground/90">
+                          <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted">
+                            Policy risk ·{" "}
+                          </span>
+                          {p.policy_risk}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <p className="mt-5 max-w-prose border-t border-border pt-3 font-sans text-[11.5px] leading-[1.55] text-muted">
+              A dash means the source recorded no value — never zero. Estimated
+              figures carry the assumption that produced them; open a site&rsquo;s
+              dossier to see it.
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};

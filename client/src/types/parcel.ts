@@ -197,3 +197,46 @@ export interface MapFeatures {
   substations: SubstationFeature[];
   wells: ObservationWellFeature[];
 }
+
+// ── Commercial underwriting (Release 4) ───────────────────────────────
+
+/** A statutory program that moves project economics. `kind` separates a
+ *  benefit from a cost: the table holds both, because showing an
+ *  exemption without the levy alongside it would be a one-sided number. */
+export interface JurisdictionProgram {
+  jurisdiction_code: string;
+  program_key: string;
+  program_name: string;
+  kind: "exemption" | "levy" | "grant" | "abatement" | "credit";
+  authority: string;
+  summary: string;
+  qualifying_conditions: Record<string, unknown> | null;
+  rate_params: Record<string, unknown> | null;
+  effective_from: string | null;
+  sunset_date: string | null;
+  /** Scheduled review, sunset or repeal exposure — the timing risk in
+   *  relying on the program across a development cycle. */
+  policy_risk: string | null;
+  source_url: string | null;
+  source_org: string | null;
+}
+
+/** How well evidenced a parcel is, counted rather than scored. Two sites
+ *  can share a verdict and differ entirely in how much of it is measured
+ *  versus still unproven, which is the distinction a shortlist needs. */
+export interface EvidenceProfile {
+  observed: number;
+  derived: number;
+  estimated: number;
+  manual: number;
+  fallback: number;
+  /** Gates still awaiting source data — unproven, not failed. */
+  unknownGates: number;
+}
+
+/** One shortlisted parcel, resolved for side-by-side comparison. */
+export interface ParcelComparison {
+  parcel: LandParcel;
+  qualification: ParcelQualification | null;
+  evidence: EvidenceProfile;
+}

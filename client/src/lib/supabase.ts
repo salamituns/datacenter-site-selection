@@ -1,8 +1,11 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import {
+  EvidenceProfile,
   GridParcel,
+  JurisdictionProgram,
   LandParcel,
   MapFeatures,
+  ParcelComparison,
   ParcelPowerEvidence,
   ParcelQualification,
   PowerDocument,
@@ -412,6 +415,106 @@ export async function fetchGridParcels(
     return mapped;
   } catch (err) {
     console.error("Failed to fetch parcels from Supabase:", err);
+    return [];
+  }
+}
+
+// ── Commercial underwriting (Release 4) ───────────────────────────────
+
+/**
+ * Statutory programs for a jurisdiction — both the exemptions that help
+ * and the levies that cost. Fetched together on purpose: a screen that
+ * showed Virginia's data-center sales tax exemption without the
+ * electricity consumption tax beside it would overstate the economics.
+ */
+export async function fetchJurisdictionPrograms(
+  jurisdictionCode: string
+): Promise<JurisdictionProgram[]> {
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from("jurisdiction_programs")
+      .select(
+        "jurisdiction_code,program_key,program_name,kind,authority,summary," +
+          "qualifying_conditions,rate_params,effective_from,sunset_date," +
+          "policy_risk,source_url,source_org"
+      )
+      .eq("jurisdiction_code", jurisdictionCode)
+      .order("kind");
+    if (error) {
+      console.error("Failed to fetch jurisdiction programs:", error);
+      return [];
+    }
+    return (data ?? []) as unknown as JurisdictionProgram[];
+  } catch (err) {
+    console.error("Failed to fetch jurisdiction programs:", err);
+    return [];
+  }
+}
+
+/** Counts a parcel's evidence rather than scoring it — the raw shape of
+ *  what is measured, what is inferred, and what is still unproven. */
+function evidenceProfile(q: ParcelQualification | null): EvidenceProfile {
+  const p: EvidenceProfile = {
+    observed: 0, derived: 0, estimated: 0, manual: 0, fallback: 0, unknownGates: 0,
+  };
+  if (!q) return p;
+  for (const m of q.metrics) {
+    const k = (m.evidence_class ?? "") as keyof EvidenceProfile;
+    if (k in p && k !== "unknownGates") p[k] += 1;
+  }
+  p.unknownGates = q.gates.filter((g) => g.status === "UNKNOWN").length;
+  return p;
+}
+
+/**
+ * Resolves a shortlist for side-by-side comparison.
+ *
+ * Fetches every parcel's gates and metrics in one round trip each rather
+ * than per parcel, then regroups client-side — a shortlist of a dozen
+ * sites would otherwise be two dozen sequential requests.
+ */
+export async function fetchParcelComparison(
+  parcels: LandParcel[]
+): Promise<ParcelComparison[]> {
+  if (!supabase || parcels.length === 0) return [];
+  const keys = parcels.map((p) => p.parcel_key);
+  try {
+    const [gatesRes, metricsRes] = await Promise.all([
+      supabase
+        .from("v_parcel_gates")
+        .select("parcel_key,gate_key,status,affected_area_pct,rationale")
+        .in("parcel_key", keys),
+      supabase
+        .from("v_parcel_metrics")
+        .select(
+          "parcel_key,metric_key,label,value,text_value,unit,evidence_class," +
+            "details,source_organization,source_dataset"
+        )
+        .in("parcel_key", keys),
+    ]);
+    if (gatesRes.error || metricsRes.error) {
+      console.error(
+        "Failed to fetch comparison:", gatesRes.error ?? metricsRes.error
+      );
+      return [];
+    }
+    const byKey = new Map<string, ParcelQualification>();
+    for (const k of keys) byKey.set(k, { gates: [], metrics: [] });
+    for (const g of (gatesRes.data ?? []) as any[]) {
+      byKey.get(g.parcel_key)?.gates.push(g);
+    }
+    for (const m of (metricsRes.data ?? []) as any[]) {
+      byKey.get(m.parcel_key)?.metrics.push(m);
+    }
+    // Preserves the caller's order: the shortlist is the user's ordering,
+    // not the database's.
+    return parcels.map((parcel) => {
+      const qualification = byKey.get(parcel.parcel_key) ?? null;
+      return { parcel, qualification, evidence: evidenceProfile(qualification) };
+    });
+  } catch (err) {
+    console.error("Failed to fetch comparison:", err);
     return [];
   }
 }
