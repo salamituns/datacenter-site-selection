@@ -29,6 +29,8 @@ WHAT IS NOT HERE, and why:
 """
 
 import logging
+import random
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -56,6 +58,38 @@ BROWSER_UA = (
 # Texas North Central (EPSG:2276), which geopandas reads from the .prj.
 AREA_CRS = "EPSG:5070"
 M2_PER_ACRE = 4046.8564224
+
+
+def _download(url: str, dest: Path, attempts: int = 4) -> None:
+    """
+    Fetches a published file, retrying a throttle rather than giving up.
+
+    The district serves from an ordinary web host that rate-limits, and it
+    answered a CI runner with 429 Too Many Requests where the same request
+    from a laptop succeeded. A 429 is a request to wait, not a refusal, so
+    it is waited out; a 404 is a real answer and is not retried.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    for attempt in range(attempts):
+        try:
+            r = requests.get(url, headers={"User-Agent": BROWSER_UA},
+                             timeout=300, stream=True)
+            if r.status_code in (429, 503):
+                raise requests.HTTPError(f"status {r.status_code}")
+            r.raise_for_status()
+            tmp = dest.with_suffix(".part")
+            with open(tmp, "wb") as fh:
+                for chunk in r.iter_content(chunk_size=1 << 20):
+                    fh.write(chunk)
+            tmp.replace(dest)
+            return
+        except Exception:  # noqa: BLE001
+            if attempt == attempts - 1:
+                raise
+            wait = 5 * (2 ** attempt) + random.uniform(0, 3)
+            logger.info("Taylor CAD download throttled or failed; retrying in %.0fs.",
+                        wait)
+            time.sleep(wait)
 
 
 class TaylorParcelAPI:
@@ -105,16 +139,7 @@ class TaylorParcelAPI:
         """
         try:
             if not PARCEL_CACHE.exists():
-                PARCEL_CACHE.parent.mkdir(parents=True, exist_ok=True)
-                logger.info("Downloading Taylor CAD parcel shapefile…")
-                r = requests.get(PARCEL_ZIP_URL, headers={"User-Agent": BROWSER_UA},
-                                 timeout=300, stream=True)
-                r.raise_for_status()
-                tmp = PARCEL_CACHE.with_suffix(".part")
-                with open(tmp, "wb") as fh:
-                    for chunk in r.iter_content(chunk_size=1 << 20):
-                        fh.write(chunk)
-                tmp.replace(PARCEL_CACHE)
+                _download(PARCEL_ZIP_URL, PARCEL_CACHE)
 
             gdf = gpd.read_file(f"zip://{PARCEL_CACHE}!{SHAPEFILE_MEMBER}")
         except Exception as e:  # noqa: BLE001

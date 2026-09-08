@@ -65,22 +65,32 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Steps 6b and 6c are 78% of a cold run (~12 of ~15 minutes), almost
-      # all of it re-downloading and re-clipping the same 64 MB: PAD-US
-      # protected land, the NWI wetlands geodatabase and the PJM RTEP XML.
-      # The pipeline already reuses these from worker/cache when present.
+      # Most of a cold run is re-downloading the same fixed datasets:
+      # PAD-US, the NWI state geodatabases, the county parcel and
+      # assessment files. The pipeline reuses these from worker/cache.
       #
-      # Restored for dry runs only. A publishing run must not build on a
-      # stale snapshot — RTEP upgrades change week to week — so cron and
-      # dispatch always re-download and pay the full cost deliberately.
+      # Restored on every run, including publishes. Skipping it on
+      # publishes was too blunt: it forced a re-download of artefacts that
+      # cannot change — a shapefile whose own filename carries the date it
+      # was cut — and Taylor County's server answered a publish run with
+      # 429 Too Many Requests, which failed the run outright. Freshness is
+      # instead enforced below, on the one file that actually moves.
       - name: Restore clipped geospatial datasets
-        if: env.DRY_RUN != ''
         uses: actions/cache@v4
         with:
           path: worker/cache
           key: worker-cache-${{ hashFiles('worker/overlay_layers.py', 'worker/power_evidence.py', 'worker/assessment_evidence.py', 'worker/network_evidence.py', 'worker/franklin_api.py', 'worker/taylor_api.py') }}
           restore-keys: |
             worker-cache-
+
+      # PJM republishes RTEP upgrade costs and in-service dates weekly, so
+      # a publishing run must not read last week's copy. Everything else in
+      # the cache is a dated or annual artefact and is reused. Targeted
+      # rather than clearing the cache, so one moving file does not cost a
+      # re-download of a gigabyte of static ones.
+      - name: Force-refresh time-varying sources on a publishing run
+        if: env.DRY_RUN == ''
+        run: rm -f worker/cache/pjm_project_cost_upgrades.xml
 
       - name: Run Pipeline & Sync PostGIS Data
         env:

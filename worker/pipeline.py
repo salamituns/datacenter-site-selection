@@ -493,10 +493,15 @@ def run_pipeline(
                     logger.warning("Layer %s unavailable — its gates will be UNKNOWN.", layer_key)
 
             if parcels_gdf is None:
+                # A jurisdiction with a parcel pilot must produce parcels.
+                # Publishing screening cells alone would quietly retire
+                # every parcel already live for the region, because the
+                # promote deactivates any parcel the run did not restage.
                 raise RuntimeError(
-                    "Loudoun parcel layer unavailable — parcel qualification cannot "
-                    "run (screening cells alone are not sufficient for publication "
-                    "of a VA run with parcels enabled)."
+                    f"{jurisdiction} parcel layer unavailable — parcel "
+                    f"qualification cannot run, and publishing {state_code} "
+                    f"on screening cells alone would deactivate the "
+                    f"region's existing parcels."
                 )
 
             # Verification layers: TIGER roads, PAD-US protected areas,
