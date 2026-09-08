@@ -278,9 +278,11 @@ function snapHeights(): Record<SheetState, number> {
 }
 
 /* ── Section rule — the only heading treatment, no decorative icon ── */
+/** A heading, not a rule. At this weight and tracking the type already
+ *  separates sections; a border under it was belt and braces. */
 function SectionRule({ label, aside }: { label: string; aside?: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 border-b border-border pb-1.5">
+    <div className="mb-3 flex items-baseline justify-between gap-4">
       <h4 className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted">{label}</h4>
       {aside && (
         <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.1em] tabular-nums text-muted">
@@ -290,7 +292,6 @@ function SectionRule({ label, aside }: { label: string; aside?: string }) {
     </div>
   );
 }
-
 
 /* ══ Bento primitives ══════════════════════════════════════════════════
    Separation comes from space and type weight, not rules. The palette is
@@ -652,103 +653,146 @@ function OverviewPanel({ parcel, gates, metrics }: {
   );
 }
 
-/* ── A gate, at full weight — left verdict rule, tinted field ── */
+/* ── A gate as a card. The verdict is a dot and the ink of the label;
+      the rationale is prose at reading size; a coverage figure is a bar
+      rather than a ruled-off row. ── */
 function BlockingGateRow({ gate }: { gate: ParcelGateRow }) {
-  const { rule, tint } = VERDICT_INK[gate.status];
+  const tone = {
+    FAIL: "danger", CONDITIONAL: "warn", UNKNOWN: "muted", PASS: "good",
+  }[gate.status] as "danger" | "warn" | "muted" | "good";
+  const ink = {
+    danger: "text-danger dark:text-danger-night",
+    warn: "text-power dark:text-power-night",
+    good: "text-success dark:text-success-night",
+    muted: "text-muted",
+  }[tone];
   return (
-    <div className={`border border-border/60 border-l-[3px] ${rule} ${tint} px-4 py-3.5`}>
-      <div className="flex items-start justify-between gap-3">
-        <span className="font-mono text-[11.5px] font-semibold leading-snug text-foreground">
-          {gateLabel(gate.gate_key)}
+    <div className="rounded-xl bg-surface-raised/40 p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-2.5">
+          <Dot status={gate.status} />
+          <span className="font-mono text-[12px] font-semibold text-foreground">
+            {gateLabel(gate.gate_key)}
+          </span>
+        </div>
+        <span className={`shrink-0 font-mono text-[9.5px] font-semibold uppercase tracking-[0.14em] ${ink}`}>
+          {gate.status}
         </span>
-        <StatusChip status={gate.status} />
       </div>
       {gate.rationale && (
-        <p className="mt-2 max-w-prose font-sans text-[12px] leading-[1.55] text-muted">
+        <p className="mt-2.5 max-w-prose font-sans text-[12.5px] leading-[1.6] text-muted">
           {gate.rationale}
         </p>
       )}
       {gate.affected_area_pct != null && (
-        <div className="mt-2.5 flex items-baseline justify-between gap-3 border-t border-border/50 pt-2">
-          <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted">
-            Parcel area affected
-          </span>
-          <span className="font-mono text-[11px] font-semibold tabular-nums text-foreground">
-            {gate.affected_area_pct.toFixed(1)}%
-          </span>
+        <div className="mt-4">
+          <Bar label="Parcel area affected" pct={gate.affected_area_pct} tone={tone === "muted" ? "neutral" : tone} />
         </div>
       )}
     </div>
   );
 }
 
-/* ── A settled gate, at ledger weight — name, verdict, nothing else ── */
+/** A settled gate: name, dot, nothing else. It earned its place by not
+ *  needing explaining. */
 function PassedGateRow({ gate }: { gate: ParcelGateRow }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 px-4 py-2.5">
-      <span className="font-mono text-[11px] text-foreground/80">{gateLabel(gate.gate_key)}</span>
-      <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-success dark:text-success-night">
-        Pass
+    <div className="flex items-center gap-2.5 px-1 py-2">
+      <Dot status="PASS" />
+      <span className="font-sans text-[12.5px] text-foreground/80">
+        {gateLabel(gate.gate_key)}
       </span>
     </div>
   );
 }
 
-/* ── A measured value carries its own provenance — no second table.
- *    Numeric readings sit inline against a right-aligned figure; a long
- *    text value (a utility name, a date range) stacks instead, so the
- *    label and the value stop competing for the same line. ── */
-function MetricRow({ metric }: { metric: ParcelMetricRow }) {
-  const value =
-    metric.value != null
-      ? `${Number(metric.value).toLocaleString()}${
-          metric.unit === "percent" ? "%" : metric.unit ? ` ${metric.unit}` : ""
-        }`
-      : metric.text_value ?? "Unverified";
-  const source = [metric.evidence_class, metric.source_organization].filter(Boolean).join(" · ");
-  const unrecorded = metric.value == null && !metric.text_value;
-  const stacked = metric.value == null && (metric.text_value?.length ?? 0) > 16;
+/* ══ Measured values ═══════════════════════════════════════════════════
+   Fifty-one measurements under one heading is a data dump. Grouping them
+   by what they describe turns the same rows into six or seven readable
+   cards, and lets provenance move behind a disclosure per group rather
+   than repeating a source line under every value. ── */
 
-  const label = (
-    <div className="font-mono text-[10.5px] uppercase leading-snug tracking-[0.06em] text-foreground">
-      {metric.label ?? metric.metric_key}
-    </div>
-  );
-  // Provenance wraps rather than truncating — a hidden source is worse
-  // than a second line.
-  const lineage = (
-    <div className="mt-0.5 font-mono text-[9px] uppercase leading-snug tracking-[0.08em] text-muted">
-      {source || "no source recorded"}
-    </div>
-  );
-  const figure = (
-    <div
-      className={`font-mono text-[12px] leading-snug tabular-nums ${
-        unrecorded ? "text-muted" : "text-foreground"
-      }`}
-    >
-      {value}
-    </div>
-  );
+const METRIC_GROUPS: { label: string; match: RegExp }[] = [
+  // "acreage", not "acre": the loose form also caught
+  // assessed_land_value_per_acre_usd, which is a price and belongs with
+  // the other money.
+  { label: "Land & assembly", match: /acreage|assembly|adjoining/i },
+  { label: "Physical constraints", match: /wetland|flood|slope|protected|soil/i },
+  { label: "Power", match: /^(rtep|pjm|serving_utility|utility|substation|transmission|dc_application|parcel_utility)|power|energization|kv$/i },
+  { label: "Water", match: /water/i },
+  { label: "Interconnection", match: /^ixp_/i },
+  { label: "Value, tax & incentives", match: /assessed|tax|land_use|site_prep|abatement|tif_|value/i },
+  { label: "Zoning & use", match: /zoning|classification|use_status|assessment_class/i },
+];
 
-  if (stacked) {
-    return (
-      <div className="border-b border-border/60 py-2.5">
-        {label}
-        <div className="mt-1">{figure}</div>
-        {lineage}
-      </div>
+function groupMetrics(metrics: ParcelMetricRow[]) {
+  const seen = new Set<string>();
+  const groups = METRIC_GROUPS.map(({ label, match }) => {
+    const rows = metrics.filter(
+      (m) => !seen.has(m.metric_key) && match.test(m.metric_key)
     );
-  }
+    rows.forEach((m) => seen.add(m.metric_key));
+    return { label, rows };
+  }).filter((g) => g.rows.length > 0);
 
+  // Anything the groups did not claim still has to appear: a measurement
+  // silently dropped because no pattern matched it would be worse than an
+  // ugly heading.
+  const rest = metrics.filter((m) => !seen.has(m.metric_key));
+  if (rest.length) groups.push({ label: "Other measurements", rows: rest });
+  return groups;
+}
+
+function metricValue(m: ParcelMetricRow): string {
+  if (m.value != null) {
+    const n = Number(m.value);
+    const unit = m.unit === "percent" ? "%" : m.unit ? ` ${m.unit}` : "";
+    const shown = Math.abs(n) >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 })
+      : Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, "");
+    return `${shown}${unit}`;
+  }
+  return m.text_value ?? "Unverified";
+}
+
+/** One measurement: name left, value right, no rule between them. */
+function MetricRow({ metric }: { metric: ParcelMetricRow }) {
+  const unrecorded = metric.value == null && !metric.text_value;
+  const value = metricValue(metric);
+  const stacked = metric.value == null && (metric.text_value?.length ?? 0) > 18;
   return (
-    <div className="flex items-baseline justify-between gap-4 border-b border-border/60 py-2.5">
-      <div className="min-w-0">
-        {label}
-        {lineage}
-      </div>
-      <div className="shrink-0 text-right">{figure}</div>
+    <div className={stacked ? "py-1.5" : "flex items-baseline justify-between gap-4 py-1.5"}>
+      <span className="font-mono text-[10.5px] uppercase leading-snug tracking-[0.06em] text-muted">
+        {metric.label ?? metric.metric_key}
+      </span>
+      <span className={`font-mono text-[12px] leading-snug tabular-nums ${
+        stacked ? "mt-1 block" : "shrink-0 text-right"
+      } ${unrecorded ? "text-muted" : "text-foreground"}`}>
+        {value}
+      </span>
     </div>
+  );
+}
+
+/** Sources for a group, collapsed into one line per organisation rather
+ *  than repeated under every measurement. */
+function groupProvenance(rows: ParcelMetricRow[]): React.ReactNode {
+  const byOrg = new Map<string, Set<string>>();
+  for (const m of rows) {
+    const org = m.source_organization ?? "no source recorded";
+    if (!byOrg.has(org)) byOrg.set(org, new Set());
+    if (m.evidence_class) byOrg.get(org)!.add(m.evidence_class);
+  }
+  return (
+    <ul className="space-y-1.5">
+      {Array.from(byOrg.entries()).map(([org, classes]) => (
+        <li key={org} className="flex flex-wrap items-baseline gap-x-2">
+          <span className="text-foreground">{org}</span>
+          <span className="font-mono text-[9.5px] uppercase tracking-[0.1em]">
+            {Array.from(classes).sort().join(" · ") || "—"}
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -947,51 +991,46 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
             id="qual-panel-gate_results"
             aria-labelledby="qual-tab-gate_results"
             tabIndex={0}
-            className="px-4 py-4 lg:px-6 lg:py-5"
+            className="px-4 py-5 lg:px-6"
           >
             <SectionRule
               label="Gate results · by actionability"
-              aside={
-                gates.length === 0
-                  ? undefined
-                  : `${attentionGates.length} open · ${passedGates.length} passed`
-              }
+              aside={gates.length === 0 ? undefined
+                : `${attentionGates.length} open · ${passedGates.length} passed`}
             />
 
             {gates.length === 0 ? (
-              <p className="py-4 font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+              <p className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
                 No gates recorded for this parcel.
               </p>
             ) : (
-              <div className="mt-3.5 space-y-2.5">
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 {attentionGates.map((g) => (
                   <BlockingGateRow key={g.gate_key} gate={g} />
                 ))}
 
                 {attentionGates.length === 0 && (
-                  <p className="border border-dashed border-border-strong px-4 py-3.5 font-sans text-[12px] leading-[1.55] text-muted">
+                  <p className="rounded-xl bg-surface-raised/40 p-5 font-sans text-[12.5px] leading-[1.6] text-muted lg:col-span-2">
                     Nothing outstanding. Every gate on this parcel is settled.
                   </p>
                 )}
 
                 {passedGates.length > 0 && (
-                  <div className="border border-border-strong">
+                  <div className="rounded-xl bg-surface-raised/25 p-5 lg:col-span-2">
                     <button
                       onClick={() => setPassAccordionOpen((prev) => !prev)}
                       aria-expanded={passAccordionOpen}
-                      className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left font-mono text-[10px] uppercase tracking-[0.12em] text-muted transition-colors hover:bg-surface-raised/60 hover:text-foreground"
+                      className="flex w-full items-center justify-between gap-3 text-left font-mono text-[10px] uppercase tracking-[0.12em] text-muted transition-colors hover:text-foreground"
                     >
                       <span>
                         {passAccordionOpen ? "Hide" : "View"} {passedGates.length} passed criteria
                       </span>
-                      {passAccordionOpen ? (
-                        <ChevronUp className="h-3.5 w-3.5 shrink-0" />
-                      ) : (
-                        <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-                      )}
+                      {passAccordionOpen
+                        ? <ChevronUp className="h-3.5 w-3.5 shrink-0" />
+                        : <ChevronDown className="h-3.5 w-3.5 shrink-0" />}
                     </button>
                     {passAccordionOpen && (
-                      <div className="divide-y divide-border/60 border-t border-border-strong">
+                      <div className="mt-3 grid grid-cols-1 gap-x-8 sm:grid-cols-2">
                         {passedGates.map((g) => (
                           <PassedGateRow key={g.gate_key} gate={g} />
                         ))}
@@ -1004,43 +1043,35 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
           </div>
         )}
 
-        {/* ── Measured values (each row carries its own lineage) ── */}
+        {/* ── Measured values, grouped by what they describe ── */}
         {activeTab === "measured_values" && (
           <div
             role="tabpanel"
             id="qual-panel-measured_values"
             aria-labelledby="qual-tab-measured_values"
             tabIndex={0}
-            className="px-4 py-4 lg:px-6 lg:py-5"
+            className="px-4 py-5 lg:px-6"
           >
             <SectionRule
               label="Measured values"
               aside={metrics.length ? `${metrics.length} recorded` : undefined}
             />
             {metrics.length === 0 ? (
-              <p className="py-4 font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+              <p className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
                 No measurements recorded for this parcel.
               </p>
             ) : (
-              <>
-                <div className="mt-1 grid grid-cols-1 gap-x-10 sm:grid-cols-2">
-                  {[
-                    metrics.slice(0, Math.ceil(metrics.length / 2)),
-                    metrics.slice(Math.ceil(metrics.length / 2)),
-                  ].map((column, i) => (
-                    <div key={i}>
-                      {column.map((m) => (
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {groupMetrics(metrics).map((g) => (
+                  <Card key={g.label} label={g.label} info={groupProvenance(g.rows)}>
+                    <div className="space-y-0.5">
+                      {g.rows.map((m) => (
                         <MetricRow key={m.metric_key} metric={m} />
                       ))}
                     </div>
-                  ))}
-                </div>
-                <p className="mt-4 max-w-prose font-sans text-[11.5px] leading-[1.55] text-muted">
-                  Each value is shown with the evidence class and organisation it came from.
-                  Where a source recorded nothing, the row reads <em>Unverified</em> — no
-                  default is substituted.
-                </p>
-              </>
+                  </Card>
+                ))}
+              </div>
             )}
           </div>
         )}
@@ -1052,7 +1083,7 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
             id="qual-panel-utility_documents"
             aria-labelledby="qual-tab-utility_documents"
             tabIndex={0}
-            className="px-4 py-4 lg:px-6 lg:py-5"
+            className="px-4 py-5 lg:px-6"
           >
             {evidence.length > 0 && (
               <div className="mb-6">
@@ -1060,52 +1091,50 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
                   label="Parcel-specific evidence · dated county record"
                   aside={`${evidence.length}`}
                 />
-                <ul className="mt-3 space-y-2.5">
+                <div className="grid grid-cols-1 gap-4">
                   {evidence.map((e) => (
-                    <li
+                    <Card
                       key={`${e.parcel_key}-${e.application_number}`}
-                      className="border border-border/60 border-l-[3px] border-l-success bg-success/[0.05] px-4 py-3.5 dark:border-l-success-night dark:bg-success-night/[0.07]"
+                      info={
+                        <>
+                          <div>{e.document_name} · {e.document_date} · public LandMARC record</div>
+                          {e.notes && <div className="mt-1.5">{e.notes}</div>}
+                        </>
+                      }
                     >
-                      <div className="flex flex-wrap items-baseline gap-x-2 font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+                      <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
                         <a
                           href={e.source_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-[11px] font-semibold tracking-[0.06em] text-foreground underline decoration-border-strong underline-offset-2 hover:decoration-foreground"
+                          className="font-mono text-[12px] font-semibold text-foreground underline decoration-border-strong underline-offset-2 hover:decoration-foreground"
                         >
                           {e.application_type} {e.application_number}
                         </a>
-                        <span>· approved {e.approval_date}</span>
-                        {e.utility && <span className="text-foreground">· {e.utility}</span>}
+                        <span className="font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted">
+                          approved {e.approval_date}
+                          {e.utility && <> · {e.utility}</>}
+                        </span>
                       </div>
-                      <p className="mt-2 max-w-prose font-sans text-[12px] leading-[1.55] text-foreground/90">
+                      <p className="mt-2.5 max-w-prose font-sans text-[12.5px] leading-[1.6] text-foreground/90">
                         {e.utility_statement}
                       </p>
-                      {e.capacity_mw != null ? (
-                        <div className="mt-2.5 flex items-baseline justify-between gap-3 border-t border-border/50 pt-2">
-                          <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted">
-                            Documented capacity · stated, never derived
-                          </span>
-                          <span className="font-mono text-[11px] font-semibold tabular-nums text-foreground">
-                            {Number(e.capacity_mw).toLocaleString()} MW
-                          </span>
-                        </div>
-                      ) : (
-                        <p className="mt-2 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted">
-                          No MW figure asserted — the record documents service only
-                        </p>
-                      )}
-                      <p className="mt-2 font-mono text-[9px] uppercase tracking-[0.08em] text-muted">
-                        {e.document_name} · {e.document_date} · public LandMARC record
-                      </p>
-                      {e.notes && (
-                        <p className="mt-1.5 max-w-prose font-sans text-[11.5px] leading-[1.5] text-muted">
-                          {e.notes}
-                        </p>
-                      )}
-                    </li>
+                      <div className="mt-4">
+                        {e.capacity_mw != null ? (
+                          <Stat
+                            value={`${Number(e.capacity_mw).toLocaleString()} MW`}
+                            label="Documented capacity · stated, never derived"
+                            tone="good"
+                          />
+                        ) : (
+                          <p className="font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted">
+                            No MW figure asserted — the record documents service only
+                          </p>
+                        )}
+                      </div>
+                    </Card>
                   ))}
-                </ul>
+                </div>
               </div>
             )}
 
@@ -1114,36 +1143,36 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
               aside={documents.length ? `${documents.length}` : undefined}
             />
             {documents.length === 0 ? (
-              <p className="py-4 max-w-prose font-sans text-[12px] leading-[1.55] text-muted">
+              <p className="max-w-prose font-sans text-[12.5px] leading-[1.6] text-muted">
                 No regional utility documents are currently registered for this jurisdiction.
               </p>
             ) : (
-              <ul className="mt-3 space-y-2.5">
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 {documents.map((d) => (
-                  <li key={d.doc_key} className="border border-border px-4 py-3.5">
+                  <Card key={d.doc_key}>
                     <a
                       href={d.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="font-mono text-[11px] font-semibold text-foreground underline decoration-border-strong underline-offset-2 hover:decoration-foreground"
+                      className="font-mono text-[12px] font-semibold text-foreground underline decoration-border-strong underline-offset-2 hover:decoration-foreground"
                     >
                       {d.title}
                     </a>
-                    <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.08em] text-muted">
+                    <div className="mt-1.5 font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted">
                       {d.publisher}
                       {d.published_date && <> · as of {d.published_date}</>}
                     </div>
                     {d.summary && (
-                      <p className="mt-2 max-w-prose font-sans text-[12px] leading-[1.55] text-muted">
+                      <p className="mt-2.5 max-w-prose font-sans text-[12.5px] leading-[1.6] text-muted">
                         {d.summary}
                       </p>
                     )}
-                  </li>
+                  </Card>
                 ))}
-              </ul>
+              </div>
             )}
 
-            <p className="mt-5 max-w-prose border-t border-border pt-3 font-sans text-[11.5px] leading-[1.55] text-muted">
+            <p className="mt-5 max-w-prose font-sans text-[11.5px] leading-[1.6] text-muted">
               Capacity figures appear only alongside the dated document that supports them.
               Zone-level forecasts are never restated as parcel claims.
             </p>
