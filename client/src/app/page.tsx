@@ -89,13 +89,22 @@ export default function DashboardPage() {
     }
   }, []);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem("shortlist", JSON.stringify(shortlistKeys));
-    } catch {
-      // As above: losing persistence must not break shortlisting.
-    }
-  }, [shortlistKeys]);
+  /**
+   * Writes on the change itself rather than in an effect watching the
+   * state. A save effect also fires on mount, with the initial empty
+   * array, and under StrictMode's double-invoke it beat the hydrating
+   * read and wiped the stored shortlist on every page load.
+   */
+  const updateShortlist = (next: (prev: string[]) => string[]) =>
+    setShortlistKeys((prev) => {
+      const value = next(prev);
+      try {
+        localStorage.setItem("shortlist", JSON.stringify(value));
+      } catch {
+        // Losing persistence must not break shortlisting.
+      }
+      return value;
+    });
 
   const shortlisted = useMemo(
     () => shortlistKeys
@@ -105,7 +114,7 @@ export default function DashboardPage() {
   );
 
   const toggleShortlist = (key: string) =>
-    setShortlistKeys((prev) =>
+    updateShortlist((prev) =>
       prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]);
   const [parcelQualification, setParcelQualification] = useState<ParcelQualification | null>(null);
 
@@ -489,8 +498,8 @@ export default function DashboardPage() {
           >
             <ParcelComparisonPanel
               parcels={shortlisted}
-              onRemove={(k) => setShortlistKeys((p) => p.filter((x) => x !== k))}
-              onClear={() => setShortlistKeys([])}
+              onRemove={(k) => updateShortlist((p) => p.filter((x) => x !== k))}
+              onClear={() => updateShortlist(() => [])}
               onClose={() => setCompareOpen(false)}
             />
           </div>

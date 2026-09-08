@@ -38,6 +38,15 @@ const VERDICT_INK: Record<GateStatus, string> = {
   UNKNOWN: "text-muted border-border-strong",
 };
 
+/** A currently exempt parcel pays nothing today and becomes fully taxable
+ *  on acquisition by a taxable owner. Rendering that as a dash would read
+ *  as "unrecorded" and hide a liability that appears at closing. */
+function isExempt(c: ParcelComparison): boolean {
+  const cls = c.qualification?.metrics
+    .find((m) => m.metric_key === "assessment_class")?.text_value;
+  return typeof cls === "string" && cls.trim().startsWith("0:");
+}
+
 function metric(c: ParcelComparison, key: string): ParcelMetricRow | undefined {
   return c.qualification?.metrics.find((m) => m.metric_key === key);
 }
@@ -281,10 +290,39 @@ export const ParcelComparisonPanel: React.FC<Props> = ({
                         </Cell>
                       ))}
                     </Row>
-                    <Row label="Annual property tax" note="The county's own estimate.">
-                      {rows.map((c) => (
-                        <Cell key={c.parcel.parcel_key}>{usd(num(c, "annual_property_tax_usd"))}</Cell>
-                      ))}
+                    <Row label="Annual property tax"
+                         note="The county's own estimate. An exempt parcel pays nothing today and becomes fully taxable on acquisition.">
+                      {rows.map((c) => {
+                        const t = num(c, "annual_property_tax_usd");
+                        if (t == null && isExempt(c)) {
+                          const land = num(c, "assessed_total_value_usd")
+                            ?? num(c, "assessed_land_value_usd");
+                          return (
+                            <Cell key={c.parcel.parcel_key} dim>
+                              exempt
+                              {land != null && (
+                                <span className="block font-mono text-[9.5px] text-muted">
+                                  ~{usd(land * 0.00805)}/yr if taxed
+                                </span>
+                              )}
+                            </Cell>
+                          );
+                        }
+                        return <Cell key={c.parcel.parcel_key}>{usd(t)}</Cell>;
+                      })}
+                    </Row>
+                    <Row label="Assessment class" note="Exempt status does not survive a sale to a taxable owner.">
+                      {rows.map((c) => {
+                        const cls = metric(c, "assessment_class")?.text_value;
+                        return (
+                          <td key={c.parcel.parcel_key}
+                              className={`py-2.5 pr-5 text-right font-mono text-[10.5px] ${
+                                isExempt(c) ? "text-power dark:text-power-night" : "text-muted"
+                              }`}>
+                            {cls ? cls.replace(/^\d+:\s*/, "") : "—"}
+                          </td>
+                        );
+                      })}
                     </Row>
                     <Row label="Roll-back tax exposure" note="Triggered on conversion where the parcel is in land-use deferral.">
                       {rows.map((c) => {
