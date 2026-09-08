@@ -36,7 +36,7 @@ from clustering_model import SiteClusteringModel
 from hifld_api import HIFLDPowerAPI
 from hazard_api import HazardAPI
 from loudoun_api import LoudounParcelAPI
-from parcel_gates import qualify_parcels, JURISDICTION, RULE_VERSIONS
+from parcel_gates import qualify_parcels, RULE_VERSIONS
 from runs import IngestionRun
 import overlay_layers
 
@@ -69,8 +69,16 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# Regions with a cadastral parcel pilot (jurisdiction adapters).
-PARCEL_PILOTS: Dict[str, str] = {"VA": "Loudoun County, VA"}
+# Regions with a cadastral parcel pilot, mapped to the jurisdiction whose
+# rules and cost assumptions govern them. Adding a region is an adapter
+# plus rows in constraint_rules and cost_assumptions — the engine itself
+# is jurisdiction-agnostic.
+PARCEL_PILOTS: Dict[str, str] = {
+    "VA": "Loudoun County, VA",
+    # Central Ohio is a PJM market, so power diligence, the national
+    # overlays and PeeringDB all carry over unchanged.
+    "OH": "Franklin County, OH",
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -342,36 +350,57 @@ def run_pipeline(
         # ── Loudoun parcel qualification (pilot) ───────────────────────
         parcel_stats: Dict[str, Any] = {}
         if qualify_parcels_flag and state_code in PARCEL_PILOTS:
-            logger.info("Step 6: Loudoun parcel qualification (cadastral gates)…")
-            loudoun = LoudounParcelAPI()
-            layers = loudoun.fetch_all(min_lon, min_lat, max_lon, max_lat)
+            jurisdiction = PARCEL_PILOTS[state_code]
+            logger.info("Step 6: %s parcel qualification (cadastral gates)…",
+                        jurisdiction)
+            # One adapter per jurisdiction, one contract: fetch_all returns
+            # the same four keys, and a layer the county does not publish
+            # comes back None so the engine records UNKNOWN rather than
+            # inventing a verdict.
+            if state_code == "OH":
+                from franklin_api import FranklinParcelAPI
+                county_api: Any = FranklinParcelAPI()
+            else:
+                county_api = LoudounParcelAPI()
+            layers = county_api.fetch_all(min_lon, min_lat, max_lon, max_lat)
             parcels_gdf = layers["parcels"]
             zoning_gdf, wetlands_gdf, nfhl_gdf = layers["zoning"], layers["wetlands"], layers["nfhl"]
 
             # NWI service down? Fall back to the official state geodatabase
             # (download-once clip) before conceding UNKNOWN wetland gates.
-            wetlands_endpoint = loudoun.WETLANDS_URL
+            # Parcel-level incentives, where the jurisdiction grants them.
+            # Virginia's are statutory and statewide, so only Ohio has any.
+            parcel_incentives: Dict[str, Dict[str, Any]] = {}
+            if hasattr(county_api, "parcel_incentives") and parcels_gdf is not None:
+                parcel_incentives = county_api.parcel_incentives(
+                    min_lon, min_lat, max_lon, max_lat, parcels_gdf
+                )
+
+            layer_src = county_api.layer_sources()
+            wetlands_endpoint = layer_src["wetlands"]["endpoint"]
             if wetlands_gdf is None:
                 wetlands_gdf, wetlands_endpoint = overlay_layers.fetch_nwi_wetlands(
-                    min_lon, min_lat, max_lon, max_lat
+                    min_lon, min_lat, max_lon, max_lat, state_code=state_code
                 )
                 if wetlands_gdf is not None:
                     logger.info("NWI wetlands served via the official geodatabase "
                                 "fallback — gates will use it.")
 
-            for layer_key, gdf, src in (
-                ("parcels", parcels_gdf, "loudoun_parcels"),
-                ("zoning", zoning_gdf, "loudoun_zoning"),
-                ("wetlands", wetlands_gdf, "nwi_wetlands"),
-                ("nfhl", nfhl_gdf, "loudoun_fema_flood"),
+            for layer_key, gdf in (
+                ("parcels", parcels_gdf),
+                ("zoning", zoning_gdf),
+                ("wetlands", wetlands_gdf),
+                ("nfhl", nfhl_gdf),
             ):
-                if run is not None:
+                src = layer_src[layer_key]["source_key"]
+                # A layer the jurisdiction does not publish has no source
+                # to attribute; its gates are UNKNOWN and there is nothing
+                # to snapshot.
+                if run is not None and src is not None:
                     snapshots[layer_key] = run.snapshot(
                         layer=layer_key, source_key=src,
-                        endpoint_url={
-                            "parcels": loudoun.PARCELS_URL, "zoning": loudoun.ZONING_URL,
-                            "wetlands": wetlands_endpoint, "nfhl": loudoun.NFHL_URL,
-                        }[layer_key],
+                        endpoint_url=(wetlands_endpoint if layer_key == "wetlands"
+                                      else layer_src[layer_key]["endpoint"]),
                         record_count=None if gdf is None else len(gdf),
                         evidence_class="observed",
                         quality=None if gdf is None else {"rows": int(len(gdf))},
@@ -426,7 +455,7 @@ def run_pipeline(
                 elif count is None:
                     logger.warning("Layer %s unavailable — its gates will be UNKNOWN.", layer_key)
 
-            rules = run.load_rules(JURISDICTION) if run is not None else {}
+            rules = run.load_rules(jurisdiction) if run is not None else {}
 
             # Power diligence (Release 2): serving utility, PJM RTEP
             # upgrade evidence, queue activity. Each degrades to UNKNOWN
@@ -509,7 +538,7 @@ def run_pipeline(
             # behind every estimated figure. Absent, the estimates are
             # skipped rather than computed from hard-coded numbers.
             import underwriting
-            assumptions = underwriting.load_assumptions(client)
+            assumptions = underwriting.load_assumptions(client, jurisdiction)
 
             # Interconnection (Release 5): PeeringDB's public register of
             # where networks actually meet. Power decides whether a site can
@@ -590,6 +619,7 @@ def run_pipeline(
                 apps_gdf=apps_gdf, parcel_evidence=parcel_evidence,
                 water_gdf=water_gdf, assessments=assessments,
                 assumptions=assumptions, facilities=facilities,
+                parcel_incentives=parcel_incentives,
             )
             logger.info("Parcel qualification: %d parcels, %d metric rows, %d gate rows.",
                         len(parcel_records), len(metric_rows), len(gate_rows))

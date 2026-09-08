@@ -33,7 +33,6 @@ logger = logging.getLogger("parcel_gates")
 M2_PER_ACRE = 4046.8564224
 # Local planar CRS for Loudoun County (UTM 18N) — area and distance math.
 PLANAR_CRS = "EPSG:32618"
-JURISDICTION = "Loudoun County, VA"
 RULE_VERSIONS = {
     "zoning_dc_use": "2023-ord+2025-zoam",
     "contiguous_acreage": "v1",
@@ -168,6 +167,7 @@ def qualify_parcels(
     assessments: Optional[pd.DataFrame] = None,
     assumptions: Optional[Dict[str, Dict[str, Any]]] = None,
     facilities: Optional[gpd.GeoDataFrame] = None,
+    parcel_incentives: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
     """
     Computes metrics and gates for every fetched parcel. Returns
@@ -175,6 +175,7 @@ def qualify_parcels(
     """
     n = len(parcels_gdf)
     assumptions = assumptions or {}
+    incentives_of = parcel_incentives or {}
     logger.info("Qualifying %d Loudoun parcels…", n)
 
     planar = parcels_gdf.to_crs(PLANAR_CRS)
@@ -473,7 +474,42 @@ def qualify_parcels(
         # site off the last one's terrain.
         median_slope_pct: Optional[float] = None
 
+        # Jurisdictions publish assessment differently. Loudoun needs a
+        # separate annual roll; Franklin County carries land, building,
+        # total and CAUV value on the parcel feature itself. Either way it
+        # arrives here in one shape.
         assessed = assessment_of(assessments, str(row["pin"]))
+        if assessed is None and "land_value" in row.index:
+            cauv = row.get("cauv_land_value")
+            land = row.get("land_value")
+            total = row.get("total_value")
+            in_cauv = bool(row.get("in_cauv"))
+            # Ohio defers by holding farmland at use value, so the sum
+            # untaxed is market minus use value — the same quantity
+            # Virginia reports directly as DEFERRED VALUE.
+            deferred = (float(land) - float(cauv)
+                        if in_cauv and land is not None and cauv is not None
+                           and pd.notna(land) and pd.notna(cauv) else
+                        (0.0 if land is not None and pd.notna(land) else None))
+            assessed = {
+                "assessment_class": (str(row.get("assessment_class"))
+                                     if pd.notna(row.get("assessment_class")) else None),
+                "land_value": float(land) if land is not None and pd.notna(land) else None,
+                "building_value": (float(row["building_value"])
+                                   if pd.notna(row.get("building_value")) else None),
+                "total_value": float(total) if total is not None and pd.notna(total) else None,
+                "land_use_value": float(cauv) if cauv is not None and pd.notna(cauv) else None,
+                "deferred_value": deferred,
+                "taxable_value": None,
+                # The county publishes no per-parcel levy, unlike Loudoun.
+                # Left absent rather than recomputed from a rate.
+                "annual_tax": None,
+                "in_land_use_deferral": in_cauv,
+                "assessment_year": None,
+                "source": ("Franklin County Auditor, tax parcel assessment "
+                           "(carried on the parcel feature)"),
+            }
+
         if assessed is not None:
             prov = {"source": assessed["source"],
                     "assessment_year": assessed["assessment_year"]}
@@ -537,6 +573,35 @@ def qualify_parcels(
         if road_dist_mi is not None and i in road_dist_mi.index:
             metric(pin, "road_distance_miles", road_dist_mi.loc[i], unit="miles",
                    evidence="derived", layer="roads")
+        # ── Release 6: parcel-level incentives ────────────────────────
+        # Ohio grants abatements and TIF standing per parcel, so unlike a
+        # statewide exemption these actually differentiate two neighbouring
+        # sites. Both carry an end year: a benefit with a term, not a
+        # permanent condition of the land.
+        inc = incentives_of.get(str(row["pin"]))
+        if inc:
+            ab = inc.get("abatement")
+            if ab:
+                metric(pin, "tax_abatement", None,
+                       text_value=str(ab.get("case_type") or ab.get("abatement_type")
+                                      or "recorded"),
+                       evidence="observed", layer="incentives", details=ab)
+                if ab.get("end_year"):
+                    metric(pin, "tax_abatement_end_year", None,
+                           text_value=str(ab["end_year"]),
+                           evidence="observed", layer="incentives",
+                           details={**ab,
+                                    "reading": ("the abatement lapses after this year; "
+                                                "value beyond it should not be underwritten")})
+            tf = inc.get("tif")
+            if tf:
+                metric(pin, "tif_district", None,
+                       text_value=str(tf.get("name") or tf.get("project_no") or "in a TIF"),
+                       evidence="observed", layer="incentives", details=tf)
+                if tf.get("last_year"):
+                    metric(pin, "tif_end_year", None, text_value=str(tf["last_year"]),
+                           evidence="observed", layer="incentives", details=tf)
+
         # ── Release 5: interconnection ────────────────────────────────
         if network_of is not None and i in network_of.index:
             nf = network_of.loc[i]

@@ -67,6 +67,21 @@ class LoudounParcelAPI:
             "Accept": "application/json",
         })
 
+    def layer_sources(self) -> Dict[str, Dict[str, Optional[str]]]:
+        """
+        What this jurisdiction's layers are and where they came from, so
+        the pipeline records provenance without knowing which county it is
+        running. A layer the county does not publish is declared with a
+        null endpoint rather than omitted, keeping the snapshot honest
+        about what was looked for.
+        """
+        return {
+            "parcels": {"source_key": "loudoun_parcels", "endpoint": self.PARCELS_URL},
+            "zoning": {"source_key": "loudoun_zoning", "endpoint": self.ZONING_URL},
+            "wetlands": {"source_key": "nwi_wetlands", "endpoint": self.WETLANDS_URL},
+            "nfhl": {"source_key": "loudoun_fema_flood", "endpoint": self.NFHL_URL},
+        }
+
     def fetch_all(
         self, min_lon: float, min_lat: float, max_lon: float, max_lat: float,
         min_acres: float = MIN_SOURCE_ACRES

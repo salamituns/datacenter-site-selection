@@ -56,11 +56,23 @@ NWI_SERVICE_URL = (
     "https://fwspublicservices.wim.usgs.gov/wetlandsarcgis/rest/services/"
     "Wetlands/MapServer/0/query"
 )
-NWI_VA_URL = (
+# USFWS publishes one geodatabase per state at a predictable path. It is
+# parameterised because the fallback must serve the state actually being
+# surveyed: clipping Virginia's file to an Ohio bbox returns nothing,
+# which would read as "no wetlands here" and pass the gate on the wrong
+# state's data.
+NWI_STATE_URL_TEMPLATE = (
     "https://documentst.ecosphere.fws.gov/wetlands/data/"
-    "State-Downloads/VA_geodatabase_wetlands.zip"
+    "State-Downloads/{state}_geodatabase_wetlands.zip"
 )
-NWI_CACHE = Path(__file__).parent / "cache" / "nwi_va_clip.gpkg"
+
+
+def _nwi_state_url(state_code: str) -> str:
+    return NWI_STATE_URL_TEMPLATE.format(state=state_code.upper())
+
+
+def _nwi_cache(state_code: str) -> Path:
+    return Path(__file__).parent / "cache" / f"nwi_{state_code.lower()}_clip.gpkg"
 
 THREEDEP_URL = (
     "https://elevation.nationalmap.gov/arcgis/rest/services/"
@@ -231,12 +243,19 @@ def fetch_utility_territories(
 
 
 def fetch_nwi_wetlands(
-    min_lon: float, min_lat: float, max_lon: float, max_lat: float
+    min_lon: float, min_lat: float, max_lon: float, max_lat: float,
+    state_code: str = "VA",
 ) -> Tuple[Optional[gpd.GeoDataFrame], str]:
     """
     NWI wetland polygons for the bbox. Tries the REST service first
-    (fresh when healthy); when it is down, falls back to the official
-    Virginia state geodatabase, downloaded once and clipped/cached.
+    (fresh when healthy); when it is down, falls back to that state's
+    official geodatabase, downloaded once and clipped/cached.
+
+    state_code is required for correctness, not convenience. The fallback
+    used to be Virginia's file unconditionally, so an Ohio run whose
+    service call failed clipped Virginia wetlands to an Ohio bbox, found
+    none, and reported the layer present — a wetland gate passing on the
+    wrong state's data.
 
     Returns (geodataframe_or_None, endpoint_that_served). A None return
     means both routes failed — the gate stays UNKNOWN.
@@ -273,18 +292,18 @@ def fetch_nwi_wetlands(
         return gdf, NWI_SERVICE_URL
 
     # 2. Official state geodatabase, cached clip.
-    logger.warning("NWI service unreachable — falling back to the official "
-                   "Virginia geodatabase (download once, cached).")
+    logger.warning("NWI service unreachable — falling back to the official %s "
+                   "geodatabase (download once, cached).", state_code.upper())
     try:
-        if NWI_CACHE.exists():
-            clip = gpd.read_file(NWI_CACHE, layer="wetlands")
+        if _nwi_cache(state_code).exists():
+            clip = gpd.read_file(_nwi_cache(state_code), layer="wetlands")
             logger.info("NWI wetlands (cached clip): %d polygons.", len(clip))
-            return clip, NWI_VA_URL
-        NWI_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            return clip, _nwi_state_url(state_code)
+        _nwi_cache(state_code).parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as tmp:
             zip_path = Path(tmp) / "nwi_va.zip"
             logger.info("NWI: downloading Virginia geodatabase (~395 MB)…")
-            dl = requests.get(NWI_VA_URL, stream=True, timeout=1800,
+            dl = requests.get(_nwi_state_url(state_code), stream=True, timeout=1800,
                               headers={"User-Agent": BROWSER_UA})
             dl.raise_for_status()
             with open(zip_path, "wb") as out:
@@ -296,7 +315,7 @@ def fetch_nwi_wetlands(
             gdb_dirs = list(Path(tmp).glob("*.gdb"))
             if not gdb_dirs:
                 logger.warning("NWI: no geodatabase in the archive.")
-                return None, NWI_VA_URL
+                return None, _nwi_state_url(state_code)
             gdb = str(gdb_dirs[0])
             import pyogrio
 
@@ -329,17 +348,17 @@ def fetch_nwi_wetlands(
             clip = full.to_crs("EPSG:4326")
             if len(clip) == 0:
                 logger.info("NWI: no wetland polygons in bbox.")
-                return None, NWI_VA_URL
+                return None, _nwi_state_url(state_code)
             out = gpd.GeoDataFrame({
                 "attribute": clip[attr_col] if attr_col else None,
                 "geometry": clip.geometry,
             }, crs="EPSG:4326")
-            out.to_file(NWI_CACHE, layer="wetlands")
+            out.to_file(_nwi_cache(state_code), layer="wetlands")
             logger.info("NWI wetlands (geodatabase clip): %d polygons (cached).", len(out))
-            return out, NWI_VA_URL
+            return out, _nwi_state_url(state_code)
     except Exception as e:  # noqa: BLE001
         logger.warning("NWI wetlands fetch failed: %s", e)
-        return None, NWI_VA_URL
+        return None, _nwi_state_url(state_code)
 
 
 # One request per parcel, so this dominates the verification step. The

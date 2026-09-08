@@ -27,7 +27,8 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("underwriting")
 
 
-def load_assumptions(client: Any = None) -> Dict[str, Dict[str, Any]]:
+def load_assumptions(client: Any = None, jurisdiction: Optional[str] = None
+                     ) -> Dict[str, Dict[str, Any]]:
     """
     The current assumption for each key, newest valid_from first.
 
@@ -35,6 +36,13 @@ def load_assumptions(client: Any = None) -> Dict[str, Dict[str, Any]]:
     still reads it and exercises the same estimate path the publishing run
     takes — otherwise the only code that prices anything would never run
     in CI.
+
+    Scoped to a jurisdiction, because the same assumption key means
+    different things in different places: Virginia recoups five years of
+    deferred tax at $0.805 per $100, Ohio three years at roughly $1.50.
+    Rows with no jurisdiction apply anywhere and are used only when the
+    jurisdiction has none of its own, so a national default can never
+    quietly override a local rule.
 
     Returns an empty dict when unavailable. Estimates are then skipped
     entirely rather than falling back to hard-coded numbers, which is the
@@ -55,7 +63,7 @@ def load_assumptions(client: Any = None) -> Dict[str, Dict[str, Any]]:
     try:
         rows = (client.table("cost_assumptions")
                 .select("assumption_key,assumption_version,params,basis,"
-                        "source_url,source_org,unit,valid_from,valid_to,created_at")
+                        "source_url,source_org,unit,jurisdiction,valid_from,valid_to,created_at")
                 # Superseded rows stay in the table — history is the point of
                 # a versioned ledger — but only a currently valid one may
                 # price anything. created_at breaks the tie when two versions
@@ -68,10 +76,16 @@ def load_assumptions(client: Any = None) -> Dict[str, Dict[str, Any]]:
     except Exception as e:  # noqa: BLE001
         logger.warning("Cost assumptions unavailable (%s) — estimates skipped.", e)
         return {}
+    # Jurisdiction-specific first, then anything global, so a local row
+    # always wins over a default regardless of insertion order.
     out: Dict[str, Dict[str, Any]] = {}
-    for r in rows:
-        out.setdefault(r["assumption_key"], r)
-    logger.info("Cost assumptions loaded: %s", sorted(out))
+    for scope in (jurisdiction, None):
+        for r in rows:
+            if r.get("jurisdiction") == scope:
+                out.setdefault(r["assumption_key"], r)
+    logger.info("Cost assumptions for %s: %s",
+                jurisdiction or "any jurisdiction",
+                {k: v["assumption_version"] for k, v in sorted(out.items())})
     return out
 
 
@@ -112,9 +126,11 @@ def rollback_tax_exposure(deferred_value: Optional[float],
                        "tax_rate_per_100_usd": p["tax_rate_per_100_usd"],
                        "rollback_years": years},
             "annual_deferred_tax_usd": round(annual, 2),
-            "excludes": ["statutory simple interest",
-                         "50% penalty where rezoned within five years"],
-            "statute": "Code of Virginia 58.1-3237",
+            # Both come from the assumption, not from code: the statute
+            # differs by jurisdiction, and so does what it leaves out —
+            # Virginia adds a rezoning penalty, Ohio attaches a lien.
+            "excludes": p.get("excludes", ["statutory interest"]),
+            "statute": p.get("statute"),
         },
     }
 
