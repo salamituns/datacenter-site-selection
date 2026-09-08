@@ -18,6 +18,9 @@ interface GeospatialMapProps {
   /** Qualified cadastral parcels (Release 1 pilot) with gate verdicts. */
   landParcels?: LandParcel[];
   selectedLandParcel?: LandParcel | null;
+  /** Width in px of a panel docked to the right edge. The map keeps the
+   *  selected parcel out from under it. */
+  revealInsetRight?: number;
   onSelectLandParcel?: (parcel: LandParcel) => void;
 }
 
@@ -39,6 +42,7 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
   primeZones = [],
   landParcels = [],
   selectedLandParcel = null,
+  revealInsetRight = 0,
   onSelectLandParcel,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -410,6 +414,57 @@ export const GeospatialMap: React.FC<GeospatialMapProps> = ({
     selectedLandParcel,
     onSelectLandParcel,
   ]);
+
+
+  /**
+   * Keeps the selected parcel out from under the docked dossier.
+   *
+   * Deliberately minimal: it pans only when the parcel actually sits
+   * behind the panel or off screen, and only far enough to clear it.
+   * Recentring on every selection would be its own way of losing your
+   * place — the map would jump each time you compared two neighbours.
+   */
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !selectedLandParcel) return;
+    const geom = selectedLandParcel.geojson_geom;
+    if (!geom?.coordinates) return;
+
+    const parts: number[][][] =
+      geom.type === "MultiPolygon"
+        ? (geom.coordinates as number[][][][]).map((poly) => poly[0]).filter(Boolean)
+        : [(geom.coordinates as number[][][])[0]];
+    const pts = parts.flat().filter(Boolean);
+    if (pts.length === 0) return;
+
+    // Corner points only; the projection is monotonic in both axes at a
+    // single zoom, so the extremes of the ring give the extremes on screen.
+    let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+    for (const c of pts) {
+      if (c[0] < minLon) minLon = c[0];
+      if (c[0] > maxLon) maxLon = c[0];
+      if (c[1] < minLat) minLat = c[1];
+      if (c[1] > maxLat) maxLat = c[1];
+    }
+
+    const size = map.getSize();
+    const tl = map.latLngToContainerPoint([maxLat, minLon]);
+    const br = map.latLngToContainerPoint([minLat, maxLon]);
+    const visibleRight = size.x - revealInsetRight;
+    const margin = 28;
+
+    let dx = 0;
+    let dy = 0;
+    if (br.x > visibleRight - margin) dx = br.x - (visibleRight - margin);
+    else if (tl.x < margin) dx = tl.x - margin;
+    if (br.y > size.y - margin) dy = br.y - (size.y - margin);
+    else if (tl.y < margin) dy = tl.y - margin;
+
+    if (dx !== 0 || dy !== 0) map.panBy([dx, dy], { animate: true, duration: 0.4 });
+    // A function of which parcel is selected and how much of the map the
+    // panel covers, not of everything else the map redraws.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLandParcel?.parcel_key, revealInsetRight, mapReady]);
 
   return (
     <div className="relative h-full min-h-[360px] w-full overflow-hidden rounded-[3px] border border-border-strong bg-background">

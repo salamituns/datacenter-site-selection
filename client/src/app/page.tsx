@@ -73,6 +73,25 @@ export default function DashboardPage() {
   // polygon, so that node is already detached. Focus goes here instead.
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
 
+  // The docked dossier's width, measured rather than assumed, so the map
+  // knows exactly how much of itself is covered and can keep the selected
+  // parcel clear of it.
+  const [dossierWidth, setDossierWidth] = useState(0);
+  useEffect(() => {
+    if (!selectedLandParcel) { setDossierWidth(0); return; }
+    const measure = () => {
+      const el = document.querySelector<HTMLElement>("[data-dossier-panel]");
+      setDossierWidth(el?.offsetWidth ?? 0);
+    };
+    // After paint, so the panel has a width to report.
+    const id = requestAnimationFrame(measure);
+    window.addEventListener("resize", measure);
+    return () => {
+      cancelAnimationFrame(id);
+      window.removeEventListener("resize", measure);
+    };
+  }, [selectedLandParcel]);
+
   // Shortlist (Release 4d): the set of sites under active comparison.
   // Held as parcel_keys and resolved against landParcels, so a stale key
   // from a previous region simply drops out rather than rendering a ghost.
@@ -409,6 +428,7 @@ export default function DashboardPage() {
             landParcels={layers.qualifiedParcels ? landParcels : []}
             selectedLandParcel={selectedLandParcel}
             onSelectLandParcel={setSelectedLandParcel}
+            revealInsetRight={dossierWidth}
           />
           {/* Rail chevrons hide while either dossier modal is open — they sit
               at z-[500] (above the map's Leaflet panes) and would otherwise

@@ -213,7 +213,8 @@ function focusIfPresent(el: HTMLElement | null): boolean {
 function useFocusTrap(
   active: boolean,
   onClose: () => void,
-  returnFocusTo?: React.RefObject<HTMLElement | null>
+  returnFocusTo?: React.RefObject<HTMLElement | null>,
+  trapTab: boolean = true
 ) {
   const ref = useRef<HTMLDivElement | null>(null);
   const openerRef = useRef<HTMLElement | null>(null);
@@ -240,7 +241,10 @@ function useFocusTrap(
         onCloseRef.current();
         return;
       }
-      if (e.key !== "Tab" || !node) return;
+      // Tab is deliberately not intercepted. The panel sits alongside a
+      // live map rather than over an inert page, so the reader has to be
+      // able to leave it.
+      if (!trapTab || e.key !== "Tab" || !node) return;
       const focusable = node.querySelectorAll<HTMLElement>(
         'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])'
       );
@@ -265,7 +269,7 @@ function useFocusTrap(
       focusIfPresent(openerRef.current) ||
         focusIfPresent(returnRef.current?.current ?? null);
     };
-  }, [active]);
+  }, [active, trapTab]);
 
   return ref;
 }
@@ -817,7 +821,9 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
 
   const isDesktop = useIsDesktop();
   // Escape now lives in the trap, alongside the rest of the key handling.
-  const dialogRef = useFocusTrap(Boolean(parcel), onClose, returnFocusTo);
+  // Trapped on mobile, where the sheet really does cover the map;
+  // free on desktop, where it sits beside it.
+  const dialogRef = useFocusTrap(Boolean(parcel), onClose, returnFocusTo, !isDesktop);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {
@@ -1261,25 +1267,30 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
 
   const dialogLabel = `Parcel ${parcel.pin} qualification dossier`;
 
-  /* ── Desktop: centered modal ── */
+  /* ── Desktop: a docked inspector, not a modal ──────────────────────
+     The dossier used to sit centred behind a dimming backdrop, which put
+     the map out of reach: comparing two parcels meant closing, hunting,
+     clicking and reopening, losing your place each time. Docked to the
+     side, the map stays live and a click on another parcel simply swaps
+     what the panel is reading.
+
+     Consequently it is not a dialog. aria-modal would tell a screen
+     reader the rest of the page is inert while the whole point is that it
+     is not, so this is a labelled region and focus is not trapped —
+     trapping it would make the map unreachable by keyboard, which is the
+     same bug in a different costume. ── */
   if (isDesktop) {
     return (
-      <div
-        onClick={onClose}
-        className="fixed inset-0 z-[1000] flex items-center justify-center bg-foreground/40 p-4 backdrop-blur-[2px]"
+      <aside
+        ref={dialogRef}
+        role="region"
+        aria-label={dialogLabel}
+        tabIndex={-1}
+        data-dossier-panel
+        className="fixed right-0 top-0 z-[1000] flex h-full w-[min(34rem,42vw)] flex-col overflow-hidden border-l border-border-strong bg-surface shadow-overlay outline-none"
       >
-        <div
-          ref={dialogRef}
-          role="dialog"
-          aria-modal="true"
-          aria-label={dialogLabel}
-          tabIndex={-1}
-          onClick={(e) => e.stopPropagation()}
-          className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-[3px] border border-border-strong bg-surface shadow-overlay outline-none"
-        >
-          {body}
-        </div>
-      </div>
+        {body}
+      </aside>
     );
   }
 
