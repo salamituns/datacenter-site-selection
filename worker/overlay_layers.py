@@ -15,10 +15,14 @@ Verification layer fetchers — federal-first overlays for every region.
 4. 3DEP slopes (USGS 3DEPElevation ImageServer getSamples): a 32x32
    elevation lattice per parcel envelope, converted to per-parcel slope
    statistics for the terrain gate. getSamples accepts envelopes, not
-   multipoints, so this is one request per parcel (paced, threaded).
+   multipoints, so this is one request per parcel (paced, threaded) —
+   and cached per envelope across runs, since the DEM is static and a
+   republish would otherwise re-ask thousands of identical questions.
+   Cached answers carry the date they were really retrieved.
 """
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 import logging
@@ -711,27 +715,148 @@ def sample_3dep_slopes(
                 time.sleep(0.4 * (2 ** attempt) + random.uniform(0, 0.3))
         return idx, None, None, 0, retries
 
+    # The query depends only on the parcel's envelope, and 3DEP is a static
+    # bare-earth product, so the same envelope has the same answer on every
+    # run. Re-asking 2,478 identical questions was the single largest cost
+    # in a publish (265s of a 784s Loudoun run). Cached answers carry the
+    # date they were really retrieved so the metric can report it — a
+    # correct value with a fabricated fetch time is still bad evidence.
+    cache = _SlopeCache.load()
     items = list(parcels_gdf.geometry.items())
-    out: Dict[Any, Tuple[Optional[float], Optional[float], int]] = {}
+
+    # (smax, smed, n_samples, retrieved_at). retrieved_at is None for a value
+    # this run fetched — the caller stamps those with the run's own clock —
+    # and an ISO date for one served from cache, so a reused measurement can
+    # never claim to be fresher than it is.
+    out: Dict[Any, Tuple[Optional[float], Optional[float], int, Optional[str]]] = {}
+    pending: List[Tuple[Any, Any]] = []
+    for idx, geom in items:
+        hit = cache.get(geom)
+        if hit is None:
+            pending.append((idx, geom))
+        else:
+            out[idx] = hit
+
     done = 0
     retried = 0
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for idx, smax, smed, n, retries in pool.map(one, items):
-            out[idx] = (smax, smed, n)
-            retried += retries
-            done += 1
-            if done % 250 == 0:
-                logger.info("3DEP slopes: %d/%d parcels sampled.", done, len(items))
+    if pending:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for (idx, smax, smed, n, retries), (_, geom) in zip(
+                pool.map(one, pending), pending
+            ):
+                out[idx] = (smax, smed, n, None)
+                # Only a real answer is cached. A failure is a transient fact
+                # about the network, not about the terrain, and caching it
+                # would freeze an UNKNOWN gate in place across every run.
+                if n > 0:
+                    cache.put(geom, smax, smed, n)
+                retried += retries
+                done += 1
+                if done % 250 == 0:
+                    logger.info("3DEP slopes: %d/%d parcels sampled.",
+                                done, len(pending))
+        cache.save()
+
     ok = sum(1 for v in out.values() if v[2] > 0)
     logger.info(
         "3DEP slopes: %d/%d parcels have slope statistics "
-        "(%d workers, %d transient failures retried).",
-        ok, len(items), workers, retried,
+        "(%d from cache, %d fetched with %d workers, %d transient failures retried).",
+        ok, len(items), len(items) - len(pending), len(pending), workers, retried,
     )
     return out
 
 
 # ── internals ─────────────────────────────────────────────────────────
+
+
+class _SlopeCache:
+    """
+    Persistent 3DEP slope statistics, keyed by the parcel envelope the query
+    actually uses.
+
+    getSamples is asked for an envelope, not a parcel, and 3DEP is a static
+    bare-earth product — so the same envelope has the same answer on every
+    run, and a republish was re-asking thousands of identical questions over
+    the network. On the Loudoun run that was 265s of 784s, the largest single
+    cost in a publish.
+
+    Two things keep this honest rather than merely fast:
+
+    * Each entry stores the date it was really retrieved, and the caller
+      stamps the metric with that instead of the run clock. A correct number
+      with a fabricated fetch time is still bad evidence.
+    * Only real answers are stored. A transient network failure is a fact
+      about the network, not the terrain; caching it would freeze the slope
+      gate at UNKNOWN for that parcel on every future run.
+
+    Keys round the envelope to ~1e-6 degrees (about 10 cm), far finer than
+    the 1/3-arcsecond DEM but coarse enough that float noise in a re-projected
+    boundary cannot miss a hit.
+    """
+
+    _instance: "Optional[_SlopeCache]" = None
+
+    def __init__(self, entries: Optional[Dict[str, Any]] = None):
+        self._entries: Dict[str, Any] = entries or {}
+        self._dirty = False
+
+    @classmethod
+    def load(cls) -> "_SlopeCache":
+        if cls._instance is not None:
+            return cls._instance
+        path = cls.path()
+        entries: Dict[str, Any] = {}
+        if path.exists():
+            try:
+                entries = json.loads(path.read_text())
+                logger.info("3DEP slope cache: %d envelopes on disk.", len(entries))
+            except Exception as e:  # noqa: BLE001
+                # A corrupt cache is a performance problem, never a
+                # correctness one — drop it and re-fetch.
+                logger.warning("3DEP slope cache unreadable (%s); ignoring.", e)
+                entries = {}
+        cls._instance = cls(entries)
+        return cls._instance
+
+    @staticmethod
+    def path() -> Path:
+        return Path(__file__).parent / "cache" / "threedep_slopes.json"
+
+    @staticmethod
+    def _key(geom) -> str:
+        minx, miny, maxx, maxy = geom.bounds
+        return f"{minx:.6f},{miny:.6f},{maxx:.6f},{maxy:.6f}"
+
+    def get(self, geom) -> Optional[Tuple[Optional[float], Optional[float], int, Optional[str]]]:
+        e = self._entries.get(self._key(geom))
+        if not e:
+            return None
+        try:
+            return (e["max"], e["median"], int(e["n"]), e["at"])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def put(self, geom, smax, smed, n: int) -> None:
+        self._entries[self._key(geom)] = {
+            "max": smax,
+            "median": smed,
+            "n": int(n),
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._dirty = True
+
+    def save(self) -> None:
+        if not self._dirty:
+            return
+        path = self.path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Written via a temp file in the same directory: a run killed
+        # mid-write must not leave a truncated cache behind.
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(self._entries))
+        tmp.replace(path)
+        self._dirty = False
+        logger.info("3DEP slope cache: %d envelopes saved.", len(self._entries))
 
 
 class _ThreadLocalSession:
