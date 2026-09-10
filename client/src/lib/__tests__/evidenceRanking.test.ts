@@ -132,3 +132,20 @@ describe("compareByEvidenceThenScore", () => {
     ]);
   });
 });
+
+describe("disclosure figures", () => {
+  // The dossier shows risked and measured together; their ratio must be
+  // exactly the coverage factor, or the disclosure reads as a bug.
+  it("keeps risked = measured x coverage inside the parcel tier", () => {
+    const p = parcel("oh", 0, "parcel", 0.772);
+    const measured = 81.0;
+    const risked = measured * coverageFactor(p);
+    expect(Number(risked.toFixed(1))).toBe(62.5);
+  });
+
+  it("leaves measured and risked identical outside the parcel tier", () => {
+    const p = parcel("or", 0, "screening", 0);
+    const measured = 78.1;
+    expect(measured * coverageFactor(p)).toBe(78.1);
+  });
+});

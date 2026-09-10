@@ -146,7 +146,7 @@ annihilator arriving through a column default instead of a multiplication — a
 loud failure turned quiet. Dropping the column makes the mistake impossible and
 forces the worker and the schema to ship together.
 
-**Phase 4 — client.**
+**Phase 4 — client. _Done._**
 Surface all three figures in the dossier per the disclosure block above.
 `coverageFactor()` stays: the live slider path re-weights from raw component
 scores in the browser and must still apply the factor itself. Its contract
@@ -177,4 +177,19 @@ The divergence is now unreachable rather than corrected: with the worker's
 multiplication deleted there is only one implementation of the risking, and it
 is the schema's.
 
-Phase 4 (client disclosure of all three figures) remains.
+Phase 4 is done. The dossier's composite card carries the risked headline
+figure, its tier band, and a disclosure line reading `64.8 measured · 66% of
+gates decided` (or `screening tier · no parcel survey`). Both figures are
+recomputed together from the live slider weights so their ratio is exactly the
+coverage factor — pairing a re-weighted score against the *stored* measurement
+would compare two different weightings and read as a bug.
+
+Phase 4 also repaired a divergence it exposed. `zoneScoredParcels` was judging
+Prime Zone candidacy on the risked figure while the worker clusters on the
+unrisked one, and since the browser's zones override the stored ones, Franklin
+County's 274 prime cells (unrisked max 81.0) were being re-derived from a
+risked max of 62.9 against a threshold of 60 and rendered as almost nothing.
+The browser now judges candidacy on the measurement, matching the worker. The
+`primeZones` module docstring had claimed this parity all along; it stopped
+being true when risking was introduced and nothing caught it, because both
+sides still produced plausible output.

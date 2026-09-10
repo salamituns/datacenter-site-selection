@@ -293,23 +293,29 @@ export default function DashboardPage() {
 
     return rawParcels
       .map((p) => {
-        // Re-weighted from the pure component scores, then re-scaled by
-        // the same coverage factor the worker baked into the stored
-        // composite, re-applied so dragging the sliders cannot silently
-        // un-do it. coverageFactor() is 1 outside the parcel tier — the
-        // tier, not the score, keeps those cells below diligenced ones.
-        // Non-reweightable parcels keep their stored composite.
-        const dynamicScore = reweightable(p)
-          ? (p.power_score! * wNorm.power +
-             p.water_score! * wNorm.water +
-             p.risk_score! * wNorm.risk +
-             p.climate_score! * wNorm.climate) *
-            coverageFactor(p)
+        // Both figures are recomputed together so they stay consistent with
+        // each other and with the sliders: `measured` is the re-weighted
+        // screening measurement, `risked` is that scaled by the same factor
+        // the database applies. Their ratio is exactly the coverage factor,
+        // which is what makes the dossier's disclosure legible — pairing a
+        // live re-weighted score against the *stored* measurement would
+        // compare two different weightings and read as a bug.
+        // coverageFactor() is 1 outside the parcel tier; the tier, not the
+        // score, keeps those cells below diligenced ones.
+        const measured = reweightable(p)
+          ? p.power_score! * wNorm.power +
+            p.water_score! * wNorm.water +
+            p.risk_score! * wNorm.risk +
+            p.climate_score! * wNorm.climate
+          : p.composite_score_unrisked ?? p.composite_score;
+        const risked = reweightable(p)
+          ? measured * coverageFactor(p)
           : p.composite_score;
 
         return {
           ...p,
-          composite_score: Number(dynamicScore.toFixed(1)),
+          composite_score: Number(risked.toFixed(1)),
+          composite_score_unrisked: Number(measured.toFixed(1)),
         };
       })
       .sort(compareByEvidenceThenScore);
@@ -334,6 +340,17 @@ export default function DashboardPage() {
       risk: debouncedWeights.riskWeight / (totalWeight || 1),
       climate: debouncedWeights.climateWeight / (totalWeight || 1),
     };
+    // Zone candidacy is judged on the *unrisked* measurement, matching the
+    // worker, which clusters before any risking is applied. A cluster of
+    // contiguous high-scoring cells is a finding about the land, and
+    // diligence coverage is not a property of the land.
+    //
+    // This previously applied coverageFactor and so disagreed with the
+    // worker: the database held 274 prime cells across 2 zones for Franklin
+    // County (clustered on an unrisked max of 81.0) while the browser
+    // re-derived them from a risked max of 62.9 against a threshold of 60
+    // and rendered almost none — and the browser's zones override the
+    // stored ones, so Ohio's zones were effectively invisible.
     return rawParcels.map((p) => ({
       ...p,
       composite_score: Number(
@@ -342,12 +359,11 @@ export default function DashboardPage() {
           p.water_score != null &&
           p.risk_score != null &&
           p.climate_score != null
-            ? (p.power_score * wNorm.power +
-               p.water_score * wNorm.water +
-               p.risk_score * wNorm.risk +
-               p.climate_score * wNorm.climate) *
-              coverageFactor(p)
-            : p.composite_score
+            ? p.power_score * wNorm.power +
+              p.water_score * wNorm.water +
+              p.risk_score * wNorm.risk +
+              p.climate_score * wNorm.climate
+            : p.composite_score_unrisked ?? p.composite_score
         ).toFixed(1)
       ),
     }));

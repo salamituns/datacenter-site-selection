@@ -4,7 +4,14 @@
  * Mirrors the worker's ingestion-time semantics (worker/clustering_model.py)
  * so the browser zones match what re-ingestion with the current weights would
  * produce:
- *   - candidates: composite_score >= threshold
+ *   - candidates: the *unrisked* screening measurement >= threshold. The
+ *     worker clusters before any evidence-coverage risking is applied, so the
+ *     caller must pass cells scored the same way (see zoneScoredParcels).
+ *     Judging candidacy on the risked figure instead put the browser out of
+ *     step with the database — Franklin County held 274 prime cells on an
+ *     unrisked max of 81.0 while the browser saw a risked max of 62.9 against
+ *     a threshold of 60 — and since these zones override the stored ones, the
+ *     region's zones simply vanished.
  *   - DBSCAN over centroids, eps 8.5 km (geodesic), min 2 samples
  *   - clusters ranked by mean score into zones A, B, C …
  *   - boundary = convex hull of the actual cell footprints

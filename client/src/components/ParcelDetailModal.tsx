@@ -77,8 +77,33 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
     URL.revokeObjectURL(url);
   };
 
+  // The composite is a risked figure wherever the region has a parcel tier,
+  // and a risked figure shown alone is not a disclosure. SPE-PRMS permits
+  // risking an estimate only if the unrisked one is reported with it, and
+  // JORC will not accept combined categories without the individual ones —
+  // so the card carries the measurement and the coverage that produced the
+  // headline number, not just the number.
+  //
+  // This is the difference between "this land is worse" and "we know less
+  // about this land", which point at opposite actions: walk away, or
+  // commission a survey.
+  const measured = parcel.composite_score_unrisked ?? parcel.composite_score;
+  const isParcelTier = parcel.evidence_tier === "parcel";
+  const coveragePct =
+    parcel.evidence_coverage != null ? Math.round(parcel.evidence_coverage * 100) : null;
+  const compositeDetail = !isParcelTier
+    ? "screening tier · no parcel survey"
+    : coveragePct != null
+      ? `${measured.toFixed(1)} measured · ${coveragePct}% of gates decided`
+      : `${measured.toFixed(1)} measured`;
+
   const stats = [
-    { label: "Composite", value: parcel.composite_score.toFixed(1), sub: scoreTier(parcel.composite_score) },
+    {
+      label: "Composite",
+      value: parcel.composite_score.toFixed(1),
+      sub: scoreTier(parcel.composite_score),
+      detail: compositeDetail,
+    },
     {
       label: "Power",
       value: parcel.power_score != null ? parcel.power_score.toFixed(0) : "—",
@@ -197,6 +222,12 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({ parcel, on
             </div>
             <div className="mt-1.5 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted">
               {stat.sub}
+            </div>
+            <div
+              className="mt-1 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted/70"
+              hidden={!stat.detail}
+            >
+              {stat.detail}
             </div>
           </div>
         ))}
