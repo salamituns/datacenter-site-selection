@@ -168,6 +168,11 @@ def _grid_records(gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
             "risk_score": float(row["risk_score"]),
             "climate_score": float(row["climate_score"]),
             "composite_score": float(row["composite_score"]),
+            # Falls back to the risked figure only for a caller that predates
+            # the column; a live run always supplies it.
+            "composite_score_unrisked": float(
+                row.get("composite_score_unrisked", row["composite_score"])
+            ),
             "evidence_coverage": float(row.get("evidence_coverage", 1.0)),
             "evidence_tier": str(row.get("evidence_tier", "screening")),
             "cluster_zone_id": int(row["cluster_zone_id"]),
@@ -782,6 +787,20 @@ def run_pipeline(
         # a measurement of zero, and this engine does not write it as one.
         clustered_gdf["evidence_coverage"] = evidence_coverage
         clustered_gdf["evidence_tier"] = evidence_tier
+
+        # The measurement, kept before anything is multiplied into it. A
+        # risked composite cannot be divided back into the score it came
+        # from — the Morrow County republish showed that a reconstruction
+        # can reproduce every region's prime-cell count exactly and still
+        # miss a quarter of the rows — so the unrisked figure is recorded
+        # rather than inferred later. Phase 3 of the unrisked-composite
+        # spec makes composite_score a generated column over this one and
+        # deletes the multiplication below; until then both are written and
+        # a gate query checks they agree.
+        clustered_gdf["composite_score_unrisked"] = (
+            clustered_gdf["composite_score"].round(1)
+        )
+
         if evidence_tier == "parcel":
             clustered_gdf["composite_score"] = (
                 clustered_gdf["composite_score"] * evidence_coverage

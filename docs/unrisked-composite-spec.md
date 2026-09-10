@@ -100,10 +100,17 @@ the worker change first would drop the penalty until the republish lands. So
 the new column is introduced additively and the swap happens last, behind a
 verification gate.
 
-**Phase 1 — additive, no behaviour change.**
+**Phase 1 — additive, no behaviour change. _Done._**
 Add `composite_score_unrisked NUMERIC(6,2)` (nullable). The worker writes both:
 the pure composite into the new column and, as today, the risked value into
 `composite_score`. Nothing reads the new column. Safe to ship alone.
+
+> `CREATE OR REPLACE VIEW` may only **append** columns — inserting one mid-list
+> fails with `cannot change name of view column`, because replacing a view
+> matches columns by position, not by name. `v_grid_parcels` therefore carries
+> `composite_score_unrisked` last, out of logical order. Phase 3 drops and
+> recreates the view anyway, which is the only point at which the ordering can
+> be tidied.
 
 **Phase 2 — republish and verify.**
 Publish VA, OH, TX, OR. Every row then carries both figures, and the gate is a
