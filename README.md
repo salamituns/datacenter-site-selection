@@ -106,6 +106,7 @@ Regions are keyed by county slug (`STATE-COUNTY`). The slug scopes publication: 
 | **Virginia (Loudoun)** — Data Center Alley *(parcel pilot)* | Loudoun County | PJM | `python pipeline.py --region VA-LOUDOUN` |
 | **Texas (Abilene)** *(parcel pilot)* | Taylor County | ERCOT | `python pipeline.py --region TX-TAYLOR` |
 | **Ohio (New Albany)** *(parcel pilot)* | Franklin County | PJM | `python pipeline.py --region OH-FRANKLIN` |
+| **Ohio (Licking corridor)** *(parcel pilot)* | Licking County | PJM | `python pipeline.py --region OH-LICKING` |
 | **Oregon (Boardman)** | Morrow County | BPA | `python pipeline.py --region OR-MORROW` |
 
 Ad-hoc surveys: `--region <slug> --bbox min_lon,min_lat,max_lon,max_lat --county <label>`. A legacy bare state code (`--region VA`) still maps to that state's one preset; it cannot name a new region — a second county in a state needs its own slug and preset.

@@ -90,6 +90,7 @@ const LAYER_CONFIGS: LayerConfig[] = [
 const PARCEL_SOURCE: Record<string, string> = {
   "VA-LOUDOUN": "Loudoun County GIS",
   "OH-FRANKLIN": "Franklin County Auditor",
+  "OH-LICKING": "Licking County Auditor",
   "TX-TAYLOR": "Taylor CAD",
 };
 

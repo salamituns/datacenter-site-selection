@@ -61,19 +61,28 @@ TIGERLINE_ROADS_URL = (
     "https://www2.census.gov/geo/tiger/TIGER2024/ROADS/"
     "tl_2024_{fips}_roads.zip"
 )
-COUNTY_FIPS = {"VA": "51107", "OH": "39049", "TX": "48441"}
+# TIGER/Line is a county file, so this is keyed by region slug, not state —
+# Licking County (39089) and Franklin County (39049) are different
+# downloads. The TIGERweb clip cache stays state-keyed: the vintage is a
+# state-year artefact either county can share.
+COUNTY_FIPS = {
+    "VA-LOUDOUN": "51107",
+    "OH-FRANKLIN": "39049",
+    "OH-LICKING": "39089",
+    "TX-TAYLOR": "48441",
+}
 TIGER_ROAD_CLASSES = {"S1100": "primary", "S1200": "secondary"}
 
 
 def _fetch_tigerline_roads(
-    state_code: str, bbox_poly,
+    region_key: str, bbox_poly,
 ) -> Optional[gpd.GeoDataFrame]:
     """
     Primary + secondary roads from the county's TIGER/Line shapefile —
     the fallback when the TIGERweb REST service is WAF-blocked. None when
-    the state has no mapped county (the caller then concedes UNKNOWN).
+    the region has no mapped county (the caller then concedes UNKNOWN).
     """
-    fips = COUNTY_FIPS.get(state_code.upper())
+    fips = COUNTY_FIPS.get((region_key or "").upper())
     if not fips:
         return None
     try:
@@ -202,6 +211,7 @@ BROWSER_UA = (
 def fetch_tiger_roads(
     min_lon: float, min_lat: float, max_lon: float, max_lat: float,
     state_code: str = "VA",
+    region_key: Optional[str] = None,
 ) -> Optional[gpd.GeoDataFrame]:
     """
     Primary + secondary road segments within the bbox (TIGERweb). The clip
@@ -256,8 +266,9 @@ def fetch_tiger_roads(
                     "(%d segments).", len(cached))
         return cached
     # No cache either (first run for the state during an outage) — the
-    # county's TIGER/Line shapefile is the canonical fallback.
-    tigerline = _fetch_tigerline_roads(state_code, bbox_poly)
+    # county's TIGER/Line shapefile is the canonical fallback. The county
+    # is a property of the region, so the FIPS lookup is by region slug.
+    tigerline = _fetch_tigerline_roads(region_key or state_code, bbox_poly)
     if tigerline is not None:
         _save_cached_clip(_tiger_cache(state_code), tigerline, bbox_poly)
         logger.info("TIGER roads: %d segments from the TIGER/Line county "

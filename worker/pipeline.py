@@ -70,6 +70,16 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
         "county": "Franklin",
         "grid_operator": "PJM Interconnection",
     },
+    # The west-Licking corridor: Jersey, Etna, Monroe and Harrison
+    # townships along I-70, where the New Albany data-center campus and
+    # the Intel site actually sit. 2,853 parcels at the 20-acre floor
+    # (probed 2026-09-10) — the full county would be 5,271.
+    "OH-LICKING": {
+        "state": "OH",
+        "bbox": (-82.75, 39.95, -82.40, 40.25),
+        "county": "Licking",
+        "grid_operator": "PJM Interconnection",
+    },
     "OR-MORROW": {
         "state": "OR",
         "bbox": (-120.05, 45.55, -119.45, 46.15),
@@ -92,6 +102,9 @@ PARCEL_PILOTS: Dict[str, str] = {
     # Central Ohio is a PJM market, so power diligence, the national
     # overlays and PeeringDB all carry over unchanged.
     "OH-FRANKLIN": "Franklin County, OH",
+    # Same PJM market as Franklin, plus a published township zoning layer
+    # (the one thing Franklin lacks) and per-parcel CAUV evidence.
+    "OH-LICKING": "Licking County, OH",
     # Abilene is in ERCOT, so unlike Ohio nothing from the PJM power
     # diligence layer carries over and that gate stays UNKNOWN.
     "TX-TAYLOR": "Taylor County, TX",
@@ -103,6 +116,7 @@ PARCEL_PILOTS: Dict[str, str] = {
 PARCEL_ADAPTERS: Dict[str, str] = {
     "VA-LOUDOUN": "loudoun",
     "OH-FRANKLIN": "franklin",
+    "OH-LICKING": "licking",
     "TX-TAYLOR": "taylor",
 }
 
@@ -502,6 +516,9 @@ def run_pipeline(
             elif adapter == "taylor":
                 from taylor_api import TaylorParcelAPI
                 county_api = TaylorParcelAPI()
+            elif adapter == "licking":
+                from licking_api import LickingParcelAPI
+                county_api = LickingParcelAPI()
             elif adapter == "loudoun":
                 county_api = LoudounParcelAPI()
             else:
@@ -590,7 +607,8 @@ def run_pipeline(
             # 3DEP slopes. Each degrades independently to UNKNOWN.
             logger.info("Step 6b: verification layers (TIGER roads, PAD-US, 3DEP slopes)…")
             roads_gdf = overlay_layers.fetch_tiger_roads(
-                min_lon, min_lat, max_lon, max_lat, state_code=state_code)
+                min_lon, min_lat, max_lon, max_lat, state_code=state_code,
+                region_key=region_key)
             padus_gdf = overlay_layers.fetch_padus(
                 min_lon, min_lat, max_lon, max_lat, state_code=state_code)
             slopes = None
