@@ -8,6 +8,10 @@ function parcel(id: string, lon: number, lat: number, score: number): GridParcel
     grid_id: id,
     state_code: "VA",
     county_name: "Loudoun",
+    // Loudoun has run parcel qualification, so these cells are parcel tier
+    // and their clusters are genuinely "Prime". Tests that need the
+    // screening case say so explicitly.
+    evidence_tier: "parcel",
     area_sq_km: 10,
     lon,
     lat,
@@ -120,5 +124,63 @@ describe("computePrimeZones", () => {
     const { zones } = computePrimeZones(withGeom, 70);
     expect(zones[0].hull).not.toBeNull();
     expect(zones[0].hull!.coordinates.length).toBeGreaterThan(0);
+  });
+});
+
+describe("zone evidence tier", () => {
+  function tiered(id: string, lon: number, lat: number, score: number, tier: "parcel" | "screening") {
+    return { ...parcel(id, lon, lat, score), evidence_tier: tier };
+  }
+
+  it("names a fully diligenced cluster a Prime Zone", () => {
+    const { zones } = computePrimeZones(
+      [
+        tiered("a", -77.5, 39.05, 88, "parcel"),
+        tiered("b", -77.505, 39.05, 86, "parcel"),
+      ],
+      70
+    );
+    expect(zones[0].tier).toBe("parcel");
+    expect(zones[0].label).toMatch(/^Prime Zone A /);
+  });
+
+  it("names a cluster with no parcel survey a Screening Zone", () => {
+    // Morrow County: 210 contiguous cells averaging 68.44 is a real
+    // finding, but "Prime" is a readiness claim its evidence cannot make.
+    const { zones } = computePrimeZones(
+      [
+        tiered("a", -119.8, 45.8, 78, "screening"),
+        tiered("b", -119.805, 45.8, 76, "screening"),
+      ],
+      70
+    );
+    expect(zones[0].tier).toBe("screening");
+    expect(zones[0].label).toMatch(/^Screening Zone A /);
+  });
+
+  it("demotes a mixed cluster to its weakest member", () => {
+    const { zones } = computePrimeZones(
+      [
+        tiered("a", -77.5, 39.05, 88, "parcel"),
+        tiered("b", -77.505, 39.05, 86, "screening"),
+      ],
+      70
+    );
+    expect(zones[0].tier).toBe("screening");
+  });
+
+  it("treats a cluster with no tier recorded as screening", () => {
+    // Mock and demo rows predate the column; an unlabelled cluster must not
+    // inherit a readiness claim by default.
+    const untiered = (id: string, lon: number, score: number) => {
+      const p = { ...parcel(id, lon, 39.05, score) };
+      delete (p as Partial<GridParcel>).evidence_tier;
+      return p;
+    };
+    const { zones } = computePrimeZones(
+      [untiered("a", -77.5, 88), untiered("b", -77.505, 86)],
+      70
+    );
+    expect(zones[0].label).toMatch(/^Screening Zone A /);
   });
 });

@@ -382,9 +382,20 @@ def run_pipeline(
                 )
 
         # ── Scoring + prime zones ──────────────────────────────────────
+        # Which survey this region gets is a property of its configuration,
+        # known before any of it runs — so the zone labels, the cluster
+        # summaries and the log lines all agree from the start rather than
+        # being corrected downstream. How much of that survey resolves is a
+        # property of the run, and is measured later as evidence_coverage.
+        evidence_tier = (
+            "parcel" if qualify_parcels_flag and state_code in PARCEL_PILOTS
+            else "screening"
+        )
         logger.info("Step 5: Scoring & clustering…")
         scored_gdf = grid_parser.calculate_composite_scores(grid_gdf)
-        clustered_gdf, cluster_summaries = clustering_model.fit_prime_zones_dbscan(scored_gdf)
+        clustered_gdf, cluster_summaries = clustering_model.fit_prime_zones_dbscan(
+            scored_gdf, evidence_tier=evidence_tier
+        )
 
         # ── Interconnection, every region ──────────────────────────────
         # PeeringDB is national and the screening grid covers all four
@@ -431,12 +442,12 @@ def run_pipeline(
 
         # ── Loudoun parcel qualification (pilot) ───────────────────────
         parcel_stats: Dict[str, Any] = {}
-        # Which survey this region has had, and how much of it resolved.
-        # A region with no parcel pilot is a different fact from a parcel
-        # pilot that decided nothing, so the tier is recorded rather than
-        # inferred from a coverage of zero.
+        # How much of the region's parcel survey resolved. Stays 0.0 where
+        # there is no parcel tier — which is why it is read alongside
+        # evidence_tier and never instead of it: a region with no parcels
+        # and a region whose gates all came back UNKNOWN both sit at 0.0,
+        # and they are different facts.
         evidence_coverage = 0.0
-        evidence_tier = "screening"
         if qualify_parcels_flag and state_code in PARCEL_PILOTS:
             jurisdiction = PARCEL_PILOTS[state_code]
             logger.info("Step 6: %s parcel qualification (cadastral gates)…",
@@ -749,10 +760,6 @@ def run_pipeline(
             evidence_coverage = (
                 round(decided_gates / total_gates, 3) if total_gates else 0.0
             )
-            # The region has been surveyed at parcel tier — true even if the
-            # survey decided nothing, which is why this is not read off the
-            # coverage figure.
-            evidence_tier = "parcel"
             if run is not None:
                 run.stage_land_parcels(parcel_records)
                 run.stage_parcel_metrics(metric_rows)

@@ -37,7 +37,7 @@ class SiteClusteringModel:
         Parameters:
             min_composite_score: Minimum suitability threshold for cluster candidacy.
             eps_km: Maximum distance in kilometers for spatial adjacency (DBSCAN neighborhood).
-            min_samples: Minimum contiguous parcels required to form a Prime Zone.
+            min_samples: Minimum contiguous parcels required to form a zone.
         """
         self.min_composite_score = min_composite_score
         self.eps_km = eps_km
@@ -46,7 +46,8 @@ class SiteClusteringModel:
     def fit_prime_zones_dbscan(
         self,
         grid_gdf: gpd.GeoDataFrame,
-        score_column: str = "composite_score"
+        score_column: str = "composite_score",
+        evidence_tier: str = "parcel"
     ) -> Tuple[gpd.GeoDataFrame, Dict[int, Dict[str, Any]]]:
         """
         Executes spatial DBSCAN clustering using Haversine distance on high-scoring candidate parcels.
@@ -103,11 +104,22 @@ class SiteClusteringModel:
 
             ranked_clusters.sort(key=lambda x: x[1], reverse=True)
 
+            # A cluster is only "Prime" where its region has had parcel
+            # diligence. Where it has not, the cluster is a real screening
+            # finding and is reported as one — shown, under the name its
+            # evidence supports, rather than hidden or over-claimed. This
+            # is the convention the adjacent codes settled on: JORC reports
+            # Inferred Resources but never calls them Reserves, and
+            # Virginia's Business Ready Sites Program lists a Tier 1 site
+            # but reserves "business ready" for Tier 4-5, where the
+            # delineation, geotech and boundary survey are actually done.
+            zone_kind = "Prime Zone" if evidence_tier == "parcel" else "Screening Zone"
+
             # Assign zone letters (A, B, C...) and calculate cluster footprints
             for rank_idx, (cid, avg_score, parcel_count) in enumerate(ranked_clusters):
                 zone_letter = chr(65 + rank_idx)  # A, B, C...
                 total_area_km2 = parcel_count * 10.0
-                zone_label = f"Prime Zone {zone_letter} ({int(total_area_km2)} km² Hyper-Cluster)"
+                zone_label = f"{zone_kind} {zone_letter} ({int(total_area_km2)} km² Hyper-Cluster)"
 
                 mask = candidates["cluster_zone_id"] == cid
                 candidates.loc[mask, "cluster_label"] = zone_label

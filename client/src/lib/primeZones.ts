@@ -12,6 +12,16 @@
  * No MW capacity is computed: a feasible figure requires a dated source
  * (utility study / PJM agreement), which screening never has.
  *
+ * Zones carry their evidence tier in their own name. A cluster of cells that
+ * has had no parcel survey is a real finding — Morrow County's is 210
+ * contiguous cells averaging 68.44 — but it is not a readiness claim, and
+ * calling it "Prime" would make it one. This follows the convention every
+ * adjacent industry settled on: JORC reports Inferred Resources rather than
+ * hiding them, and never calls them Reserves; Virginia's own Business Ready
+ * Sites Program lists a Tier 1 site but reserves "business ready" for Tier
+ * 4-5, where the wetlands delineation, geotech and boundary survey are done.
+ * So the cluster is shown, under the name its evidence supports.
+ *
  * Runs in a useMemo off the debounced weights/threshold — DBSCAN over a few
  * hundred points is sub-millisecond, so dragging the sliders morphs the zones
  * live without touching PostGIS.
@@ -20,13 +30,19 @@
 import clustersDbscan from "@turf/clusters-dbscan";
 import convex from "@turf/convex";
 import { featureCollection, point } from "@turf/helpers";
-import { GridParcel } from "@/types/parcel";
+import { EvidenceTier, GridParcel } from "@/types/parcel";
+import { tierOf } from "@/lib/evidenceRanking";
 
 export interface PrimeZone {
   /** Rank index (0 = highest mean score) — used as cluster_zone_id. */
   id: number;
-  /** e.g. "Prime Zone A (120 km² Hyper-Cluster)" */
+  /** e.g. "Prime Zone A (120 km² Hyper-Cluster)", or "Screening Zone A (…)"
+   *  where the cluster has had no parcel survey. */
   label: string;
+  /** The weakest evidence tier among the zone's members. A zone is only
+   *  "Prime" where every cell in it has had parcel diligence; otherwise the
+   *  cluster is real but uncharacterised, and says so in its own name. */
+  tier: EvidenceTier;
   parcelCount: number;
   avgScore: number;
   /** Convex hull over the cluster's cell footprints, [lon, lat] rings. */
@@ -110,9 +126,18 @@ export function computePrimeZones(
   ranked.forEach((group, rankIdx) => {
     const members = group.members;
     const areaKm2 = members.length * EARTH_RADIUS_AREA_PER_PARCEL;
+    // A zone is only "Prime" where every cell in it has had parcel
+    // diligence. One screening-tier member is enough to demote the whole
+    // cluster: the zone can be no better characterised than its weakest
+    // cell, and "Prime" is a readiness claim, not a score band.
+    const tier: EvidenceTier = members.every((m) => tierOf(m) === "parcel")
+      ? "parcel"
+      : "screening";
+    const kind = tier === "parcel" ? "Prime Zone" : "Screening Zone";
     const zone: PrimeZone = {
       id: rankIdx,
-      label: `Prime Zone ${String.fromCharCode(65 + rankIdx)} (${areaKm2} km² Hyper-Cluster)`,
+      tier,
+      label: `${kind} ${String.fromCharCode(65 + rankIdx)} (${areaKm2} km² Hyper-Cluster)`,
       parcelCount: members.length,
       avgScore:
         Math.round(
