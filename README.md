@@ -146,7 +146,7 @@ npm run dev     # http://localhost:3000
 
 ```bash
 cd worker && pip install -r requirements-dev.txt
-python -m pytest -q   # 89 tests, offline: no network, no database
+python -m pytest -q   # 115 tests, offline: no network, no database
 
 cd client && npm test # 24 tests
 ```
@@ -155,7 +155,11 @@ The worker suite is regression-shaped: it pins the defects this pipeline has
 actually shipped — NaN reaching the JSON encoder (three separate times),
 Python/Postgres rounding disagreements, Franklin County's mixed acre and
 square-foot legal areas — plus the overlay geometry and slope-cache
-provenance rules that gate verdicts depend on. It runs in CI before any
+provenance rules that gate verdicts depend on. `test_qualify_parcels.py`
+runs the whole gate engine over a synthetic county built so that each
+parcel's correct verdict is known by construction (40% wetland, 30% slope,
+residential zoning), rather than recorded from a previous run — a recorded
+fixture pins whatever the code did that day, including its bugs. It runs in CI before any
 network fetch, so a change that would compute wrong verdicts fails in
 seconds rather than after a 13-minute publish.
 
