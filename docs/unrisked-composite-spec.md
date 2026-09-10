@@ -112,7 +112,7 @@ the pure composite into the new column and, as today, the risked value into
 > recreates the view anyway, which is the only point at which the ordering can
 > be tidied.
 
-**Phase 2 — republish and verify.**
+**Phase 2 — republish and verify. _Done._**
 Publish VA, OH, TX, OR. Every row then carries both figures, and the gate is a
 data-integrity check that the worker and the future generated expression agree:
 
@@ -129,14 +129,22 @@ from grid_parcels;
 Phase 3 proceeds only at `disagreements = 0` and `composite_score_unrisked IS
 NOT NULL` for every row.
 
-**Phase 3 — make the derived value derived.**
+**Phase 3 — make the derived value derived. _Done._**
 A column cannot be made generated in place, so `composite_score` is dropped and
 re-added as the generated column. That drops `idx_grid_parcels_composite_score`
 and the dependent view, both of which this project's migrations already
 recreate wholesale. `promote_ingestion_run` stops inserting `composite_score`
 (a generated column cannot be inserted into) and inserts
-`composite_score_unrisked` instead; `stg_grid_parcels` keeps a plain column so
-staging stays a straight dict insert. The worker's multiplication is deleted.
+`composite_score_unrisked` instead, which stays a plain column on
+`stg_grid_parcels` so staging remains a straight dict insert.
+
+`stg_grid_parcels.composite_score` is **dropped**, not merely left unwritten.
+It was `NOT NULL DEFAULT 0.0`, so a worker that simply stopped sending it would
+have staged 0.0 from the default without erroring, and the promote would have
+copied that 0.0 into every cell of the region. That is the Morrow County
+annihilator arriving through a column default instead of a multiplication — a
+loud failure turned quiet. Dropping the column makes the mistake impossible and
+forces the worker and the schema to ship together.
 
 **Phase 4 — client.**
 Surface all three figures in the dossier per the disclosure block above.
@@ -155,3 +163,18 @@ already does — the tests in `evidenceRanking.test.ts` pin it.
 - **A confidence interval.** AACE Class 5 is −50%/+100% and the site-work
   estimate already carries that. A coverage fraction is not a distribution and
   must not be dressed up as one.
+
+## Outcome
+
+Phases 1-3 are live. All four regions were republished and the gate query ran
+over 1,338 rows: no NULL measurements, and exactly 2 disagreements — Loudoun
+cells `0104` and `0263`, both at 70.00 x 0.995 = 69.65, where numpy's
+half-to-even wrote 69.6 and SQL's half-away-from-zero writes 69.7. Both moved
+to 69.7 when the generated column took over, deliberately, onto the convention
+`worker/parcel_gates.py::_round_half_away` already established.
+
+The divergence is now unreachable rather than corrected: with the worker's
+multiplication deleted there is only one implementation of the risking, and it
+is the schema's.
+
+Phase 4 (client disclosure of all three figures) remains.

@@ -167,12 +167,11 @@ def _grid_records(gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
             "water_score": float(row["water_score"]),
             "risk_score": float(row["risk_score"]),
             "climate_score": float(row["climate_score"]),
-            "composite_score": float(row["composite_score"]),
-            # Falls back to the risked figure only for a caller that predates
-            # the column; a live run always supplies it.
-            "composite_score_unrisked": float(
-                row.get("composite_score_unrisked", row["composite_score"])
-            ),
+            # The measurement only. stg_grid_parcels has no composite_score
+            # column and grid_parcels.composite_score is generated, so the
+            # risked figure is the database's to compute, not the worker's
+            # to send.
+            "composite_score_unrisked": float(row["composite_score_unrisked"]),
             "evidence_coverage": float(row.get("evidence_coverage", 1.0)),
             "evidence_tier": str(row.get("evidence_tier", "screening")),
             "cluster_zone_id": int(row["cluster_zone_id"]),
@@ -788,26 +787,26 @@ def run_pipeline(
         clustered_gdf["evidence_coverage"] = evidence_coverage
         clustered_gdf["evidence_tier"] = evidence_tier
 
-        # The measurement, kept before anything is multiplied into it. A
-        # risked composite cannot be divided back into the score it came
-        # from — the Morrow County republish showed that a reconstruction
-        # can reproduce every region's prime-cell count exactly and still
-        # miss a quarter of the rows — so the unrisked figure is recorded
-        # rather than inferred later. Phase 3 of the unrisked-composite
-        # spec makes composite_score a generated column over this one and
-        # deletes the multiplication below; until then both are written and
-        # a gate query checks they agree.
+        # Only the measurement is written. grid_parcels.composite_score is a
+        # generated column — round(unrisked × coverage) inside the parcel
+        # tier, unrisked outside it — so the database performs the risking
+        # and the worker cannot overwrite a measurement with a product. That
+        # is the whole point: the annihilator that flattened Morrow County's
+        # 330 composites to a single 0.00 is now unreachable from here.
+        #
+        # It also ends a rounding divergence rather than papering over it.
+        # numpy's .round() is half-to-even and SQL round() is half away from
+        # zero, so the two disagreed wherever a product landed on an exact
+        # half-cent — 70.00 × 0.995 = 69.65 gave 69.6 here and 69.7 there.
+        # With one side gone there is nothing left to disagree.
         clustered_gdf["composite_score_unrisked"] = (
             clustered_gdf["composite_score"].round(1)
         )
 
         if evidence_tier == "parcel":
-            clustered_gdf["composite_score"] = (
-                clustered_gdf["composite_score"] * evidence_coverage
-            ).round(1)
             logger.info(
-                "Evidence tier: parcel — %.1f%% of parcel gates decided, "
-                "screening composites scaled by %.3f.",
+                "Evidence tier: parcel — %.1f%% of parcel gates decided; "
+                "the database risks the composite by %.3f.",
                 evidence_coverage * 100, evidence_coverage)
         else:
             logger.info(
