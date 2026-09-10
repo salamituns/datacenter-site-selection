@@ -585,18 +585,26 @@ def fetch_nwi_wetlands(
         logger.info("NWI wetlands (service): %d polygons in bbox.", len(gdf))
         return gdf, NWI_SERVICE_URL
 
-    # 2. Official state geodatabase, cached clip.
+    # 2. Official state geodatabase, cached clip. The cache records the
+    # bbox it covers and is checked for containment like every other
+    # clip cache: a state can host two survey regions (Franklin and
+    # Licking both pull Ohio), and the first region's clip does not
+    # cover the second. Serving it anyway would zero out wetland
+    # fractions wherever the second region lies outside the clip — a
+    # silent wetlands-gate PASS on unexamined ground.
     logger.warning("NWI service unreachable — falling back to the official %s "
                    "geodatabase (download once, cached).", state_code.upper())
     try:
-        if _nwi_cache(state_code).exists():
-            clip = gpd.read_file(_nwi_cache(state_code), layer="wetlands")
-            logger.info("NWI wetlands (cached clip): %d polygons.", len(clip))
-            return clip, _nwi_state_url(state_code)
+        bbox_poly = _bbox_polygon(min_lon, min_lat, max_lon, max_lat)
+        cached = _load_cached_clip(_nwi_cache(state_code), bbox_poly)
+        if cached is not None:
+            logger.info("NWI wetlands (cached clip): %d polygons.", len(cached))
+            return cached, _nwi_state_url(state_code)
         _nwi_cache(state_code).parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as tmp:
-            zip_path = Path(tmp) / "nwi_va.zip"
-            logger.info("NWI: downloading Virginia geodatabase (~395 MB)…")
+            zip_path = Path(tmp) / f"nwi_{state_code.lower()}.zip"
+            logger.info("NWI: downloading %s geodatabase (~395 MB)…",
+                        state_code.upper())
             dl = requests.get(_nwi_state_url(state_code), stream=True, timeout=1800,
                               headers={"User-Agent": BROWSER_UA})
             dl.raise_for_status()
@@ -647,7 +655,7 @@ def fetch_nwi_wetlands(
                 "attribute": clip[attr_col] if attr_col else None,
                 "geometry": clip.geometry,
             }, crs="EPSG:4326")
-            out.to_file(_nwi_cache(state_code), layer="wetlands")
+            _save_cached_clip(_nwi_cache(state_code), out, bbox_poly)
             logger.info("NWI wetlands (geodatabase clip): %d polygons (cached).", len(out))
             return out, _nwi_state_url(state_code)
     except Exception as e:  # noqa: BLE001
