@@ -184,6 +184,7 @@ export function mapGridParcelRow(item: any): GridParcel | null {
     risk_score: num(item.risk_score),
     climate_score: num(item.climate_score),
     composite_score: num(item.composite_score) ?? 0,
+    evidence_coverage: num(item.evidence_coverage) ?? 1,
     cluster_zone_id: num(item.cluster_zone_id),
     cluster_label: str(item.cluster_label),
     is_prime_zone: Boolean(item.is_prime_zone),

@@ -292,11 +292,17 @@ export default function DashboardPage() {
 
     return rawParcels
       .map((p) => {
+        // Re-weighted from the pure component scores, then re-scaled by
+        // the region's evidence coverage — the same factor the worker
+        // baked into the stored composite, re-applied so dragging the
+        // sliders cannot silently un-do it. Non-reweightable parcels keep
+        // their stored (already-scaled) composite.
         const dynamicScore = reweightable(p)
-          ? p.power_score! * wNorm.power +
-            p.water_score! * wNorm.water +
-            p.risk_score! * wNorm.risk +
-            p.climate_score! * wNorm.climate
+          ? (p.power_score! * wNorm.power +
+             p.water_score! * wNorm.water +
+             p.risk_score! * wNorm.risk +
+             p.climate_score! * wNorm.climate) *
+            (p.evidence_coverage ?? 1)
           : p.composite_score;
 
         return {
@@ -334,10 +340,11 @@ export default function DashboardPage() {
           p.water_score != null &&
           p.risk_score != null &&
           p.climate_score != null
-            ? p.power_score * wNorm.power +
-              p.water_score * wNorm.water +
-              p.risk_score * wNorm.risk +
-              p.climate_score * wNorm.climate
+            ? (p.power_score * wNorm.power +
+               p.water_score * wNorm.water +
+               p.risk_score * wNorm.risk +
+               p.climate_score * wNorm.climate) *
+              (p.evidence_coverage ?? 1)
             : p.composite_score
         ).toFixed(1)
       ),

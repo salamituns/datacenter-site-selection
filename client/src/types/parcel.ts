@@ -44,6 +44,11 @@ export interface GridParcel {
   risk_score: number | null;
   climate_score: number | null;
   composite_score: number;
+  /** Share of the region's parcel gates the current diligence can decide
+   *  (0–1). The composite is the screening score × this factor, so an
+   *  under-evidenced site cannot out-rank a fully-diligenced one.
+   *  Optional because demo/mock rows predate it; consumers default 1. */
+  evidence_coverage?: number;
 
   // ML Clusters
   cluster_zone_id: number | null;

@@ -29,7 +29,9 @@ data, not a defect to be papered over with an assumption.
 """
 
 import logging
+import random
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 import geopandas as gpd
@@ -318,26 +320,41 @@ class FranklinParcelAPI:
 
     def _paged(self, base_url: str, bbox: str, out_fields: str,
                where: str = "1=1") -> Optional[List[Dict[str, Any]]]:
-        """Pages an ArcGIS query in GeoJSON; None only on hard failure."""
+        """
+        Pages an ArcGIS query in GeoJSON; None only on hard failure.
+        A failed page is retried with backoff — the county service
+        intermittently 5xx's mid-run, and without a retry a whole parcel
+        layer (and with it the run) is lost to one bad request.
+        """
         features: List[Dict[str, Any]] = []
         offset = 0
         page = 1000
+        attempts = 4
         try:
             while True:
-                r = requests.get(base_url, params={
-                    "where": where,
-                    "geometry": bbox,
-                    "geometryType": "esriGeometryEnvelope",
-                    "inSR": "4326",
-                    "outSR": "4326",
-                    "outFields": out_fields,
-                    "returnGeometry": "true",
-                    "f": "geojson",
-                    "resultRecordCount": page,
-                    "resultOffset": offset,
-                }, timeout=120)
-                r.raise_for_status()
-                data = r.json()
+                data = None
+                for attempt in range(attempts):
+                    r = requests.get(base_url, params={
+                        "where": where,
+                        "geometry": bbox,
+                        "geometryType": "esriGeometryEnvelope",
+                        "inSR": "4326",
+                        "outSR": "4326",
+                        "outFields": out_fields,
+                        "returnGeometry": "true",
+                        "f": "geojson",
+                        "resultRecordCount": page,
+                        "resultOffset": offset,
+                    }, timeout=120)
+                    if r.status_code in (429, 500, 502, 503, 504):
+                        if attempt < attempts - 1:
+                            time.sleep(0.5 * (2 ** attempt) + random.uniform(0, 0.5))
+                            continue
+                    r.raise_for_status()
+                    data = r.json()
+                    break
+                if data is None:
+                    raise requests.HTTPError(f"status {r.status_code} after {attempts} attempts")
                 if "error" in data:
                     logger.warning("Franklin query error: %s", data["error"])
                     return None if not features else features

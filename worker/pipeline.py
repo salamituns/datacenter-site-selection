@@ -168,6 +168,7 @@ def _grid_records(gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
             "risk_score": float(row["risk_score"]),
             "climate_score": float(row["climate_score"]),
             "composite_score": float(row["composite_score"]),
+            "evidence_coverage": float(row.get("evidence_coverage", 1.0)),
             "cluster_zone_id": int(row["cluster_zone_id"]),
             "cluster_label": str(row["cluster_label"]),
             "is_prime_zone": bool(row["is_prime_zone"]),
@@ -429,6 +430,9 @@ def run_pipeline(
 
         # ── Loudoun parcel qualification (pilot) ───────────────────────
         parcel_stats: Dict[str, Any] = {}
+        # Regions without a parcel pilot decide none of the parcel gates:
+        # their screening composites carry the full coverage penalty.
+        evidence_coverage = 0.0
         if qualify_parcels_flag and state_code in PARCEL_PILOTS:
             jurisdiction = PARCEL_PILOTS[state_code]
             logger.info("Step 6: %s parcel qualification (cadastral gates)…",
@@ -469,6 +473,22 @@ def run_pipeline(
                     logger.info("NWI wetlands served via the official geodatabase "
                                 "fallback — gates will use it.")
 
+            # NFHL: county mirror first (Loudoun's FEMAFlood), the federal
+            # FEMA service as the floor for everyone else. One federal
+            # adapter decides the floodway gate in any US county — every
+            # parcel outside Loudoun was UNKNOWN only because nothing
+            # queried it.
+            nfhl_src = layer_src["nfhl"]["source_key"]
+            nfhl_endpoint = layer_src["nfhl"]["endpoint"]
+            if nfhl_gdf is None:
+                nfhl_gdf, nfhl_endpoint = overlay_layers.fetch_nfhl_floodzones(
+                    min_lon, min_lat, max_lon, max_lat, state_code=state_code
+                )
+                if nfhl_gdf is not None:
+                    nfhl_src = "fema_nfhl"
+                    logger.info("NFHL flood zones served via the federal FEMA "
+                                "service — gates will use it.")
+
             for layer_key, gdf in (
                 ("parcels", parcels_gdf),
                 ("zoning", zoning_gdf),
@@ -476,14 +496,18 @@ def run_pipeline(
                 ("nfhl", nfhl_gdf),
             ):
                 src = layer_src[layer_key]["source_key"]
+                endpoint = layer_src[layer_key]["endpoint"]
+                if layer_key == "wetlands":
+                    endpoint = wetlands_endpoint
+                elif layer_key == "nfhl":
+                    src, endpoint = nfhl_src, nfhl_endpoint
                 # A layer the jurisdiction does not publish has no source
                 # to attribute; its gates are UNKNOWN and there is nothing
                 # to snapshot.
                 if run is not None and src is not None:
                     snapshots[layer_key] = run.snapshot(
                         layer=layer_key, source_key=src,
-                        endpoint_url=(wetlands_endpoint if layer_key == "wetlands"
-                                      else layer_src[layer_key]["endpoint"]),
+                        endpoint_url=endpoint,
                         record_count=None if gdf is None else len(gdf),
                         evidence_class="observed",
                         quality=None if gdf is None else {"rows": int(len(gdf))},
@@ -507,8 +531,10 @@ def run_pipeline(
             # Verification layers: TIGER roads, PAD-US protected areas,
             # 3DEP slopes. Each degrades independently to UNKNOWN.
             logger.info("Step 6b: verification layers (TIGER roads, PAD-US, 3DEP slopes)…")
-            roads_gdf = overlay_layers.fetch_tiger_roads(min_lon, min_lat, max_lon, max_lat)
-            padus_gdf = overlay_layers.fetch_padus(min_lon, min_lat, max_lon, max_lat)
+            roads_gdf = overlay_layers.fetch_tiger_roads(
+                min_lon, min_lat, max_lon, max_lat, state_code=state_code)
+            padus_gdf = overlay_layers.fetch_padus(
+                min_lon, min_lat, max_lon, max_lat, state_code=state_code)
             slopes = None
             try:
                 slopes = overlay_layers.sample_3dep_slopes(parcels_gdf)
@@ -710,10 +736,36 @@ def run_pipeline(
             )
             logger.info("Parcel qualification: %d parcels, %d metric rows, %d gate rows.",
                         len(parcel_records), len(metric_rows), len(gate_rows))
+            # Evidence coverage: the share of this region's parcel gates
+            # the current diligence can decide. Computed from the run's
+            # own gate rows, never assumed — also in dry-run, so the
+            # local output matches what a publish would store.
+            total_gates = len(gate_rows)
+            decided_gates = sum(1 for g in gate_rows if g["status"] != "UNKNOWN")
+            evidence_coverage = (
+                round(decided_gates / total_gates, 3) if total_gates else 0.0
+            )
             if run is not None:
                 run.stage_land_parcels(parcel_records)
                 run.stage_parcel_metrics(metric_rows)
                 run.stage_parcel_gates(gate_rows)
+
+        # ── Evidence-coverage weighting ────────────────────────────────
+        # The screening composite is scaled by the region's evidence
+        # coverage, so an under-evidenced site cannot out-rank a
+        # fully-diligenced one: a region that decides 6 of 9 gates
+        # carries at most two-thirds of its screening score, and a region
+        # with no parcel tier at all carries none of it. The factor is
+        # stored per cell (grid_parcels.evidence_coverage) so the client's
+        # live re-weighting re-applies it instead of silently un-doing it.
+        clustered_gdf["evidence_coverage"] = evidence_coverage
+        clustered_gdf["composite_score"] = (
+            clustered_gdf["composite_score"] * evidence_coverage
+        ).round(1)
+        logger.info(
+            "Evidence coverage: %.1f%% of parcel gates decided — screening "
+            "composites scaled by %.3f.",
+            evidence_coverage * 100, evidence_coverage)
 
         # ── Stage screening outputs ────────────────────────────────────
         if output_geojson:

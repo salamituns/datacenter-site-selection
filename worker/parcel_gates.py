@@ -857,7 +857,7 @@ def qualify_parcels(
         else:
             gate(pin, "floodway", "PASS",
                  "Outside the regulatory floodway and 100-year floodplain "
-                 "per FEMA flood hazard zones (county FEMAFlood mirror).")
+                 "per FEMA flood hazard zones (NFHL).")
 
         # Wetlands
         if wetlands_gdf is None:
