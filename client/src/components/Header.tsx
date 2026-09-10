@@ -6,8 +6,8 @@ import { REGIONS, HOME_REGION } from "@/lib/regions";
 interface HeaderProps {
   totalParcels: number;
   primeCount: number;
-  selectedState: string;
-  onStateChange: (state: string) => void;
+  selectedRegion: string;
+  onRegionChange: (region: string) => void;
   /** Parcel counts per region code — unsurveyed regions are disabled. */
   regionCounts?: Record<string, number> | null;
   isLive: boolean;
@@ -40,8 +40,8 @@ export function BenchmarkMark({ size = 24 }: { size?: number }) {
 export const Header: React.FC<HeaderProps> = ({
   totalParcels,
   primeCount,
-  selectedState,
-  onStateChange,
+  selectedRegion,
+  onRegionChange,
   regionCounts,
   isLive,
   isSyncing,
@@ -81,8 +81,8 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Region selector */}
         <div className="relative hidden sm:block">
           <select
-            value={selectedState}
-            onChange={(e) => onStateChange(e.target.value)}
+            value={selectedRegion}
+            onChange={(e) => onRegionChange(e.target.value)}
             aria-label="Select region"
             className="h-8 appearance-none rounded-[2px] border border-border-strong bg-surface pl-2 pr-6 font-mono text-[10px] uppercase tracking-wide text-foreground transition-colors hover:border-foreground/60 focus:border-accent-600 focus:outline-none sm:pl-2.5 sm:pr-7 sm:text-[11px]"
           >

@@ -46,7 +46,7 @@ function decodeEWKBPoint(hex: string): [number, number] | null {
 }
 
 /**
- * Counts parcels per region (state_code) so the selector can disable
+ * Counts parcels per region (region_key) so the selector can disable
  * regions that have not been surveyed yet. Cheap HEAD-count queries.
  */
 export async function fetchRegionCounts(codes: string[]): Promise<Record<string, number>> {
@@ -57,7 +57,7 @@ export async function fetchRegionCounts(codes: string[]): Promise<Record<string,
         const { count, error } = await supabase
           .from("grid_parcels")
           .select("grid_id", { count: "exact", head: true })
-          .eq("state_code", code);
+          .eq("region_key", code);
         return [code, error ? 0 : (count ?? 0)] as const;
       })
     );
@@ -73,11 +73,11 @@ export async function fetchRegionCounts(codes: string[]): Promise<Record<string,
  * lines + substations, USGS observation wells) for a survey region. Returns
  * empty lists when unavailable — the map simply draws no markers.
  */
-export async function fetchMapFeatures(stateCode?: string): Promise<MapFeatures> {
+export async function fetchMapFeatures(regionKey?: string): Promise<MapFeatures> {
   const empty: MapFeatures = { lines: [], substations: [], wells: [] };
   if (!supabase) return empty;
   try {
-    const scope = (q: any) => (stateCode ? q.eq("state_code", stateCode) : q);
+    const scope = (q: any) => (regionKey ? q.eq("region_key", regionKey) : q);
     const [linesRes, subsRes, wellsRes] = await Promise.all([
       scope(supabase.from("v_transmission_lines").select("*").limit(500)),
       scope(supabase.from("v_substations").select("*").limit(500)),
@@ -212,7 +212,7 @@ export function mapGridParcelRow(item: any): GridParcel | null {
  * region has no qualified parcels yet.
  */
 export async function fetchLandParcels(
-  stateCode: string,
+  regionKey: string,
   limit: number = 5000
 ): Promise<LandParcel[] | null> {
   if (!supabase) return null;
@@ -226,7 +226,7 @@ export async function fetchLandParcels(
         .select(
           "parcel_key,pin,state_code,county_name,lon,lat,gis_acreage,legal_acreage,overall_status,geojson_geom"
         )
-        .eq("state_code", stateCode)
+        .eq("region_key", regionKey)
         .range(offset, offset + pageSize - 1);
       if (error) {
         console.error("Failed to fetch land parcels:", error);
@@ -373,11 +373,11 @@ export async function fetchParcelPowerEvidence(
 
 /**
  * Fetches ranked parcels directly from Supabase PostGIS `v_grid_parcels` view or table.
- * Optionally scoped to a single region (state_code) for server-side filtering.
+ * Optionally scoped to a single region (region_key) for server-side filtering.
  */
 export async function fetchGridParcels(
   limit: number = 500,
-  stateCode?: string
+  regionKey?: string
 ): Promise<GridParcel[]> {
   if (!supabase) {
     return []; // Credentials not configured — caller falls back to demo data.
@@ -389,7 +389,7 @@ export async function fetchGridParcels(
       .select("*")
       .order("composite_score", { ascending: false })
       .limit(limit);
-    if (stateCode) query = query.eq("state_code", stateCode);
+    if (regionKey) query = query.eq("region_key", regionKey);
     let { data, error } = await query;
 
     // 2. If view query fails or returns empty, fallback to `grid_parcels` table
@@ -399,7 +399,7 @@ export async function fetchGridParcels(
         .select("*")
         .order("composite_score", { ascending: false })
         .limit(limit);
-      if (stateCode) fallbackQuery = fallbackQuery.eq("state_code", stateCode);
+      if (regionKey) fallbackQuery = fallbackQuery.eq("region_key", regionKey);
       const fallbackRes = await fallbackQuery;
       data = fallbackRes.data;
       error = fallbackRes.error;

@@ -99,14 +99,16 @@ A screening-tier region keeps its composite **unscaled**. Scaling it by a covera
 
 ## Survey Regions
 
+Regions are keyed by county slug (`STATE-COUNTY`). The slug scopes publication: `promote_ingestion_run` swaps, uniqueness and supersession are region-keyed, so one state can host more than one diligenced county (OH-FRANKLIN and later OH-LICKING) without either touching the other. State-wide artefacts (PAD-US, NWI, TIGER, PJM RTEP) stay keyed by the state half of the slug.
+
 | Region | County / Area | Grid operator | CLI |
 | :--- | :--- | :--- | :--- |
-| **Virginia (Loudoun)** — Data Center Alley *(parcel pilot)* | Loudoun County | PJM | `python pipeline.py --state VA` |
-| **Texas (Abilene)** | Taylor County | ERCOT | `python pipeline.py --state TX` |
-| **Ohio (New Albany)** | Franklin County | PJM | `python pipeline.py --state OH` |
-| **Oregon (Boardman)** | Morrow County | BPA | `python pipeline.py --state OR` |
+| **Virginia (Loudoun)** — Data Center Alley *(parcel pilot)* | Loudoun County | PJM | `python pipeline.py --region VA-LOUDOUN` |
+| **Texas (Abilene)** *(parcel pilot)* | Taylor County | ERCOT | `python pipeline.py --region TX-TAYLOR` |
+| **Ohio (New Albany)** *(parcel pilot)* | Franklin County | PJM | `python pipeline.py --region OH-FRANKLIN` |
+| **Oregon (Boardman)** | Morrow County | BPA | `python pipeline.py --region OR-MORROW` |
 
-Ad-hoc surveys: `--bbox min_lon,min_lat,max_lon,max_lat --county <label>`. Parcel qualification currently runs for VA; other regions get screening only until their county layers land.
+Ad-hoc surveys: `--region <slug> --bbox min_lon,min_lat,max_lon,max_lat --county <label>`. A legacy bare state code (`--region VA`) still maps to that state's one preset; it cannot name a new region — a second county in a state needs its own slug and preset.
 
 ---
 
@@ -128,8 +130,8 @@ cd worker && python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env    # set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
 
-python pipeline.py --state VA --dry-run   # fetch + compute, publish nothing
-python pipeline.py --state VA             # staged, atomically promoted
+python pipeline.py --region VA-LOUDOUN --dry-run   # fetch + compute, publish nothing
+python pipeline.py --region VA-LOUDOUN             # staged, atomically promoted
 ```
 
 Publishing requires `SUPABASE_SERVICE_ROLE_KEY` (the anon key can no longer write, by design).

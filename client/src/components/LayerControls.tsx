@@ -15,7 +15,7 @@ interface LayerControlsProps {
   onToggleLayer: (layerKey: keyof LayerVisibility) => void;
   /** Region in view. The parcel layer names the county that publishes it,
    *  which differs per region and does not exist in all of them. */
-  selectedState?: string;
+  selectedRegion?: string;
 }
 
 interface LayerConfig {
@@ -88,9 +88,9 @@ const LAYER_CONFIGS: LayerConfig[] = [
  * saying so is more useful than an unexplained blank map.
  */
 const PARCEL_SOURCE: Record<string, string> = {
-  VA: "Loudoun County GIS",
-  OH: "Franklin County Auditor",
-  TX: "Taylor CAD",
+  "VA-LOUDOUN": "Loudoun County GIS",
+  "OH-FRANKLIN": "Franklin County Auditor",
+  "TX-TAYLOR": "Taylor CAD",
 };
 
 /** Square instrument switch — a slide plate, not a pill. */
@@ -117,7 +117,7 @@ function ToggleSwitch({ checked }: { checked: boolean }) {
 export const LayerControls: React.FC<LayerControlsProps> = ({
   layers,
   onToggleLayer,
-  selectedState,
+  selectedRegion,
 }) => {
   const visibleCount = Object.values(layers).filter(Boolean).length;
 
@@ -154,8 +154,8 @@ export const LayerControls: React.FC<LayerControlsProps> = ({
                   </div>
                   <div className="mt-0.5 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted">
                     {layer.key === "qualifiedParcels"
-                      ? (PARCEL_SOURCE[selectedState ?? ""]
-                          ? `${PARCEL_SOURCE[selectedState ?? ""]} · ${layer.description}`
+                      ? (PARCEL_SOURCE[selectedRegion ?? ""]
+                          ? `${PARCEL_SOURCE[selectedRegion ?? ""]} · ${layer.description}`
                           : "No parcel survey in this region")
                       : `${layer.source} · ${layer.description}`}
                   </div>

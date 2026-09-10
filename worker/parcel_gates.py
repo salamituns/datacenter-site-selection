@@ -219,6 +219,7 @@ def qualify_parcels(
     county_name: str,
     snapshots: Dict[str, Optional[str]],
     retrieve_time: str,
+    region_key: Optional[str] = None,
     roads_gdf: Optional[gpd.GeoDataFrame] = None,
     padus_gdf: Optional[gpd.GeoDataFrame] = None,
     slopes: Optional[Dict[Any, Tuple[Optional[float], Optional[float], int]]] = None,
@@ -255,7 +256,7 @@ def qualify_parcels(
     n = len(parcels_gdf)
     assumptions = assumptions or {}
     incentives_of = parcel_incentives or {}
-    logger.info("Qualifying %d Loudoun parcels…", n)
+    logger.info("Qualifying %d %s parcels…", n, county_name)
 
     planar = parcels_gdf.to_crs(PLANAR_CRS)
     parcel_area_m2 = planar.geometry.area
@@ -547,6 +548,11 @@ def qualify_parcels(
             "source_parcel_id": str(row["pin"]),
             "state_code": state_code,
             "county_name": county_name,
+            # Regions are keyed by county slug (VA-LOUDOUN, OH-FRANKLIN):
+            # promote swaps and uniqueness are scoped by this, so two
+            # counties of one state coexist. The slug is derived upstream
+            # from the region preset, never guessed here.
+            "region_key": region_key,
             "geom": _to_multi_wkt(geom),
             "gis_acreage": round(gis_acreage, 3),
             "legal_acreage": (lambda f: None if f is None else round(f, 3))(

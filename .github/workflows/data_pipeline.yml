@@ -6,14 +6,10 @@ on:
     - cron: '0 0 * * 0'
   workflow_dispatch:
     inputs:
-      state:
-        description: 'State code (e.g. VA, TX, OH)'
+      region:
+        description: 'Region slug (e.g. VA-LOUDOUN, OH-FRANKLIN, TX-TAYLOR, OR-MORROW)'
         required: true
-        default: 'VA'
-      county:
-        description: 'County or Region name'
-        required: true
-        default: 'Loudoun'
+        default: 'VA-LOUDOUN'
       dry_run:
         description: 'Dry run mode (do not push to Supabase)'
         type: boolean
@@ -112,8 +108,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd worker
-          STATE="${{ github.event.inputs.state || 'VA' }}"
-          COUNTY="${{ github.event.inputs.county || 'Loudoun' }}"
+          REGION="${{ github.event.inputs.region || 'VA-LOUDOUN' }}"
 
-          echo "Running pipeline for $COUNTY, $STATE (dry run: ${DRY_RUN:-no})..."
-          python pipeline.py --state "$STATE" --county "$COUNTY" $DRY_RUN
+          echo "Running pipeline for $REGION (dry run: ${DRY_RUN:-no})..."
+          python pipeline.py --region "$REGION" $DRY_RUN

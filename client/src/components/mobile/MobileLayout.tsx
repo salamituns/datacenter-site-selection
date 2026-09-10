@@ -22,8 +22,8 @@ interface MobileLayoutProps {
   onPrimeThresholdChange: (threshold: number) => void;
   selectedParcel: GridParcel | null;
   onSelectParcel: (parcel: GridParcel) => void;
-  selectedState: string;
-  onStateChange: (state: string) => void;
+  selectedRegion: string;
+  onRegionChange: (region: string) => void;
   /** Parcel counts per region code — unsurveyed regions are disabled. */
   regionCounts?: Record<string, number> | null;
   isLive: boolean;
@@ -60,8 +60,8 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
   onPrimeThresholdChange,
   selectedParcel,
   onSelectParcel,
-  selectedState,
-  onStateChange,
+  selectedRegion,
+  onRegionChange,
   regionCounts,
   isLive,
   isSyncing,
@@ -182,8 +182,8 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
         {/* Region pill — cycles surveyed regions */}
         <div className="relative shrink-0">
           <select
-            value={selectedState}
-            onChange={(e) => onStateChange(e.target.value)}
+            value={selectedRegion}
+            onChange={(e) => onRegionChange(e.target.value)}
             aria-label="Select region"
             className="h-10 appearance-none rounded-[3px] border border-border-strong bg-surface/95 pl-2.5 pr-6 font-mono text-[11px] uppercase tracking-wide text-foreground shadow-plate backdrop-blur transition-colors focus:border-accent-600 focus:outline-none"
           >

@@ -46,25 +46,32 @@ load_dotenv()
 
 PIPELINE_VERSION = "3.0.0"
 
-# Survey region presets — bbox (min_lon, min_lat, max_lon, max_lat), county
-# label, and the regional grid operator attached to ingested parcels.
+# Survey region presets, keyed by region slug (STATE-COUNTY). The slug is
+# the region's identity in the database: promote swaps, uniqueness and
+# supersession are scoped by region_key, so two counties of one state
+# (OH-FRANKLIN, OH-LICKING) coexist instead of overwriting each other.
+# bbox is (min_lon, min_lat, max_lon, max_lat).
 REGION_PRESETS: Dict[str, Dict[str, Any]] = {
-    "VA": {
+    "VA-LOUDOUN": {
+        "state": "VA",
         "bbox": (-77.85, 38.75, -77.25, 39.25),
         "county": "Loudoun",
         "grid_operator": "PJM Interconnection",
     },
-    "TX": {
+    "TX-TAYLOR": {
+        "state": "TX",
         "bbox": (-100.05, 32.15, -99.45, 32.75),
         "county": "Taylor",
         "grid_operator": "ERCOT",
     },
-    "OH": {
+    "OH-FRANKLIN": {
+        "state": "OH",
         "bbox": (-83.15, 39.85, -82.55, 40.35),
         "county": "Franklin",
         "grid_operator": "PJM Interconnection",
     },
-    "OR": {
+    "OR-MORROW": {
+        "state": "OR",
         "bbox": (-120.05, 45.55, -119.45, 46.15),
         "county": "Morrow",
         "grid_operator": "Bonneville Power Administration",
@@ -81,13 +88,22 @@ SCREENING_PLANAR_CRS = "EPSG:5070"
 # plus rows in constraint_rules and cost_assumptions — the engine itself
 # is jurisdiction-agnostic.
 PARCEL_PILOTS: Dict[str, str] = {
-    "VA": "Loudoun County, VA",
+    "VA-LOUDOUN": "Loudoun County, VA",
     # Central Ohio is a PJM market, so power diligence, the national
     # overlays and PeeringDB all carry over unchanged.
-    "OH": "Franklin County, OH",
+    "OH-FRANKLIN": "Franklin County, OH",
     # Abilene is in ERCOT, so unlike Ohio nothing from the PJM power
     # diligence layer carries over and that gate stays UNKNOWN.
-    "TX": "Taylor County, TX",
+    "TX-TAYLOR": "Taylor County, TX",
+}
+
+# One adapter per parcel-pilot region. Dispatch is by region slug, never
+# state_code — the whole point of the re-key is that a state can host more
+# than one diligenced county.
+PARCEL_ADAPTERS: Dict[str, str] = {
+    "VA-LOUDOUN": "loudoun",
+    "OH-FRANKLIN": "franklin",
+    "TX-TAYLOR": "taylor",
 }
 
 logging.basicConfig(
@@ -138,7 +154,7 @@ def _int_or_none(v: Any) -> Optional[int]:
     return None if f is None else int(f)
 
 
-def _grid_records(gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
+def _grid_records(gdf: gpd.GeoDataFrame, region_key: str) -> List[Dict[str, Any]]:
     """Builds staged screening-cell records from the scored grid."""
     records: List[Dict[str, Any]] = []
     for _, row in gdf.iterrows():
@@ -149,6 +165,7 @@ def _grid_records(gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
             "area_sq_km": float(row["area_sq_km"]),
             "state_code": str(row["state_code"]),
             "county_name": str(row["county_name"]),
+            "region_key": region_key,
             "region": str(row.get("grid_operator", "")),
             "power_distance_miles": float(row["power_distance_miles"]),
             "substation_distance_miles": float(row["substation_distance_miles"]),
@@ -202,7 +219,8 @@ def _grid_records(gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
     return records
 
 
-def _line_records(lines_gdf: gpd.GeoDataFrame, state_code: str) -> List[Dict[str, Any]]:
+def _line_records(lines_gdf: gpd.GeoDataFrame, state_code: str,
+                  region_key: str) -> List[Dict[str, Any]]:
     from shapely.geometry import MultiLineString
     records: List[Dict[str, Any]] = []
     for _, row in lines_gdf.iterrows():
@@ -213,6 +231,7 @@ def _line_records(lines_gdf: gpd.GeoDataFrame, state_code: str) -> List[Dict[str
             records.append({
                 "feature_id": feature_id,
                 "state_code": state_code,
+                "region_key": region_key,
                 "owner": str(row.get("owner") or "Unknown Owner"),
                 "voltage_kv": float(row["voltage_kv"]),
                 "volt_class": str(row.get("volt_class") or ""),
@@ -222,17 +241,20 @@ def _line_records(lines_gdf: gpd.GeoDataFrame, state_code: str) -> List[Dict[str
     return records
 
 
-def _sub_records(subs_gdf: gpd.GeoDataFrame, state_code: str) -> List[Dict[str, Any]]:
+def _sub_records(subs_gdf: gpd.GeoDataFrame, state_code: str,
+                 region_key: str) -> List[Dict[str, Any]]:
     return [{
         "feature_id": str(row["feature_id"]),
         "state_code": state_code,
+        "region_key": region_key,
         "substation_name": str(row["substation_name"]),
         "voltage_kv": float(row["voltage_kv"]),
         "geom": f"SRID=4326;POINT({row.geometry.x} {row.geometry.y})",
     } for _, row in subs_gdf.iterrows()]
 
 
-def _well_records(wells_df: pd.DataFrame, state_code: str) -> List[Dict[str, Any]]:
+def _well_records(wells_df: pd.DataFrame, state_code: str,
+                  region_key: str) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     seen = set()
     for _, row in wells_df.iterrows():
@@ -246,6 +268,7 @@ def _well_records(wells_df: pd.DataFrame, state_code: str) -> List[Dict[str, Any
         records.append({
             "site_no": site_no,
             "state_code": state_code,
+            "region_key": region_key,
             "water_depth_ft": None if pd.isna(row["water_depth_ft"]) else float(row["water_depth_ft"]),
             "geom": f"SRID=4326;POINT({lon} {lat})",
         })
@@ -253,39 +276,50 @@ def _well_records(wells_df: pd.DataFrame, state_code: str) -> List[Dict[str, Any
 
 
 def run_pipeline(
+    region_key: str = "VA-LOUDOUN",
     min_lon: float = -77.85,
     min_lat: float = 38.75,
     max_lon: float = -77.25,
     max_lat: float = 39.25,
-    state_code: str = "VA",
-    county_name: str = "Loudoun",
-    grid_operator: str = "PJM Interconnection",
+    county_name: Optional[str] = None,
+    grid_operator: Optional[str] = None,
     dry_run: bool = False,
     output_geojson: Optional[str] = None,
     trigger: str = "manual",
     qualify_parcels_flag: bool = True,
 ) -> Tuple[gpd.GeoDataFrame, Dict[int, Dict[str, Any]]]:
     """
-    Executes the screening pipeline (+ Loudoun parcel qualification) and
-    publishes the complete run atomically. Raises on failure.
+    Executes the screening pipeline (+ parcel qualification where the
+    region has a pilot) and publishes the complete run atomically.
+    Raises on failure.
+
+    Regions are identified by slug (STATE-COUNTY, e.g. OH-FRANKLIN). The
+    slug scopes promotion: publishing one county never touches a sibling
+    county of the same state. State-scoped artefacts (PAD-US, TIGER,
+    PJM RTEP) are still keyed by the state half of the slug.
     """
+    preset = REGION_PRESETS.get(region_key, {})
+    state_code = region_key.split("-", 1)[0]
+    county_name = county_name or preset.get("county", "Regional")
+    grid_operator = grid_operator or preset.get("grid_operator", "PJM Interconnection")
     logger.info("=" * 75)
     logger.info("DATA CENTER SITE SELECTION PIPELINE v%s", PIPELINE_VERSION)
-    logger.info("Target Region: %s County, %s [%s, %s, %s, %s]",
-                county_name, state_code, min_lon, min_lat, max_lon, max_lat)
+    logger.info("Target Region: %s [%s, %s, %s, %s]",
+                region_key, min_lon, min_lat, max_lon, max_lat)
     logger.info("=" * 75)
 
     client = None if dry_run else _get_supabase_client()
     run = None
     if client is not None:
         run = IngestionRun(
-            client, region_code=state_code, pipeline_version=PIPELINE_VERSION,
+            client, region_code=region_key, pipeline_version=PIPELINE_VERSION,
             trigger=trigger,
             config={
+                "region_key": region_key,
                 "bbox": [min_lon, min_lat, max_lon, max_lat],
                 "county": county_name,
                 "grid_operator": grid_operator,
-                "parcels": qualify_parcels_flag and state_code in PARCEL_PILOTS,
+                "parcels": qualify_parcels_flag and region_key in PARCEL_PILOTS,
             },
         )
         run.start()
@@ -392,7 +426,7 @@ def run_pipeline(
         # being corrected downstream. How much of that survey resolves is a
         # property of the run, and is measured later as evidence_coverage.
         evidence_tier = (
-            "parcel" if qualify_parcels_flag and state_code in PARCEL_PILOTS
+            "parcel" if qualify_parcels_flag and region_key in PARCEL_PILOTS
             else "screening"
         )
         logger.info("Step 5: Scoring & clustering…")
@@ -452,22 +486,27 @@ def run_pipeline(
         # and a region whose gates all came back UNKNOWN both sit at 0.0,
         # and they are different facts.
         evidence_coverage = 0.0
-        if qualify_parcels_flag and state_code in PARCEL_PILOTS:
-            jurisdiction = PARCEL_PILOTS[state_code]
+        if qualify_parcels_flag and region_key in PARCEL_PILOTS:
+            jurisdiction = PARCEL_PILOTS[region_key]
             logger.info("Step 6: %s parcel qualification (cadastral gates)…",
                         jurisdiction)
             # One adapter per jurisdiction, one contract: fetch_all returns
             # the same four keys, and a layer the county does not publish
             # comes back None so the engine records UNKNOWN rather than
-            # inventing a verdict.
-            if state_code == "OH":
+            # inventing a verdict. Dispatch is by region slug — a state
+            # can host more than one diligenced county.
+            adapter = PARCEL_ADAPTERS[region_key]
+            if adapter == "franklin":
                 from franklin_api import FranklinParcelAPI
                 county_api: Any = FranklinParcelAPI()
-            elif state_code == "TX":
+            elif adapter == "taylor":
                 from taylor_api import TaylorParcelAPI
                 county_api = TaylorParcelAPI()
-            else:
+            elif adapter == "loudoun":
                 county_api = LoudounParcelAPI()
+            else:
+                raise RuntimeError(
+                    f"No parcel adapter registered for region {region_key}.")
             layers = county_api.fetch_all(min_lon, min_lat, max_lon, max_lat)
             parcels_gdf = layers["parcels"]
             zoning_gdf, wetlands_gdf, nfhl_gdf = layers["zoning"], layers["wetlands"], layers["nfhl"]
@@ -542,7 +581,7 @@ def run_pipeline(
                 # promote deactivates any parcel the run did not restage.
                 raise RuntimeError(
                     f"{jurisdiction} parcel layer unavailable — parcel "
-                    f"qualification cannot run, and publishing {state_code} "
+                    f"qualification cannot run, and publishing {region_key} "
                     f"on screening cells alone would deactivate the "
                     f"region's existing parcels."
                 )
@@ -746,6 +785,7 @@ def run_pipeline(
                 subs_gdf=subs_gdf if power_live else None,
                 rules=rules, state_code=state_code, county_name=county_name,
                 snapshots=snapshots, retrieve_time=retrieve_time,
+                region_key=region_key,
                 roads_gdf=roads_gdf, padus_gdf=padus_gdf, slopes=slopes,
                 utility_gdf=utility_gdf, rtep_df=rtep_df, queue_gdf=queue_gdf,
                 apps_gdf=apps_gdf, parcel_evidence=parcel_evidence,
@@ -821,12 +861,15 @@ def run_pipeline(
 
         if run is not None:
             logger.info("Staging screening outputs…")
-            run.stage_grid_parcels(_grid_records(clustered_gdf))
+            run.stage_grid_parcels(_grid_records(clustered_gdf, region_key))
             if power_live:
-                run.stage_transmission_lines(_line_records(lines_gdf, state_code))
-                run.stage_substations(_sub_records(subs_gdf, state_code))
+                run.stage_transmission_lines(
+                    _line_records(lines_gdf, state_code, region_key))
+                run.stage_substations(
+                    _sub_records(subs_gdf, state_code, region_key))
             if wells_df is not None and not wells_df.empty:
-                run.stage_observation_wells(_well_records(wells_df, state_code))
+                run.stage_observation_wells(
+                    _well_records(wells_df, state_code, region_key))
 
             # ── Atomic publication ─────────────────────────────────────
             logger.info("Promoting run atomically…")
@@ -848,7 +891,9 @@ def run_pipeline(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AI Data Center Site Selection Pipeline")
     parser.add_argument("--dry-run", action="store_true", help="Run locally without publishing to Supabase")
-    parser.add_argument("--state", default="VA", help="State code (e.g. VA, TX, OH, OR)")
+    parser.add_argument("--region", default="VA-LOUDOUN",
+                        help="Region slug (e.g. VA-LOUDOUN, OH-FRANKLIN, TX-TAYLOR, OR-MORROW). "
+                             "A legacy bare state code maps to that state's one preset.")
     parser.add_argument("--county", default=None, help="Override the preset county/region name")
     parser.add_argument("--bbox", default=None, help="Override bbox: min_lon,min_lat,max_lon,max_lat")
     parser.add_argument("--geojson", default=None, help="Output GeoJSON filepath")
@@ -856,26 +901,40 @@ if __name__ == "__main__":
                         help="Skip cadastral parcel qualification (screening cells only)")
 
     args = parser.parse_args()
-    state = args.state.upper()
-    preset = REGION_PRESETS.get(state)
+    region_key = args.region.upper()
+
+    # A bare state code cannot name a region any more — one state can host
+    # several diligenced counties — but the four legacy codes each had
+    # exactly one preset, so they map unambiguously.
+    if region_key in ("VA", "TX", "OH", "OR"):
+        legacy = [k for k, v in REGION_PRESETS.items() if v["state"] == region_key]
+        if not legacy:
+            raise SystemExit(f"No region preset for state '{region_key}'. "
+                             "Pass a region slug like OH-LICKING.")
+        region_key = legacy[0]
+        logger.warning("--region %s is a legacy state code; running %s.",
+                       args.region.upper(), region_key)
+
+    preset = REGION_PRESETS.get(region_key, {})
 
     if args.bbox:
         try:
             min_lon, min_lat, max_lon, max_lat = [float(x) for x in args.bbox.split(",")]
         except ValueError:
             raise SystemExit("--bbox must be four comma-separated numbers: min_lon,min_lat,max_lon,max_lat")
-    elif preset:
+    elif preset.get("bbox"):
         min_lon, min_lat, max_lon, max_lat = preset["bbox"]
     else:
-        raise SystemExit(f"No bbox preset for state '{state}'. Pass --bbox min_lon,min_lat,max_lon,max_lat.")
+        raise SystemExit(f"No bbox preset for region '{region_key}'. Pass --bbox min_lon,min_lat,max_lon,max_lat.")
 
-    county = args.county or (preset or {}).get("county", "Regional")
-    operator = (preset or {}).get("grid_operator", "PJM Interconnection")
+    county = args.county or preset.get("county", "Regional")
+    operator = preset.get("grid_operator", "PJM Interconnection")
 
     try:
         run_pipeline(
+            region_key=region_key,
             min_lon=min_lon, min_lat=min_lat, max_lon=max_lon, max_lat=max_lat,
-            state_code=state, county_name=county, grid_operator=operator,
+            county_name=county, grid_operator=operator,
             dry_run=args.dry_run, output_geojson=args.geojson,
             trigger="scheduled" if os.getenv("CI") else "manual",
             qualify_parcels_flag=not args.no_parcels,

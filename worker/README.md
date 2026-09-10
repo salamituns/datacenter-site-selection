@@ -24,8 +24,8 @@ cp .env.example .env
 
 # 4. Run pipeline
 # Dry run mode (outputs local GeoJSON, no DB sync):
-python pipeline.py --dry-run --state VA --county Loudoun
+python pipeline.py --dry-run --region VA-LOUDOUN
 
 # Live mode (syncs directly to Supabase PostGIS):
-python pipeline.py --state VA --county Loudoun
+python pipeline.py --region VA-LOUDOUN
 ```

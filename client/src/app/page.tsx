@@ -57,7 +57,7 @@ const DEFAULT_WEIGHTS: WeightFactors = {
 };
 
 export default function DashboardPage() {
-  const [selectedState, setSelectedState] = useState<string>(HOME_REGION);
+  const [selectedRegion, setSelectedRegion] = useState<string>(HOME_REGION);
   const [selectedParcel, setSelectedParcel] = useState<GridParcel | null>(null);
   const [rawParcels, setRawParcels] = useState<GridParcel[]>(INITIAL_PARCELS);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -182,14 +182,14 @@ export default function DashboardPage() {
   // Load the surveyed parcels for a region. Live PostGIS data when rows
   // exist; the home region falls back to the demo dataset when unreachable,
   // other regions show an honest empty survey until ingested.
-  const loadParcels = async (stateCode: string) => {
+  const loadParcels = async (regionKey: string) => {
     setIsSyncing(true);
-    const data = await fetchGridParcels(500, stateCode);
+    const data = await fetchGridParcels(500, regionKey);
     if (data && data.length > 0) {
       setRawParcels(data);
       setIsLivePostgis(true);
     } else {
-      setRawParcels(stateCode === HOME_REGION ? INITIAL_PARCELS : []);
+      setRawParcels(regionKey === HOME_REGION ? INITIAL_PARCELS : []);
       setIsLivePostgis(false);
     }
     setIsSyncing(false);
@@ -197,25 +197,25 @@ export default function DashboardPage() {
 
   // Initial + per-region load
   useEffect(() => {
-    loadParcels(selectedState);
+    loadParcels(selectedRegion);
     // Map features refresh alongside the parcel survey (independent — a
     // marker-layer failure must not blank the parcel grid).
-    fetchMapFeatures(selectedState).then(setMapFeatures).catch(() => {});
+    fetchMapFeatures(selectedRegion).then(setMapFeatures).catch(() => {});
     // Qualified cadastral parcels ride along; a region without a parcel
     // pilot simply shows none when the layer is toggled.
     setLandParcels([]);
     if (layers.qualifiedParcels) {
-      fetchLandParcels(selectedState)
+      fetchLandParcels(selectedRegion)
         .then((p) => setLandParcels(p ?? []))
         .catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedState]);
+  }, [selectedRegion]);
 
   // Qualified-parcel layer: fetch once per region when first toggled on.
   useEffect(() => {
     if (layers.qualifiedParcels && landParcels.length === 0) {
-      fetchLandParcels(selectedState)
+      fetchLandParcels(selectedRegion)
         .then((p) => setLandParcels(p ?? []))
         .catch(() => {});
     }
@@ -242,15 +242,15 @@ export default function DashboardPage() {
 
   // Switching regions invalidates the current selection (it belongs to
   // another survey) — clear it so no dangling dossier stays open.
-  const handleStateChange = (stateCode: string) => {
+  const handleRegionChange = (regionKey: string) => {
     setSelectedParcel(null);
     setSelectedLandParcel(null);
-    setSelectedState(stateCode);
+    setSelectedRegion(regionKey);
   };
 
   const handleSync = async () => {
     setIsSyncing(true);
-    const data = await fetchGridParcels(500, selectedState);
+    const data = await fetchGridParcels(500, selectedRegion);
     if (data && data.length > 0) {
       setRawParcels(data);
       setIsLivePostgis(true);
@@ -423,8 +423,8 @@ export default function DashboardPage() {
       <Header
         totalParcels={totalParcelsCount}
         primeCount={primeCount}
-        selectedState={selectedState}
-        onStateChange={handleStateChange}
+        selectedRegion={selectedRegion}
+        onRegionChange={handleRegionChange}
         regionCounts={regionCounts}
         isLive={isLivePostgis}
         isSyncing={isSyncing}
@@ -443,7 +443,7 @@ export default function DashboardPage() {
           <LayerControls
             layers={layers}
             onToggleLayer={handleToggleLayer}
-            selectedState={selectedState}
+            selectedRegion={selectedRegion}
           />
           <ConstraintSliders
             weights={weights}
@@ -523,8 +523,8 @@ export default function DashboardPage() {
         onPrimeThresholdChange={setPrimeThreshold}
         selectedParcel={selectedParcel}
         onSelectParcel={selectGridCell}
-        selectedState={selectedState}
-        onStateChange={handleStateChange}
+        selectedRegion={selectedRegion}
+        onRegionChange={handleRegionChange}
         regionCounts={regionCounts}
         isLive={isLivePostgis}
         isSyncing={isSyncing}
