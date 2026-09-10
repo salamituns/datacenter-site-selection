@@ -1,3 +1,9 @@
+/** Which survey a cell has had. `"parcel"` means the region ran parcel
+ *  qualification and its gates were decided (or recorded UNKNOWN);
+ *  `"screening"` means it has the grid tier only and no parcel survey
+ *  exists — an absence, not a measurement of zero. */
+export type EvidenceTier = "parcel" | "screening";
+
 export interface GridParcel {
   id: string;
   grid_id: string;
@@ -45,10 +51,19 @@ export interface GridParcel {
   climate_score: number | null;
   composite_score: number;
   /** Share of the region's parcel gates the current diligence can decide
-   *  (0–1). The composite is the screening score × this factor, so an
-   *  under-evidenced site cannot out-rank a fully-diligenced one.
+   *  (0–1). Within the parcel tier the composite is the screening score ×
+   *  this factor. Meaningless on its own for a screening-tier region, where
+   *  it is 0 because there are no parcel gates to decide — read it with
+   *  `evidence_tier`, never instead of it.
    *  Optional because demo/mock rows predate it; consumers default 1. */
   evidence_coverage?: number;
+  /** Which survey this cell has had: `"parcel"` if the region ran parcel
+   *  qualification, `"screening"` if it has only the grid tier. Ranking is
+   *  lexicographic on this first and score second, so a parcel-tier site
+   *  out-ranks a screening-tier one whatever the scores.
+   *  Optional because demo/mock rows predate it; consumers default
+   *  `"screening"`, the claim that assumes least. */
+  evidence_tier?: EvidenceTier;
 
   // ML Clusters
   cluster_zone_id: number | null;

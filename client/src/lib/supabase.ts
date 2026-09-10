@@ -185,6 +185,9 @@ export function mapGridParcelRow(item: any): GridParcel | null {
     climate_score: num(item.climate_score),
     composite_score: num(item.composite_score) ?? 0,
     evidence_coverage: num(item.evidence_coverage) ?? 1,
+    // Anything the view does not recognise as a tier is read as
+    // "screening" — the claim that assumes least about a row.
+    evidence_tier: item.evidence_tier === "parcel" ? "parcel" : "screening",
     cluster_zone_id: num(item.cluster_zone_id),
     cluster_label: str(item.cluster_label),
     is_prime_zone: Boolean(item.is_prime_zone),

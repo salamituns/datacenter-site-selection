@@ -21,6 +21,7 @@ import {
   fetchRegionCounts,
 } from "@/lib/supabase";
 import { computePrimeZones } from "@/lib/primeZones";
+import { compareByEvidenceThenScore, coverageFactor } from "@/lib/evidenceRanking";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { REGIONS, HOME_REGION } from "@/lib/regions";
 import {
@@ -293,16 +294,17 @@ export default function DashboardPage() {
     return rawParcels
       .map((p) => {
         // Re-weighted from the pure component scores, then re-scaled by
-        // the region's evidence coverage — the same factor the worker
-        // baked into the stored composite, re-applied so dragging the
-        // sliders cannot silently un-do it. Non-reweightable parcels keep
-        // their stored (already-scaled) composite.
+        // the same coverage factor the worker baked into the stored
+        // composite, re-applied so dragging the sliders cannot silently
+        // un-do it. coverageFactor() is 1 outside the parcel tier — the
+        // tier, not the score, keeps those cells below diligenced ones.
+        // Non-reweightable parcels keep their stored composite.
         const dynamicScore = reweightable(p)
           ? (p.power_score! * wNorm.power +
              p.water_score! * wNorm.water +
              p.risk_score! * wNorm.risk +
              p.climate_score! * wNorm.climate) *
-            (p.evidence_coverage ?? 1)
+            coverageFactor(p)
           : p.composite_score;
 
         return {
@@ -310,7 +312,7 @@ export default function DashboardPage() {
           composite_score: Number(dynamicScore.toFixed(1)),
         };
       })
-      .sort((a, b) => b.composite_score - a.composite_score);
+      .sort(compareByEvidenceThenScore);
   }, [rawParcels, weights]);
 
   // Heavier derived work (DBSCAN + convex hulls) trails the sliders on a
@@ -344,7 +346,7 @@ export default function DashboardPage() {
                p.water_score * wNorm.water +
                p.risk_score * wNorm.risk +
                p.climate_score * wNorm.climate) *
-              (p.evidence_coverage ?? 1)
+              coverageFactor(p)
             : p.composite_score
         ).toFixed(1)
       ),

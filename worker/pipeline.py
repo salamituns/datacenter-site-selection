@@ -169,6 +169,7 @@ def _grid_records(gdf: gpd.GeoDataFrame) -> List[Dict[str, Any]]:
             "climate_score": float(row["climate_score"]),
             "composite_score": float(row["composite_score"]),
             "evidence_coverage": float(row.get("evidence_coverage", 1.0)),
+            "evidence_tier": str(row.get("evidence_tier", "screening")),
             "cluster_zone_id": int(row["cluster_zone_id"]),
             "cluster_label": str(row["cluster_label"]),
             "is_prime_zone": bool(row["is_prime_zone"]),
@@ -430,9 +431,12 @@ def run_pipeline(
 
         # ── Loudoun parcel qualification (pilot) ───────────────────────
         parcel_stats: Dict[str, Any] = {}
-        # Regions without a parcel pilot decide none of the parcel gates:
-        # their screening composites carry the full coverage penalty.
+        # Which survey this region has had, and how much of it resolved.
+        # A region with no parcel pilot is a different fact from a parcel
+        # pilot that decided nothing, so the tier is recorded rather than
+        # inferred from a coverage of zero.
         evidence_coverage = 0.0
+        evidence_tier = "screening"
         if qualify_parcels_flag and state_code in PARCEL_PILOTS:
             jurisdiction = PARCEL_PILOTS[state_code]
             logger.info("Step 6: %s parcel qualification (cadastral gates)…",
@@ -745,27 +749,45 @@ def run_pipeline(
             evidence_coverage = (
                 round(decided_gates / total_gates, 3) if total_gates else 0.0
             )
+            # The region has been surveyed at parcel tier — true even if the
+            # survey decided nothing, which is why this is not read off the
+            # coverage figure.
+            evidence_tier = "parcel"
             if run is not None:
                 run.stage_land_parcels(parcel_records)
                 run.stage_parcel_metrics(metric_rows)
                 run.stage_parcel_gates(gate_rows)
 
-        # ── Evidence-coverage weighting ────────────────────────────────
-        # The screening composite is scaled by the region's evidence
-        # coverage, so an under-evidenced site cannot out-rank a
-        # fully-diligenced one: a region that decides 6 of 9 gates
-        # carries at most two-thirds of its screening score, and a region
-        # with no parcel tier at all carries none of it. The factor is
-        # stored per cell (grid_parcels.evidence_coverage) so the client's
-        # live re-weighting re-applies it instead of silently un-doing it.
+        # ── Evidence tier and coverage weighting ───────────────────────
+        # Ranking is lexicographic: evidence tier first, score second. A
+        # parcel-tier site out-ranks a screening-tier one whatever the two
+        # scores are, so the score itself never has to carry that job.
+        #
+        # Within the parcel tier the composite is still scaled by coverage,
+        # so a region deciding 6 of 9 gates carries at most two-thirds of
+        # its screening score. That factor is well behaved there — it is
+        # only ever a fraction of a real survey.
+        #
+        # A screening-tier region keeps its composite unscaled. Multiplying
+        # it by a coverage of 0.0 was not a penalty but an annihilator: it
+        # threw away observed screening evidence and flattened the region's
+        # internal ranking to a single value. Absent parcel diligence is not
+        # a measurement of zero, and this engine does not write it as one.
         clustered_gdf["evidence_coverage"] = evidence_coverage
-        clustered_gdf["composite_score"] = (
-            clustered_gdf["composite_score"] * evidence_coverage
-        ).round(1)
-        logger.info(
-            "Evidence coverage: %.1f%% of parcel gates decided — screening "
-            "composites scaled by %.3f.",
-            evidence_coverage * 100, evidence_coverage)
+        clustered_gdf["evidence_tier"] = evidence_tier
+        if evidence_tier == "parcel":
+            clustered_gdf["composite_score"] = (
+                clustered_gdf["composite_score"] * evidence_coverage
+            ).round(1)
+            logger.info(
+                "Evidence tier: parcel — %.1f%% of parcel gates decided, "
+                "screening composites scaled by %.3f.",
+                evidence_coverage * 100, evidence_coverage)
+        else:
+            logger.info(
+                "Evidence tier: screening — no parcel survey in this region. "
+                "Composites left unscaled; the tier, not the score, keeps "
+                "these cells below every parcel-tier site.")
 
         # ── Stage screening outputs ────────────────────────────────────
         if output_geojson:
