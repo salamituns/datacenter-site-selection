@@ -1,0 +1,4 @@
+# Test-only dependencies. Kept out of requirements.txt so a pipeline run
+# installs nothing it does not need.
+-r requirements.txt
+pytest>=8.0.0

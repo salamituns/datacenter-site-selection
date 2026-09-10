@@ -63,7 +63,16 @@ jobs:
         run: |
           cd worker
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      # Runs before any network fetch: the gate logic, the JSON guards, the
+      # SQL rounding parity and the overlay geometry are all decidable
+      # offline, and a run that would compute wrong verdicts should fail in
+      # seconds rather than 13 minutes later with a published result.
+      - name: Worker unit tests
+        run: |
+          cd worker
+          python -m pytest -q
 
       # Most of a cold run is re-downloading the same fixed datasets:
       # PAD-US, the NWI state geodatabases, the county parcel and

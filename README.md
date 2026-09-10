@@ -55,7 +55,7 @@ A screening-tier region keeps its composite **unscaled**. Scaling it by a covera
 ## Monorepo Structure
 
 - **[`client/`](./client/)** — Next.js 14 + TypeScript + Tailwind + Leaflet. Regional screening dashboard **and** the parcel qualification view: verdict-shaded cadastral parcels, gate ledgers with rationales and affected areas, metrics with evidence class + source organization, unresolved-diligence checklists. Vitest suite (`npm test`).
-- **[`worker/`](./worker/)** — Python geospatial pipeline (geopandas, scikit-learn, turf-equivalent browser parity). `pipeline.py` runs the full staged→promote lifecycle; `loudoun_api.py` fetches county cadastral/regulatory layers; `overlay_layers.py` fetches the verification layers (TIGER roads, PAD-US, 3DEP slopes, utility territories, NWI wetlands with outage fallback); `power_evidence.py` fetches PJM RTEP upgrade records (resumable XML download) and queue activity; `parcel_gates.py` computes metrics and gate verdicts.
+- **[`worker/`](./worker/)** — Python geospatial pipeline (geopandas, scikit-learn, turf-equivalent browser parity). `pipeline.py` runs the full staged→promote lifecycle; `loudoun_api.py` fetches county cadastral/regulatory layers; `overlay_layers.py` fetches the verification layers (TIGER roads, PAD-US, 3DEP slopes, utility territories, NWI wetlands with outage fallback); `power_evidence.py` fetches PJM RTEP upgrade records (resumable XML download) and queue activity; `parcel_gates.py` computes metrics and gate verdicts. Pytest suite (`python -m pytest -q`), run in CI ahead of any network work.
 - **[`database/`](./database/)** — Supabase migrations + `tests/rls_tests.sql`, a repeatable allow/deny suite executed live as `anon` / `authenticated`.
 
 ---
@@ -141,6 +141,23 @@ cd client && npm install
 npm test        # vitest: null-safety + prime-zone semantics
 npm run dev     # http://localhost:3000
 ```
+
+### Tests
+
+```bash
+cd worker && pip install -r requirements-dev.txt
+python -m pytest -q   # 89 tests, offline: no network, no database
+
+cd client && npm test # 24 tests
+```
+
+The worker suite is regression-shaped: it pins the defects this pipeline has
+actually shipped — NaN reaching the JSON encoder (three separate times),
+Python/Postgres rounding disagreements, Franklin County's mixed acre and
+square-foot legal areas — plus the overlay geometry and slope-cache
+provenance rules that gate verdicts depend on. It runs in CI before any
+network fetch, so a change that would compute wrong verdicts fails in
+seconds rather than after a 13-minute publish.
 
 Environment: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (in `.env.local` locally, per-environment on Vercel).
 
