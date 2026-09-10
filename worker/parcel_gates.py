@@ -179,8 +179,19 @@ class _OverlapIndex:
     scattered polygons against 2,478 parcels the indexed form was ~56x
     faster for identical results.
 
-    The answer is unchanged: the STRtree narrows by bounding box, and the
-    surviving candidates are unioned and intersected exactly as before.
+    The answer is unchanged: the STRtree narrows by bounding box, the
+    surviving candidates are intersected with the parcel, and the small
+    results are unioned — intersection distributes over union, so this
+    is the union-and-intersect it replaced, in an order that never pays
+    for candidate geometry the parcel cannot touch. Multipart features
+    are also exploded into their polygon parts at index build so the
+    tree can narrow to the parts near the parcel. Both matter for the
+    same reason: a source layer can carry a wetland or floodplain
+    complex with a million vertices whose envelope spans the whole
+    survey area, and without the clip-first order and the explode every
+    parcel in that envelope pays for all of those vertices — on one NWI
+    clip a single such feature made every overlapping-parcel call take
+    ~16 seconds.
     """
 
     __slots__ = ("_parts", "_tree")
@@ -188,7 +199,13 @@ class _OverlapIndex:
     def __init__(self, gdf: Optional[gpd.GeoDataFrame]):
         parts: List[Any] = []
         if gdf is not None and len(gdf):
-            parts = [g for g in gdf.geometry if g is not None and not g.is_empty]
+            for g in gdf.geometry:
+                if g is None or g.is_empty:
+                    continue
+                if g.geom_type == "MultiPolygon":
+                    parts.extend(p for p in g.geoms if not p.is_empty)
+                else:
+                    parts.append(g)
         self._parts = parts
         self._tree = STRtree(parts) if parts else None
 
@@ -198,10 +215,25 @@ class _OverlapIndex:
         idx = self._tree.query(parcel_geom)
         if len(idx) == 0:
             return 0.0
-        # One candidate is the common case; skip the union for it.
-        cand = (self._parts[idx[0]] if len(idx) == 1
-                else unary_union([self._parts[j] for j in idx]))
-        inter = parcel_geom.intersection(cand)
+        # One candidate is the common case; take it directly.
+        if len(idx) == 1:
+            inter = parcel_geom.intersection(self._parts[idx[0]])
+        else:
+            # Intersect first, union the results. Intersection
+            # distributes over union — parcel ∩ (c1 ∪ … ∪ cn) =
+            # (parcel ∩ c1) ∪ … ∪ (parcel ∩ cn) — so this is the same
+            # answer as unioning the candidates first, but every piece
+            # is clipped to the parcel before any union work happens.
+            # The order is not a micro-optimisation: a candidate that
+            # merely shares an envelope with the parcel then costs
+            # microseconds, while union-first would make the parcel pay
+            # for the candidate's full geometry — and one NWI feature
+            # in the Ohio clip carries a million vertices, enough to
+            # cost ~16 seconds per overlapping parcel when it was
+            # unioned before being clipped.
+            inter = unary_union(
+                [parcel_geom.intersection(self._parts[j]) for j in idx]
+            )
         if inter.is_empty:
             return 0.0
         return float(min(100.0, (inter.area / parcel_area_m2) * 100.0))

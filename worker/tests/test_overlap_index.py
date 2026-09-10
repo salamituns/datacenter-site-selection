@@ -75,6 +75,40 @@ class TestEquivalence:
         )
         assert got == pytest.approx(90.0, abs=1e-9)  # 18 of 20 units wide
 
+    def test_multipart_layer_matches_the_same_layer_exploded(self):
+        """
+        The index explodes MultiPolygons so the tree can narrow to the
+        parts near the parcel (a million-vertex wetland complex in one
+        feature otherwise follows every parcel its envelope touches). The
+        explode must not change the answer: fraction against the multipart
+        layer equals fraction against the same polygons supplied loose.
+        """
+        loose = [box(0, 0, 6, 6), box(20, 0, 26, 6), box(40, 0, 46, 6)]
+        from shapely.geometry import MultiPolygon
+
+        as_parts = gdf(loose)
+        as_multiparts = gdf([MultiPolygon(loose), loose[0]])
+        parcel = box(0, 0, 30, 6)
+        assert _OverlapIndex(as_multiparts).fraction(
+            parcel, parcel.area
+        ) == pytest.approx(_OverlapIndex(as_parts).fraction(parcel, parcel.area))
+
+    def test_multipart_layer_matches_the_reference_union(self):
+        # Same claim against the reference implementation, not just the
+        # exploded form of itself: the union of the parts is the union of
+        # the feature.
+        from shapely.geometry import MultiPolygon
+
+        feature = MultiPolygon([box(0, 0, 10, 10), box(15, 0, 25, 10)])
+        ix = _OverlapIndex(gdf([feature, box(8, 0, 18, 10)]))
+        parcel = box(0, 0, 30, 10)
+        assert ix.fraction(parcel, parcel.area) == pytest.approx(
+            reference_fraction(
+                parcel, unary_union([feature, box(8, 0, 18, 10)]), parcel.area
+            ),
+            abs=1e-9,
+        )
+
 
 class TestEdgeCases:
     def test_absent_layer_is_zero_not_an_error(self):
