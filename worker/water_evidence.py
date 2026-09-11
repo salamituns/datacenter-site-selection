@@ -71,6 +71,66 @@ WATER_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "not_served_area_name": "NOT Served by LW",
         "provider_from_row": False,
     },
+    # Prince William's potable water is run by two utilities, and the
+    # county publishes both as Comprehensive Plan layers (adopted
+    # 2017-10-17, hosted 2018): Prince William Water's pressure zones
+    # (CAPTION names each zone) and Virginia American Water's Dale City
+    # area (a single unnamed polygon), plus the Service Authority's
+    # sewershed for the wastewater companion. None exposes a per-feature
+    # edit timestamp or a service-type column, and there is no published
+    # NOT-served polygon — so absence stays UNKNOWN, never non-service.
+    # These are the county's planning maps rather than the utility's
+    # operational boundary; the vintage clause says so in every rationale.
+    "VA-PRINCEWILLIAM": {
+        "utility_name": "Prince William Water / Virginia American Water",
+        "source_key": "pwc_water_service_area",
+        "layers": [
+            {"url": ("https://services2.arcgis.com/0Q7l03Ls62VG0fy4/arcgis/"
+                     "rest/services/CP_Potable_Water_PWCSA_Pressure_Zones/"
+                     "FeatureServer/0/query"),
+             "object_id_field": "FID",
+             "area_name_field": "CAPTION",
+             "service_type_field": None,
+             "constant_service_type": "W",
+             "comment_field": None,
+             "edited_field": None,
+             "provider_name": "Prince William Water (Prince William County "
+                              "Service Authority)",
+             "page_size": 100},
+            {"url": ("https://services2.arcgis.com/0Q7l03Ls62VG0fy4/arcgis/"
+                     "rest/services/CP_Potable_Water_Virginia_American_Water/"
+                     "FeatureServer/0/query"),
+             "object_id_field": "FID",
+             # The layer has no name field — one polygon, the utility's
+             # own service area.
+             "area_name_field": None,
+             "constant_area_name": "Virginia American Water service area",
+             "service_type_field": None,
+             "constant_service_type": "W",
+             "comment_field": None,
+             "edited_field": None,
+             "provider_name": "Virginia American Water",
+             "page_size": 100},
+            {"url": ("https://services2.arcgis.com/0Q7l03Ls62VG0fy4/arcgis/"
+                     "rest/services/CP_Sewer_PWCSA_Sewershed_v2/"
+                     "FeatureServer/0/query"),
+             "object_id_field": "FID",
+             "area_name_field": "NAME",
+             "service_type_field": None,
+             "constant_service_type": "WW",
+             "comment_field": None,
+             "edited_field": None,
+             "provider_name": "Prince William Water (Prince William County "
+                              "Service Authority)",
+             "page_size": 100},
+        ],
+        "not_served_area_name": None,
+        "provider_from_row": False,
+        "layer_vintage": "2017-10",
+        "vintage_basis": ("the county's 2040 Comprehensive Plan water/sewer "
+                          "maps (adopted 2017-10-17; hosted 2018); the "
+                          "services expose no per-feature edit timestamps"),
+    },
     # The Southwest Licking district — renamed Licking Regional Water
     # District in 2024 — publishes a JOINT boundary for itself and the
     # Pataskala Utility Department, dated June 2021, as two layers (water,
@@ -143,9 +203,14 @@ def _text_or_none(v: Optional[Any]) -> Optional[str]:
 
 
 def _row_provider(spec: Dict[str, Any], props: Dict[str, Any],
-                  area_name: Optional[str]) -> str:
-    """The utility operating this polygon — row-level where the layer
-    encodes it, the region's configured utility where it does not."""
+                  area_name: Optional[str],
+                  layer: Optional[Dict[str, Any]] = None) -> str:
+    """The utility operating this polygon — per-layer where a region has
+    more than one utility (a county plan layer vs a city franchise),
+    row-level where the layer encodes it, the region's configured utility
+    where it does not."""
+    if layer and layer.get("provider_name"):
+        return str(layer["provider_name"])
     if not spec.get("provider_from_row"):
         return str(spec["utility_name"])
     mapping = spec.get("provider_name_map") or {}
@@ -201,7 +266,9 @@ def _fetch_layer(session, spec: Dict[str, Any], layer: Dict[str, Any],
     type_field = layer.get("service_type_field")
     comment_field = layer.get("comment_field")
     edited_field = layer.get("edited_field")
-    out_fields = "OBJECTID"
+    # Some hosted layers key their object id as FID, not OBJECTID —
+    # asking for a field the layer does not have is a 400.
+    out_fields = str(layer.get("object_id_field", "OBJECTID"))
     for f in (area_field, type_field, comment_field, edited_field):
         if f:
             out_fields += f",{f}"
@@ -235,7 +302,7 @@ def _fetch_layer(session, spec: Dict[str, Any], layer: Dict[str, Any],
                 continue
             props = f.get("properties", {}) or {}
             area_name = (_text_or_none(props.get(area_field))
-                         if area_field else None)
+                         if area_field else layer.get("constant_area_name"))
             service_type = (
                 _text_or_none(props.get(type_field)) if type_field
                 else layer.get("constant_service_type"))
@@ -255,7 +322,7 @@ def _fetch_layer(session, spec: Dict[str, Any], layer: Dict[str, Any],
                 "service_type": service_type,
                 "comment": (_text_or_none(props.get(comment_field))
                             if comment_field else None),
-                "provider": _row_provider(spec, props, area_name),
+                "provider": _row_provider(spec, props, area_name, layer),
                 "last_edited": edited,
                 "edited_basis": edited_basis,
                 # The vintage's own explanation, when the date comes from

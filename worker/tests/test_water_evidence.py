@@ -161,11 +161,59 @@ class TestLickingNormalization:
         assert any("Waste_Water_Service_2021" in u for u in urls)
 
 
+class TestPrinceWilliamNormalization:
+    @staticmethod
+    def _pages():
+        # Pressure zones (CAPTION), the single Virginia American Water
+        # polygon (no name field), then the sewershed (NAME).
+        return [
+            {"features": [_feature({"FID": 1, "ID": 8, "CAPTION": "Lake Ridge"}),
+                          _feature({"FID": 2, "ID": 6, "CAPTION": "Haymarket"})]},
+            {"features": [_feature({"FID": 1, "OBJECTID_1": 1,
+                                    "GLOBALID": "{X}"})]},
+            {"features": [_feature({"FID": 1, "NAME": "Occoquan Plant"})]},
+        ]
+
+    def test_provider_is_per_layer_and_vintage_disclosed(self, fake_http):
+        fake_http.responses = self._pages()
+        gdf = fetch_water_service_areas("VA-PRINCEWILLIAM", *BBOX)
+        assert len(gdf) == 4
+        lr = gdf[gdf.area_name == "Lake Ridge"].iloc[0]
+        vaw = gdf[gdf.area_name ==
+                  "Virginia American Water service area"].iloc[0]
+        occ = gdf[gdf.area_name == "Occoquan Plant"].iloc[0]
+        # Two utilities in one region, attributed per layer — never the
+        # region's composite name on a PASS claim.
+        assert lr["provider"] == ("Prince William Water (Prince William "
+                                  "County Service Authority)")
+        assert vaw["provider"] == "Virginia American Water"
+        assert occ["provider"] == ("Prince William Water (Prince William "
+                                   "County Service Authority)")
+        assert lr["service_type"] == "W"
+        assert occ["service_type"] == "WW"
+        # Comprehensive-plan layers: dated by adoption, disclosed as such.
+        for row in (lr, vaw, occ):
+            assert row["last_edited"] == "2017-10"
+            assert row["edited_basis"] == "layer_vintage"
+            assert "Comprehensive Plan" in row["edited_note"]
+            assert row["comment"] is None
+            assert not row["not_served"]
+
+    def test_fid_object_id_is_queried_not_objectid(self, fake_http):
+        # The hosted layers key their object id as FID; asking for
+        # OBJECTID would be a 400 and read as an unavailable layer.
+        fake_http.responses = self._pages()
+        fetch_water_service_areas("VA-PRINCEWILLIAM", *BBOX)
+        assert len(fake_http.calls) == 3
+        for call in fake_http.calls:
+            assert call["params"]["outFields"].startswith("FID")
+
+
 class TestAvailability:
     def test_unconfigured_region_returns_none_without_network(self, fake_http):
-        # Prince William has no entry yet — UNKNOWN, and no endpoint is
+        # A region with no entry stays UNKNOWN, and no endpoint is
         # invented to fill the gap.
-        assert fetch_water_service_areas("VA-PRINCEWILLIAM", *BBOX) is None
+        assert fetch_water_service_areas("OH-FRANKLIN", *BBOX) is None
         assert fake_http.calls == []
 
     def test_failed_layer_returns_none_not_empty(self, fake_http):
