@@ -203,3 +203,72 @@ is set to `https://grid.salamituns.com` (Auth → URL Configuration, plus the
 redirect allowlist). The built-in emailer also rate-limits at roughly two
 sends an hour, which is fine for a first user and worth replacing with real
 SMTP if the team grows.
+
+---
+
+## Follow-up — make an approval self-describing
+
+The first real decision exposed this. A Loudoun parcel failing `protected_land`,
+`water_availability` and `zoning_dc_use` was recorded as `approve` with
+`override_gate` null. The schema forces an `override` to name the gate it
+accepts; `approve` walks past that requirement and accepts three failing gates
+without naming one.
+
+Nothing is lost — `run_id` reconstructs every verdict at decision time — but
+the row is not self-describing. "Approved a clean site" and "approved despite
+three FAILs" are the same row shape, and only a join tells them apart. Six
+months on, the join is the thing nobody knows to run.
+
+**Do 1 and 2 below. Not 3.**
+
+### 1. Store the verdict the decision was made against
+
+```sql
+ALTER TABLE public.parcel_decisions
+    ADD COLUMN verdict_at_decision TEXT,          -- PASS | CONDITIONAL | FAIL | UNKNOWN
+    ADD COLUMN gates_not_passing  TEXT[];         -- e.g. {protected_land,water_availability}
+```
+
+Both are **computed inside `record_parcel_decision`**, in the same statement
+that takes the fingerprint, from the same `run_id`. Never accepted from the
+client, and never derived later from "current" gates — a snapshot taken from a
+different read than the fingerprint can disagree with it, and then the row
+contradicts itself.
+
+This is a denormalised summary for readability, not a second source of truth.
+The fingerprint plus `run_id` stays authoritative; if the two ever disagree,
+the fingerprint wins and the summary is the bug.
+
+Backfill the existing row. Unlike the unrisked-composite case, this one **is**
+recoverable: `run_id` is stored, so the verdicts at decision time are still
+in `parcel_gate_results` and the backfill reads real history rather than
+reconstructing a plausible one. Set `NOT NULL` after backfilling.
+
+> **The append-only trigger will block its own backfill.**
+> `trg_parcel_decisions_append_only` fires on UPDATE, so a migration that fills
+> these columns on the existing row is refused by the guard that makes the
+> table trustworthy. Disable and re-enable it inside the migration
+> transaction, with a comment saying why — a schema migration adding a derived
+> column is the only legitimate reason to lift it, and writing that down is
+> what stops the next person treating it as a general escape hatch.
+
+### 2. Route by verdict in the UI
+
+When the parcel's current verdict is not `PASS` and the author picks
+**Approved**, prompt before recording — naming the actual gates:
+
+> This parcel fails **protected land**, **water availability** and **zoning**.
+> Record as *Overridden* and name what you're accepting, or continue with
+> *Approved*?
+
+Prompt, do not block. The point is to make the better record the easy one,
+not to take the judgement away. An author who means "I approve this for
+acquisition and the gates are someone else's problem" is making a real call
+and must still be able to make it — the record simply has to show what they
+knew.
+
+### 3. Not doing: constrain `approve` to PASS or CONDITIONAL
+
+Tempting, and wrong. It would block the legitimate call above, and a schema
+that refuses a judgement a person is entitled to make gets worked around —
+usually by recording something less true that the constraint happens to allow.
