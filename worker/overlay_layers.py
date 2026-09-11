@@ -469,6 +469,7 @@ def _nfhl_tiled_query(
         session, NFHL_FEDERAL_URL, bbox,
         out_fields="OBJECTID,FLD_ZONE,ZONE_SUBTY,SFHA_TF",
         page_size=200, attempts=3, page_pause=1.0,
+        geometry_precision=6,
     )
     if features is not None:
         return features
@@ -902,11 +903,22 @@ class _ThreadLocalSession:
 def _paged_query(session: requests.Session, url: str, bbox: str,
                  out_fields: str, where: str = "1=1",
                  page_size: int = 1000, attempts: int = 1,
-                 page_pause: float = 0.0) -> Optional[List[Dict[str, Any]]]:
+                 page_pause: float = 0.0,
+                 geometry_precision: Optional[int] = None
+                 ) -> Optional[List[Dict[str, Any]]]:
     """
     Pages an ArcGIS query in GeoJSON. attempts > 1 retries a failed page
     with backoff (for services that throttle); page_pause spaces pages
     out. None only on hard failure after all attempts.
+
+    geometry_precision sets the ArcGIS geometryPrecision parameter, which
+    rounds the SERIALIZED output coordinates, not the source geometries.
+    NFHL passes 6 (~0.1 m at mid-latitudes, below the data's own
+    accuracy): at least one NFHL feature in Prince William County carries
+    pathological coordinate precision that makes the service's GeoJSON
+    serializer 500 on every query returning that feature, deterministically
+    — with geometryPrecision=6 the same query returns 200. Without it one
+    bad feature concedes the floodway gate for an entire county.
     """
     features: List[Dict[str, Any]] = []
     offset = 0
@@ -924,6 +936,8 @@ def _paged_query(session: requests.Session, url: str, bbox: str,
                 "resultRecordCount": page_size,
                 "resultOffset": offset,
             }
+            if geometry_precision is not None:
+                params["geometryPrecision"] = str(geometry_precision)
             data = None
             for attempt in range(attempts):
                 resp = session.get(url, params=params, timeout=90)
