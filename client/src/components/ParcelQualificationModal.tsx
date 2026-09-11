@@ -114,6 +114,18 @@ function plural(n: number, one: string, many: string): string {
   return n === 1 ? one : many;
 }
 
+/** Centroid formatting, hemisphere-suffixed rather than signed — four
+ *  decimals is ~11 m, which locates a parcel without implying a surveyed
+ *  point. The centroid is derived from the parcel polygon, so it is a
+ *  position on the parcel, not an address. */
+function fmtLat(lat: number): string {
+  return `${Math.abs(lat).toFixed(4)}${lat >= 0 ? "N" : "S"}`;
+}
+
+function fmtLon(lon: number): string {
+  return `${Math.abs(lon).toFixed(4)}${lon >= 0 ? "E" : "W"}`;
+}
+
 /** Names at most two gates and defers the rest. A parcel failing six
  *  gates still has to produce a sentence, not a paragraph — the list in
  *  full belongs to the rows below, which are already sorted to match. */
@@ -826,11 +838,33 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
   const dialogRef = useFocusTrap(Boolean(parcel), onClose, returnFocusTo, !isDesktop);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
+  // Copying the centroid is the one thing a reader reliably wants to do
+  // with it — paste into a map, a GIS, or a site visit brief. Plain
+  // "lat, lon" because that is what every consumer of a coordinate pair
+  // accepts; the display form carries hemispheres for reading, not pasting.
+  const [copiedCentroid, setCopiedCentroid] = useState(false);
+  const copyCentroid = () => {
+    if (!parcel) return;
+    const text = `${parcel.lat.toFixed(6)}, ${parcel.lon.toFixed(6)}`;
+    navigator.clipboard?.writeText(text).then(
+      () => {
+        setCopiedCentroid(true);
+        window.setTimeout(() => setCopiedCentroid(false), 1500);
+      },
+      () => {
+        // Clipboard blocked (insecure context, denied permission). The
+        // coordinate is on screen either way; silently doing nothing is
+        // better than an error over a convenience.
+      }
+    );
+  };
+
   useEffect(() => {
     if (parcel) {
       setSheet("half");
       setActiveTab("overview");
       setPassAccordionOpen(false);
+      setCopiedCentroid(false);
     }
   }, [parcel?.parcel_key]);
 
@@ -922,8 +956,23 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
             {qualification ? verdictSummary(gates) : "Loading qualification…"}
           </p>
 
+          {/* Where the parcel actually is. County and state alone do not
+              locate a 150-acre site, and the screening dossier has carried
+              a centroid all along — this one had the same lon/lat on hand
+              from v_land_parcels and simply never showed it. Same format
+              as ParcelDetailModal so the two dossiers read alike. */}
           <p className="mt-2 font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted">
             {parcel.county_name ?? "Unsurveyed"} County, {parcel.state_code}
+            {" · "}
+            <button
+              type="button"
+              onClick={copyCentroid}
+              title="Copy centroid as latitude, longitude"
+              className="underline decoration-dotted underline-offset-2 transition-colors hover:text-foreground"
+            >
+              {fmtLat(parcel.lat)} {fmtLon(parcel.lon)}
+            </button>
+            {copiedCentroid && <span className="ml-1 text-accent-700 dark:text-accent-300">copied</span>}
             {" · "}GIS {fmtAcres(parcel.gis_acreage)}
             {" · "}Legal {fmtAcres(parcel.legal_acreage)}
           </p>
