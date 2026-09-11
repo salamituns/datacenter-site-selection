@@ -272,3 +272,48 @@ knew.
 Tempting, and wrong. It would block the legitimate call above, and a schema
 that refuses a judgement a person is entitled to make gets worked around —
 usually by recording something less true that the constraint happens to allow.
+
+---
+
+## Follow-up shipped (2026-09-11, release14_decision_snapshot)
+
+Both flagged traps handled. `record_parcel_decision` takes the
+fingerprint, the overall verdict and the non-passing gates in **one
+statement** over the run's gate rows (the verdict keeps
+`v_land_parcels`' precedence, FAIL > UNKNOWN > CONDITIONAL > PASS), so
+the stored summary cannot disagree with the stored fingerprint — one
+read cannot contradict itself. The backfill lifted
+`trg_parcel_decisions_append_only` inside the migration transaction
+with a comment stating that a schema migration adding a derived column
+and filling it from each row's own stored run history is the only
+legitimate reason to do so, and re-enabled it before the migration
+verified every row against its own `run_id` and then set the columns
+NOT NULL. The guard's byte-identical test also learned the two new
+columns — without that, an in-place edit of only the summary would
+have passed it.
+
+The real Loudoun approval now reads `verdict_at_decision = FAIL` and
+`gates_not_passing = {power_capacity, protected_land,
+water_availability, wetlands, zoning_dc_use}` — five gates, not the
+three FAILs the brief's opening guessed at: "not passing" includes the
+UNKNOWNs, which is the truthful reading of what the approval accepted.
+Both SQL suites pass against the live database, including a new
+whole-table assertion that every stored row agrees with a
+recomputation from its own `run_id`.
+
+The UI prompts, never blocks: approving a parcel whose current gates
+are not all PASS gets one warning naming each gate and its status,
+with *Record as Overridden* (offered only when a FAIL or UNKNOWN gate
+exists to accept) beside *Continue with Approved*. Recorded approvals
+carry the summary on the card — "Approved despite … — FAIL at decision
+time" — read from the stored row, never from gates that may since have
+moved.
+
+One verification note: the prompt was exercised in a real browser via
+a temporary preview route with an intercepted decisions fetch (the
+built-in emailer's rate limit still blocks a genuine local sign-in,
+and Supabase's hosted auth refuses password login for users inserted
+directly into `auth.users`). The preview route was deleted before the
+commit. The outstanding ops items from release13 stand: the Site URL
+is still `http://localhost:3000` in the Supabase dashboard, and the
+emailer remains rate-limited.

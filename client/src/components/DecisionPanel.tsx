@@ -33,6 +33,7 @@ import { useSession, sendMagicLink } from "@/lib/auth";
 import {
   DECISION_LABELS,
   movedGatesLines,
+  nonPassingGates,
   rationaleMeetsFloor,
   RATIONALE_FLOOR,
   fetchParcelDecisions,
@@ -96,6 +97,15 @@ function DecisionCard({ d, isYours }: { d: ParcelDecision; isYours: boolean }) {
         <p className="mt-2 font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted">
           {gateLabel(d.override_gate)} reads {d.override_status} — accepted
           with eyes open. The gate itself is unchanged.
+        </p>
+      )}
+      {/* The self-describing approval: what this was approved despite,
+          stored on the row when it was recorded, not reconstructed from
+          gates that may since have moved. */}
+      {d.decision === "approve" && (d.gates_not_passing?.length ?? 0) > 0 && (
+        <p className="mt-2 font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted">
+          Approved despite {d.gates_not_passing.map(gateLabel).join(", ")} —{" "}
+          {d.verdict_at_decision} at decision time.
         </p>
       )}
       {d.is_stale && moved.length > 0 && (
@@ -182,12 +192,18 @@ export function DecisionPanel({ parcel, gates }: DecisionPanelProps) {
   const [overrideGate, setOverrideGate] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Route by verdict: an approval of evidence that is not a clean pass
+  // gets exactly one prompt naming what is being accepted. The author
+  // can always continue — the judgement is theirs; the record simply
+  // has to show what they knew.
+  const [approvePrompt, setApprovePrompt] = useState(false);
 
   // Decisions load whenever the parcel changes or a session appears —
   // anon quietly gets none, a signed-in team member gets the record.
   useEffect(() => {
     let alive = true;
     setLoaded(false);
+    setApprovePrompt(false);
     fetchParcelDecisions([parcel.parcel_key]).then((byKey) => {
       if (!alive) return;
       setDecisions(byKey[parcel.parcel_key] ?? []);
@@ -215,21 +231,34 @@ export function DecisionPanel({ parcel, gates }: DecisionPanelProps) {
   const overridable = gates.filter(
     (g) => g.status === "FAIL" || g.status === "UNKNOWN"
   );
+  // What an approval here would be approved despite, from the same
+  // gate rows the dossier is displaying.
+  const notPassing = useMemo(() => nonPassingGates(gates), [gates]);
+  // An override is only offerable from the prompt when there is
+  // something it can legally accept (a FAIL or UNKNOWN gate).
+  const promptCanOverride = notPassing.some(
+    (g) => g.status === "FAIL" || g.status === "UNKNOWN"
+  );
   useEffect(() => {
     if (kind !== "override" || overrideGate) return;
     setOverrideGate(overridable[0]?.gate_key ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, gates]);
+  // Switching away from approve withdraws the prompt; it only exists
+  // for that one crossing.
+  useEffect(() => {
+    if (kind !== "approve") setApprovePrompt(false);
+  }, [kind]);
 
   const rationaleOk = rationaleMeetsFloor(rationale);
   const canSubmit =
     session.email != null &&
     !submitting &&
     rationaleOk &&
-    (kind !== "override" || overrideGate != null);
+    (kind !== "override" || overrideGate != null) &&
+    !approvePrompt;
 
-  const submit = async () => {
-    if (!canSubmit) return;
+  const doRecord = async () => {
     setSubmitting(true);
     setError(null);
     const result = await recordDecision({
@@ -251,6 +280,20 @@ export function DecisionPanel({ parcel, gates }: DecisionPanelProps) {
     setError(null);
     const byKey = await fetchParcelDecisions([parcel.parcel_key]);
     setDecisions(byKey[parcel.parcel_key] ?? []);
+  };
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    // The one gate: approving evidence that is not a clean pass prompts
+    // once, naming the gates. Prompt, never block — the brief rejects
+    // constraining approve to PASS precisely because a refusal a person
+    // is entitled to make gets worked around with something less true.
+    if (kind === "approve" && notPassing.length > 0 && !approvePrompt) {
+      setApprovePrompt(true);
+      return;
+    }
+    setApprovePrompt(false);
+    await doRecord();
   };
 
   return (
@@ -380,6 +423,49 @@ export function DecisionPanel({ parcel, gates }: DecisionPanelProps) {
               <p className="mt-2 font-sans text-[11.5px] leading-[1.55] text-danger dark:text-danger-night">
                 {error}
               </p>
+            )}
+
+            {/* The approve prompt: names what is being accepted, and
+                offers the better record — an override naming its gate —
+                without taking the approval away. */}
+            {approvePrompt && kind === "approve" && (
+              <div className="mt-3 flex items-start gap-2 rounded-lg bg-warning/10 p-2.5 dark:bg-warning-night/10">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning dark:text-warning-night" />
+                <div className="font-sans text-[11.5px] leading-[1.55] text-foreground/90">
+                  <span className="font-semibold">
+                    This parcel is not a clean pass.
+                  </span>{" "}
+                  {notPassing
+                    .map((g) => `${gateLabel(g.gate_key)} (${g.status})`)
+                    .join(", ")}
+                  . Record as <em>Overridden</em> and name what you&apos;re
+                  accepting, or continue with <em>Approved</em>? The row will
+                  say what you knew either way.
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {promptCanOverride && (
+                      <button
+                        onClick={() => {
+                          setKind("override");
+                          setApprovePrompt(false);
+                        }}
+                        className="h-8 rounded-lg border border-border-strong px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-foreground transition-colors hover:border-foreground/60"
+                      >
+                        Record as Overridden
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        setApprovePrompt(false);
+                        void doRecord();
+                      }}
+                      disabled={!rationaleOk || submitting}
+                      className="h-8 rounded-lg bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-background transition-opacity hover:opacity-80 disabled:opacity-50"
+                    >
+                      Continue with Approved
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
 
             <div className="mt-3 flex items-center justify-between gap-3">

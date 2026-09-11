@@ -5,6 +5,7 @@ import {
   currentDecision,
   fetchParcelDecisions,
   movedGatesLines,
+  nonPassingGates,
   rationaleMeetsFloor,
 } from "@/lib/decisions";
 import { DecisionKind, ParcelDecision } from "@/types/parcel";
@@ -22,6 +23,8 @@ function decision(over: Partial<ParcelDecision>): ParcelDecision {
     decided_by_email: "a@example.com",
     decided_at: "2026-09-11T00:00:00Z",
     run_id: "r1",
+    verdict_at_decision: "PASS",
+    gates_not_passing: [],
     override_gate: null,
     override_status: null,
     superseded_by: null,
@@ -85,6 +88,28 @@ describe("currentDecision", () => {
     expect(
       currentDecision([decision({ is_current: false, superseded_by: "x" })])
     ).toBeNull();
+  });
+});
+
+describe("nonPassingGates", () => {
+  it("keeps every gate that is not PASS, in the order the dossier shows", () => {
+    const gates = [
+      { gate_key: "wetlands", status: "PASS" as const },
+      { gate_key: "protected_land", status: "FAIL" as const },
+      { gate_key: "power_capacity", status: "UNKNOWN" as const },
+      { gate_key: "slope", status: "CONDITIONAL" as const },
+    ];
+    expect(nonPassingGates(gates).map((g) => g.gate_key)).toEqual([
+      "protected_land",
+      "power_capacity",
+      "slope",
+    ]);
+  });
+
+  it("is empty for a clean pass — nothing to prompt about, nothing approved despite", () => {
+    expect(nonPassingGates([{ gate_key: "wetlands", status: "PASS" }]))
+      .toEqual([]);
+    expect(nonPassingGates([])).toEqual([]);
   });
 });
 

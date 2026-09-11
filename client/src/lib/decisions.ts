@@ -22,7 +22,7 @@
  */
 
 import { supabase } from "@/lib/supabase";
-import { DecisionKind, ParcelDecision } from "@/types/parcel";
+import { DecisionKind, GateStatus, ParcelDecision } from "@/types/parcel";
 
 /** The floor the database enforces on rationale, checked in the UI too —
  *  a form that submits and fails on a CHECK is a worse experience than
@@ -39,6 +39,20 @@ export const DECISION_LABELS: Record<DecisionKind, string> = {
   hold: "Held",
   override: "Overridden",
 };
+
+/** A gate as the decision surfaces read it — the subset the approve
+ *  prompt needs, satisfied by the ParcelGateRow the dossier shows. */
+export interface DecisionGate {
+  gate_key: string;
+  status: GateStatus;
+}
+
+/** What an approval of this evidence would be approved despite: every
+ *  gate not PASS on the rows the dossier is showing. Empty for a clean
+ *  pass — and no prompt. */
+export function nonPassingGates(gates: DecisionGate[]): DecisionGate[] {
+  return gates.filter((g) => g.status !== "PASS");
+}
 
 /**
  * Decisions for a set of parcels, keyed by parcel_key. Anon receives an
@@ -58,7 +72,8 @@ export async function fetchParcelDecisions(
         .from("v_parcel_decisions")
         .select(
           "id,parcel_key,decision,rationale,decided_by,decided_by_email," +
-          "decided_at,run_id,override_gate,override_status,superseded_by," +
+          "decided_at,run_id,verdict_at_decision,gates_not_passing," +
+          "override_gate,override_status,superseded_by," +
           "is_current,is_stale,gates_moved"
         )
         .in("parcel_key", parcelKeys.slice(i, i + PAGE));

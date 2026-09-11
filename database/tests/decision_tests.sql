@@ -13,8 +13,15 @@
 --      from the view with the moved gates named — never auto-voided,
 --      never silently refreshed.
 --   3. The append-only invariant holds even for the table owner: an
---      in-place edit or a delete is refused; the only legal mutation is
+--      in-place edit or a delete is refused — including an in-place
+--      edit of the snapshot columns — and the only legal mutation is
 --      the supersede write.
+--   4. The snapshot: verdict_at_decision and gates_not_passing are
+--      taken in the same read as the fingerprint, travel with the row
+--      (a superseded decision keeps the verdict it was made against,
+--      never silently refreshed to the current run), and every stored
+--      row — backfilled or fresh — agrees with a recomputation from
+--      its own run_id. The fingerprint plus run_id stays authoritative.
 -- ============================================================================
 
 DO $test$
@@ -32,6 +39,9 @@ DECLARE
     v_stale boolean;
     v_moved jsonb;
     v_current text;
+    v_verdict text;
+    v_gates   text[];
+    v_bad     int;
 BEGIN
     -- Fixtures: one parcel, three runs. Runs A and B hold the same
     -- verdicts inserted in DIFFERENT orders; run C changes one status.
@@ -85,10 +95,18 @@ BEGIN
     PERFORM public.record_parcel_decision(
       'DECISION-CONTRACT-TEST', 'approve',
       'all three gates read favourably at decision time');
-    SELECT id, gate_fingerprint INTO v_dec_a, v_current
+    SELECT id, gate_fingerprint, verdict_at_decision, gates_not_passing
+      INTO v_dec_a, v_current, v_verdict, v_gates
       FROM public.parcel_decisions WHERE parcel_key = 'DECISION-CONTRACT-TEST';
     IF v_current <> v_fp_a THEN
       RAISE EXCEPTION 'the stored fingerprint does not match the run it claims';
+    END IF;
+
+    -- 4a. the snapshot describes the run the fingerprint was taken
+    --     from, in the same read: run A fails zoning only.
+    IF v_verdict IS DISTINCT FROM 'FAIL'
+       OR v_gates IS DISTINCT FROM ARRAY['zoning_dc_use']::text[] THEN
+      RAISE EXCEPTION 'the snapshot does not describe the run the decision claims: verdict=% gates=%', v_verdict, v_gates;
     END IF;
 
     -- simulate the republish: run C becomes the parcel's current run.
@@ -114,6 +132,16 @@ BEGIN
        OR v_moved -> 0 ->> 'was' IS DISTINCT FROM 'PASS'
        OR v_moved -> 0 ->> 'now' IS DISTINCT FROM 'FAIL' THEN
       RAISE EXCEPTION 'the view did not name the moved gate: %', v_moved;
+    END IF;
+
+    -- 4b. the snapshot is never silently refreshed: run C is current
+    --     now (wetlands FAIL as well), but the row still describes
+    --     exactly the run it was recorded against.
+    SELECT verdict_at_decision, gates_not_passing INTO v_verdict, v_gates
+      FROM public.parcel_decisions WHERE id = v_dec_a;
+    IF v_verdict IS DISTINCT FROM 'FAIL'
+       OR v_gates IS DISTINCT FROM ARRAY['zoning_dc_use']::text[] THEN
+      RAISE EXCEPTION 'the snapshot moved with the current run instead of staying with the row: verdict=% gates=%', v_verdict, v_gates;
     END IF;
 
     -- supersede and read the current state back
@@ -160,6 +188,17 @@ BEGIN
                  AND gate_key = 'wetlands' AND status <> 'FAIL') THEN
       RAISE EXCEPTION 'the override mutated the gate verdict it accepted';
     END IF;
+
+    -- 4c. an override row carries the same snapshot shape: recorded
+    --     against run C, which fails wetlands and zoning.
+    SELECT verdict_at_decision, gates_not_passing INTO v_verdict, v_gates
+      FROM public.parcel_decisions
+      WHERE parcel_key = 'DECISION-CONTRACT-TEST'
+        AND decision = 'override';
+    IF v_verdict IS DISTINCT FROM 'FAIL'
+       OR v_gates IS DISTINCT FROM ARRAY['wetlands','zoning_dc_use']::text[] THEN
+      RAISE EXCEPTION 'the override row does not describe the run it claims: verdict=% gates=%', v_verdict, v_gates;
+    END IF;
     RESET ROLE;
 
     -- 3. Append-only even for the table owner: in-place edit and delete
@@ -172,6 +211,19 @@ BEGIN
         RAISE EXCEPTION 'unexpected error on in-place edit: %', SQLERRM;
       END IF;
     END;
+    -- the guard covers the snapshot columns too: editing history
+    -- through the one column a lazy guard forgets is still editing
+    -- history.
+    BEGIN
+      UPDATE public.parcel_decisions
+        SET verdict_at_decision = 'PASS', gates_not_passing = '{}'
+        WHERE id = v_dec_a;
+      RAISE EXCEPTION 'an in-place snapshot edit was allowed';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM NOT LIKE '%append-only%' THEN
+        RAISE EXCEPTION 'unexpected error on in-place snapshot edit: %', SQLERRM;
+      END IF;
+    END;
     BEGIN
       DELETE FROM public.parcel_decisions WHERE parcel_key = 'DECISION-CONTRACT-TEST';
       RAISE EXCEPTION 'a delete was allowed';
@@ -180,6 +232,37 @@ BEGIN
         RAISE EXCEPTION 'unexpected error on delete: %', SQLERRM;
       END IF;
     END;
+
+    -- 4d. every stored row — the fixtures above AND any real row the
+    --     release14 backfill filled from its own run history — agrees
+    --     with a recomputation from its own run_id. The fingerprint
+    --     plus run_id stays authoritative; a disagreement means the
+    --     summary is the bug.
+    SELECT count(*) INTO v_bad
+    FROM public.parcel_decisions d
+    JOIN LATERAL (
+        SELECT md5(string_agg(g.gate_key || '=' || g.status, ',' ORDER BY g.gate_key)) AS fp,
+               CASE
+                   WHEN BOOL_OR(g.status = 'FAIL')         THEN 'FAIL'
+                   WHEN BOOL_OR(g.status = 'UNKNOWN')     THEN 'UNKNOWN'
+                   WHEN BOOL_OR(g.status = 'CONDITIONAL') THEN 'CONDITIONAL'
+                   ELSE 'PASS'
+               END AS verdict,
+               coalesce(
+                   array_agg(g.gate_key ORDER BY g.gate_key)
+                       FILTER (WHERE g.status <> 'PASS'),
+                   '{}'::text[]) AS gates
+        FROM public.parcel_gate_results g
+        JOIN public.land_parcels lp ON lp.id = g.parcel_id
+        WHERE lp.parcel_key = d.parcel_key
+          AND g.run_id = d.run_id
+    ) s ON true
+    WHERE d.gate_fingerprint    IS DISTINCT FROM s.fp
+       OR d.verdict_at_decision IS DISTINCT FROM s.verdict
+       OR d.gates_not_passing  IS DISTINCT FROM s.gates::text[];
+    IF v_bad > 0 THEN
+      RAISE EXCEPTION '% decision row(s) disagree with the run they claim', v_bad;
+    END IF;
 
     -- cleanup (trigger disabled as owner: the deny above is the point).
     -- Gate rows go first: they reference the parcel and the run.

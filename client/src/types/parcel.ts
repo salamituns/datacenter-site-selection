@@ -314,6 +314,17 @@ export interface ParcelDecision {
   decided_by_email: string | null;
   decided_at: string;
   run_id: string;
+  /** The parcel's overall verdict over the run this decision was
+   *  recorded against — the map's own precedence (FAIL > UNKNOWN >
+   *  CONDITIONAL > PASS), computed server-side in the same read as the
+   *  fingerprint. A denormalised summary for readability; the
+   *  fingerprint plus run_id stays authoritative, and if the two ever
+   *  disagree the summary is the bug. */
+  verdict_at_decision: GateStatus;
+  /** Gate keys that were not PASS at decision time — what an approval
+   *  was approved despite, named on the row so nobody has to know the
+   *  join that reconstructs it six months on. */
+  gates_not_passing: string[];
   override_gate: string | null;
   override_status: GateStatus | null;
   superseded_by: string | null;
