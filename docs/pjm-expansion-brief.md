@@ -276,3 +276,74 @@ Taylor County, which is ERCOT and holds `power_capacity` UNKNOWN on all
 
 Phase 0 is the only one that touches live data for an existing region. It
 deserves its own commit, its own test, and a Franklin republish standing by.
+
+---
+
+## Follow-up — the Licking water gate
+
+**Recommendation: do not wire Pataskala as a standalone task.** The work it
+requires — parameterising the water provider — is already on Prince William
+County's critical path, since PW has its own Service Authority. Do the
+refactor there, where it decides a whole county, and Pataskala becomes a
+configuration entry rather than a bespoke job.
+
+### What is already safe
+
+The dangerous failure is prevented by the existing gate. `FAIL` fires only
+where a parcel sits at or above the pass threshold inside an explicit
+*NOT-served* polygon the utility itself published; every other uncovered
+case falls through to `UNKNOWN`. Loudoun's 1,853 water FAILs are Loudoun
+Water declaring non-service, not the engine inferring it from absence.
+
+Pataskala publishes no not-served polygon, so wiring it would yield
+PASS/CONDITIONAL inside the city and UNKNOWN across the rural townships.
+Partial coverage is the established shape, not a new compromise — Loudoun
+already ships 50 UNKNOWN parcels where incorporated towns run their own
+municipal providers.
+
+**Do not "improve" this later by treating absence from a service layer as
+evidence of non-service.** A parcel outside Pataskala's polygons may be
+served by Columbus Public Utilities, by a township district, or by a well.
+The engine does not know which, and `UNKNOWN` is the only honest answer.
+
+### The actual hazard: the provider is hard-coded
+
+`water_evidence.py` carries a single `WATER_SERVICE_AREA_URL`, and every
+rationale in the water gate names Loudoun Water in its text. Wiring a second
+utility without parameterising both would give Ohio parcels a rationale
+reading "Inside Loudoun Water's published service area" — the same class of
+error as describing Virginia with Ohio's statute, which the test suite
+guards for `cost_assumptions` and does not currently guard for water.
+
+Required before any second water source:
+
+1. **Provider becomes data, not prose.** Region config supplies the utility
+   name and endpoint; the gate interpolates it. No rationale names a
+   provider the region does not use.
+2. **Normalise to the existing column contract** — `area_name`,
+   `service_type` (`W` / `WW` / `Both`), `comment`. Pataskala publishes
+   water and wastewater as *separate layers* (18 and 40) where Loudoun uses
+   one layer with a type column, so the adapter emits `W` rows from one and
+   `WW` rows from the other. It does not need to compute `Both`: the engine
+   derives serving and wastewater-serving sets independently.
+3. **A missing `comment` field is `None`, never an empty string.** The
+   no-new-connections branch reads that text; an empty string would read as
+   a utility that said nothing, which is true, but only by accident.
+4. **Add the provider-attribution test** alongside the existing statute test
+   in `test_underwriting.py`: two regions, two utilities, and neither
+   rationale naming the other's.
+
+### Gate the decision on a measurement
+
+Nobody has counted how much this buys. Before any implementation, intersect
+Pataskala's 7 corridor polygons against the 1,990 Licking parcels:
+
+- **~40 parcels decided** moves coverage 0.881 → ~0.883. Not worth a
+  standalone task; fold it into the Prince William refactor.
+- **~400 parcels decided** is a different conversation and may justify doing
+  it first.
+
+Report the number before writing the adapter. The same probe should check
+whether any Licking township or the Southwest Licking Community Water and
+Sewer District publishes a county-scale boundary — a county-scale source
+would supersede this question entirely.
