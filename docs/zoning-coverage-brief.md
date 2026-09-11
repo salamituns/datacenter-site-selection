@@ -110,7 +110,7 @@ Three ways to read it:
    expensive: it means a fifth gate status, a CHECK constraint change, and
    every consumer of `GateStatus` learning a new case.
 
-**Recommended: 2, conditional on Task 3 below.** Absence of a prohibition is a
+**Superseded — see the decision below.** (Originally recommended: 2.) Absence of a prohibition is a
 genuine PASS on the question this gate asks. But it must be paired with the
 caveat in the rationale — no zoning also means no zoning *protection*, which
 is why unzoned counties are where moratoria and targeted ordinances appear.
@@ -139,3 +139,61 @@ So the order is:
 | 3 | Texas no-zoning-authority rule | 2, and the owner's decision |
 | 4 | town ordinances for the 58 (category B) | 2 |
 | 5 | moratorium gate | 2 |
+
+
+---
+
+## DECIDED — Taylor reads CONDITIONAL, not PASS
+
+Owner approved the recommendation on the condition that it be the
+best-practice reading. Tested against that, the original recommendation was
+wrong in one respect, so it is revised here rather than implemented as given.
+
+**Verdict: `CONDITIONAL`.** Rationale, to carry the citation:
+
+> No county zoning applies: Texas counties have no general zoning authority
+> over unincorporated land (Local Government Code ch. 231, which grants it
+> only to specific named counties). No zoning restriction prohibits a data
+> centre here. Confirm the parcel's extraterritorial-jurisdiction status with
+> the nearest municipality — a city's ETJ reaches 0.5 to 5 miles beyond its
+> limits depending on population, carries subdivision-platting and permitting
+> authority without zoning, and annexation would bring zoning with it.
+
+### Why not PASS
+
+A Loudoun `PDGI` PASS means *an adopted ordinance affirmatively permits this
+use*. An unincorporated Taylor "PASS" would mean *no ordinance exists to
+prohibit it*. Both would render as the same green badge, and they are not the
+same claim: the first is a durable legal permission, the second is an absence
+of regulation that an annexation vote can end.
+
+That conflation is the one this engine has refused twice already — screening
+tier against parcel tier, and zero against absent. Letting it back in through
+the zoning gate, at national scale, for every unzoned county in the country,
+would undo the principle in the place it matters most.
+
+### Why CONDITIONAL costs nothing to prefer
+
+* **Coverage is identical.** `evidence_coverage` counts *decided*, not
+  *passed* — `decided = status <> 'UNKNOWN'`. Taylor moves 0.666 toward ~0.78
+  either way.
+* **No overall verdict changes.** Taylor parcels also hold `water_availability`
+  and `power_capacity` at UNKNOWN, so `overall_status` stays UNKNOWN whichever
+  is chosen. The decision is purely about what the gate itself claims.
+* **It names a real diligence item.** ETJ status and annexation exposure are
+  genuine, checkable, and specific to this situation — which is what
+  CONDITIONAL is for, as against PASS's "nothing further to do".
+
+So the choice has no functional cost and one real benefit: the badge means
+what it says.
+
+### Precedent
+
+This rule is not about Taylor. Much of rural America is unzoned, and every
+future county in an unzoned state will hit it. Fixing the reading now, once,
+sets the precedent correctly before it is applied 3,000 times.
+
+Still conditional on Task 3: the rule may only be applied to parcels confirmed
+**outside** incorporated limits. A parcel inside Abilene has city zoning, and
+sweeping it in with this rationale would be exactly the borrowed-verdict error
+the Prince William brief was written to prevent.
