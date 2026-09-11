@@ -11,6 +11,46 @@ lands will delete the county it is joining.
 
 ---
 
+## Outcome — first county (Licking) launched 2026-09-10
+
+All five phases are done. Phase 0 re-keyed regions to county slugs and the
+sibling promote test proved Franklin survives a Licking publish; the live
+acceptance after launch shows both Ohio regions side by side — Franklin
+982 parcels / 306 cells / 0.777 coverage, Licking 1,990 parcels / 110
+cells / 0.881 coverage, with Loudoun, Taylor and Morrow untouched. The
+published run is `1f81e412-728e-46ce-9a1d-aeb26288c425`.
+
+Two traps the plan did not name, both caught by the dry-run and fixed
+before publishing:
+
+- The Ohio NWI clip carries a single wetland complex of over a million
+  vertices spanning most of the corridor, and the overlap index paid for
+  all of them on every parcel under its envelope (~16 s per gate call,
+  days for the corridor). `_OverlapIndex.fraction` now intersects each
+  candidate with the parcel before any union work (identical answer —
+  intersection distributes over union) and explodes multiparts at index
+  build; ~150× faster, held against the verbatim reference
+  implementation.
+- The NWI state cache was the one clip cache without a bbox coverage
+  check, so the Licking run served the Franklin-bbox clip and would have
+  passed the wetlands gate on unexamined ground east of Franklin. Caught
+  from one log line — "cached clip: 13200 polygons", exactly Franklin's
+  count, on a bbox the clip does not cover. It now uses the same
+  containment-checked cache contract as NFHL, PAD-US and TIGER.
+
+Evidence coverage landed at **0.881**, above the 0.78 the brief expected:
+township zoning is published (94.7% of parcels carry a district), and the
+power gate decided for every parcel on PJM RTEP area evidence (CONDITIONAL,
+4 Board-approved upgrades active in the county area). The dry-run read
+0.777 because it runs without database credentials, so the curated
+evidence layers read as missing — dry-run coverage is a floor, not a
+forecast. Water availability stays UNKNOWN: the county's Utilities folder
+is unprobed and no service-area layer is wired. Known next steps: probe
+the county Utilities folder for a water layer, and curate the legislative
+applications record once data-center cases exist in the county.
+
+---
+
 ## Phase 0 — re-key the region model from state to county
 
 ### Why this blocks everything
