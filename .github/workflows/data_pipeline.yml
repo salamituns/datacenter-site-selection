@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       region:
-        description: 'Region slug (e.g. VA-LOUDOUN, OH-FRANKLIN, TX-TAYLOR, OR-MORROW)'
+        description: 'Region slug (e.g. VA-LOUDOUN, OH-FRANKLIN, OH-LICKING, TX-TAYLOR, OR-MORROW)'
         required: true
         default: 'VA-LOUDOUN'
       dry_run:
