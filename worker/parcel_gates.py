@@ -854,7 +854,12 @@ def qualify_parcels(
             metric(pin, "dc_use_status", None, text_value=dc_status, evidence="manual",
                    layer="zoning", details={
                        "zone": zone_code,
-                       "basis": "constraint_rules mapping 2023-ord+2025-zoam (screening, pending ordinance review)",
+                       # The rule version travels with the jurisdiction's
+                       # own row, never a hard-coded one county's.
+                       "basis": ("constraint_rules mapping "
+                                 + str(rules["zoning_dc_use"].get("rule_version")
+                                       or "screening")
+                                 + " (screening, pending ordinance review)"),
                    })
 
         if line_dist_mi is not None and i in line_dist_mi.index:
@@ -915,7 +920,7 @@ def qualify_parcels(
             if dc_status == "by_right":
                 gate(pin, "zoning_dc_use", "PASS",
                      f"Zoned {zone_code} ({zr['zone_name']}) — data centers are a "
-                     f"by-right principal use in industrial districts under the "
+                     f"by-right principal use in this district under the "
                      f"{zr['ordinance']} ordinance (screening mapping).",
                      details={"zone": zone_code, "ordinance": str(zr["ordinance"])})
             elif dc_status == "special_exception":

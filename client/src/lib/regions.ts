@@ -23,6 +23,7 @@ export const REGIONS: Region[] = [
   { code: "TX-TAYLOR", label: "Taylor TX · ERCOT", short: "TX", operator: "ERCOT" },
   { code: "OH-FRANKLIN", label: "Franklin OH · PJM", short: "OH", operator: "PJM" },
   { code: "OH-LICKING", label: "Licking OH · PJM", short: "LICK", operator: "PJM" },
+  { code: "VA-PRINCEWILLIAM", label: "Prince William VA · PJM", short: "PW", operator: "PJM" },
   { code: "OR-MORROW", label: "Morrow OR · BPA", short: "OR", operator: "BPA" },
 ];
 

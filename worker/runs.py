@@ -117,14 +117,18 @@ class IngestionRun:
         return rule_id
 
     def load_rules(self, jurisdiction: str) -> Dict[str, Dict[str, Any]]:
-        """Loads {gate_key: {"id": ..., "params": ...}} for a jurisdiction."""
-        res = self.client.table("constraint_rules").select("id,gate_key,params") \
+        """Loads {gate_key: {"id": ..., "params": ..., "rule_version": ...}}
+        for a jurisdiction."""
+        res = self.client.table("constraint_rules") \
+            .select("id,gate_key,rule_version,params") \
             .eq("jurisdiction", jurisdiction).execute()
         return _rows_to_rules(res.data or [])
 
 
 def _rows_to_rules(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    return {r["gate_key"]: {"id": str(r["id"]), "params": r["params"] or {}}
+    return {r["gate_key"]: {"id": str(r["id"]),
+                            "params": r["params"] or {},
+                            "rule_version": r.get("rule_version")}
             for r in rows}
 
 

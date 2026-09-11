@@ -67,6 +67,9 @@ TIGERLINE_ROADS_URL = (
 # state-year artefact either county can share.
 COUNTY_FIPS = {
     "VA-LOUDOUN": "51107",
+    # Verified against the Census 2020 ANSI county reference, not from
+    # the brief: VA|51|153|Prince William County.
+    "VA-PRINCEWILLIAM": "51153",
     "OH-FRANKLIN": "39049",
     "OH-LICKING": "39089",
     "TX-TAYLOR": "48441",

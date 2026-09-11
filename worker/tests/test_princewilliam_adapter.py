@@ -156,11 +156,28 @@ class TestZoning:
                            "ZoningCaseName": case_name,
                            "ZoningCaseNumber": case,
                            "last_edited_date": 1760452823000},
-            "geometry": _feature({})["geometry"],
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[-77.59, 38.78], [-77.59, 38.79],
+                                 [-77.58, 38.79], [-77.58, 38.78],
+                                 [-77.59, 38.78]]],
+            },
+        }
+
+    def _dcoz_feature(self, lon=-77.585, lat=38.785):
+        return {
+            "properties": {"OBJECTID": 1, "CaseName": "Data Center Opportunity Zone"},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[lon - 0.02, lat - 0.02], [lon - 0.02, lat + 0.02],
+                                 [lon + 0.02, lat + 0.02], [lon + 0.02, lat - 0.02],
+                                 [lon - 0.02, lat - 0.02]]],
+            },
         }
 
     def test_district_names_come_from_the_ordinance_not_the_case(self, monkeypatch):
         api = PrinceWilliamParcelAPI()
+        monkeypatch.setattr(api, "_fetch_dcoz_geometry", lambda bbox: None)
         monkeypatch.setattr(
             api, "_paged",
             lambda *a, **k: [self._zoning_feature("M-1"),
@@ -176,6 +193,7 @@ class TestZoning:
 
     def test_unknown_code_keeps_the_code_as_its_name(self, monkeypatch, caplog):
         api = PrinceWilliamParcelAPI()
+        monkeypatch.setattr(api, "_fetch_dcoz_geometry", lambda bbox: None)
         monkeypatch.setattr(
             api, "_paged",
             lambda *a, **k: [self._zoning_feature("TWN")])
@@ -183,6 +201,49 @@ class TestZoning:
             z = api.fetch_zoning(BBOX)
         assert z["zone_name"].iloc[0] == "TWN"
         assert "without an ordinance name" in caplog.text
+
+    def test_overlay_majority_tags_dcoz_districts(self, monkeypatch):
+        """The ordinance makes by-right conditional on the DCOZ overlay.
+
+        An M-1 polygon mostly inside the overlay is tagged so the use
+        table's by-right list can see it; one outside keeps the plain
+        code and lands on the Special Use Permit side.
+        """
+        from shapely.geometry import box
+        api = PrinceWilliamParcelAPI()
+        # Overlay covers the district polygon's area entirely.
+        monkeypatch.setattr(api, "_fetch_dcoz_geometry",
+                            lambda bbox: box(-77.60, 38.77, -77.57, 38.80))
+        inside = self._zoning_feature("M-1")
+        outside = {
+            "properties": {"ZoningDistrict": "M-2",
+                           "ZoningCaseName": "X", "ZoningCaseNumber": "REZ1",
+                           "last_edited_date": 1760452823000},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[-77.50, 38.78], [-77.50, 38.79],
+                                 [-77.49, 38.79], [-77.49, 38.78],
+                                 [-77.50, 38.78]]],
+            },
+        }
+        monkeypatch.setattr(api, "_paged",
+                            lambda *a, **k: [inside, outside])
+        z = api.fetch_zoning(BBOX)
+        assert "M-1 (DCOZ)" in list(z["zone"])
+        assert "M-2 (DCOZ)" not in list(z["zone"])
+        assert "M-2" in list(z["zone"])
+        # The tag never reaches the district's own name.
+        assert z[z["zone"] == "M-1 (DCOZ)"]["zone_name"].iloc[0] == "Heavy Industrial"
+
+    def test_overlay_unavailable_is_the_conservative_reading(self, monkeypatch, caplog):
+        api = PrinceWilliamParcelAPI()
+        monkeypatch.setattr(api, "_fetch_dcoz_geometry", lambda bbox: None)
+        monkeypatch.setattr(
+            api, "_paged",
+            lambda *a, **k: [self._zoning_feature("M-1")])
+        with caplog.at_level("WARNING"):
+            z = api.fetch_zoning(BBOX)
+        assert list(z["zone"]) == ["M-1"]
 
     def test_ordinance_names_cover_the_industrial_and_agricultural_codes(self):
         # The districts a data-center screening turns on first.

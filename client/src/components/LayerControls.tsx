@@ -91,6 +91,7 @@ const PARCEL_SOURCE: Record<string, string> = {
   "VA-LOUDOUN": "Loudoun County GIS",
   "OH-FRANKLIN": "Franklin County Auditor",
   "OH-LICKING": "Licking County Auditor",
+  "VA-PRINCEWILLIAM": "Prince William County GTS",
   "TX-TAYLOR": "Taylor CAD",
 };
 

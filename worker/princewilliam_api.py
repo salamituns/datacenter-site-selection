@@ -33,6 +33,17 @@ Where PW differs from the other jurisdictions, the probe is why:
   from the case name. Towns (Dumfries, Occoquan, Haymarket, Quantico)
   are mapped as `TWN`, a placeholder the use table must treat as an
   unknown jurisdiction, never a guessed class.
+* The by-right question is overlay-dependent, and the county publishes
+  the overlay. Chapter 32 permits a Data Center by right in the
+  industrial and office districts only WITHIN the Data Center
+  Opportunity Zone (Sec. 32-509; one 9,698-acre polygon, Ord. No.
+  16-21) and by Special Use Permit outside it — measured, the overlay
+  decides 71 of the 961 candidates (51 by-right, 20 SUP). The adapter
+  therefore fetches the overlay and tags affected district polygons
+  whose majority area lies inside it as `{code} (DCOZ)`, so the use
+  table can tell the two statuses apart; if the overlay is unavailable
+  the polygons keep their plain codes and land on the SUP side, the
+  conservative reading.
 
 Nothing here is keyed on state_code: two Virginia counties now run
 side by side, and the Loudoun water provider never appears in a PW
@@ -103,6 +114,17 @@ class PrinceWilliamParcelAPI:
         "https://gisweb.pwcva.gov/arcgis/rest/services/"
         "Planning/Zoning/MapServer/5/query"
     )
+    DCOZ_URL = (
+        "https://gisweb.pwcva.gov/arcgis/rest/services/"
+        "Planning/Zoning/MapServer/7/query"
+    )
+
+    # The districts whose use tables permit a Data Center by right only
+    # within the Data Center Opportunity Zone overlay (Secs. 32-402.11/
+    # .21/.31/.41, 32-403.11/.21/.31), and by Special Use Permit outside
+    # it. B-1 is not here: its Special Use Permit for a Data Center is
+    # unconditional (Sec. 32-401.13).
+    DCOZ_DISTRICTS = ("M-1", "M-2", "M/T", "O(L)", "O(M)", "O(H)", "O(F)")
 
     # Same floor as every other parcel jurisdiction, so all counties are
     # screened on one threshold.
@@ -253,7 +275,7 @@ class PrinceWilliamParcelAPI:
 
     def fetch_zoning(self, bbox: str) -> Optional[gpd.GeoDataFrame]:
         """
-        The county-wide zoning district layer.
+        The county-wide zoning district layer, with the DCOZ overlay read.
 
         One layer, 31 district codes, per-feature edit dates. The name
         field on the layer holds the rezoning case, not the district, so
@@ -263,6 +285,17 @@ class PrinceWilliamParcelAPI:
         pass through as codes; classifying them is the use table's job
         (TWN is a town whose ordinance the county does not publish, and
         the gate records UNKNOWN, never a guessed class).
+
+        The overlay: a district polygon in DCOZ_DISTRICTS whose majority
+        area lies inside the Data Center Opportunity Zone is tagged
+        "{code} (DCOZ)" so the use table's by-right and SUP lists can
+        disagree about the same district code — the ordinance itself
+        makes by-right status conditional on the overlay (Sec. 32-509).
+        Majority is of the zoning polygon's own area, a screening-level
+        attribution disclosed in the rule row. If the overlay layer is
+        unavailable, every polygon keeps its plain code and the parcel
+        lands on the SUP side — the conservative reading, never a
+        borrowed by-right.
         """
         features = self._paged(
             self.ZONING_URL, bbox, self.ZONING_FIELDS,
@@ -272,6 +305,7 @@ class PrinceWilliamParcelAPI:
             logger.warning("PW zoning: no district polygons returned.")
             return None
         rows: List[Dict[str, Any]] = []
+        raw: List[Dict[str, Any]] = []
         for f in features:
             props = f.get("properties") or {}
             zone = str(props.get("ZoningDistrict") or "").strip()
@@ -288,7 +322,7 @@ class PrinceWilliamParcelAPI:
                 geom = geom.buffer(0)
             if geom.is_empty:
                 continue
-            rows.append({
+            raw.append({
                 "zone": zone,
                 "zone_name": DISTRICT_NAMES.get(zone, zone),
                 "ordinance": ORDINANCE,
@@ -298,10 +332,27 @@ class PrinceWilliamParcelAPI:
                 "case_number": str(props.get("ZoningCaseNumber") or "").strip() or None,
                 "geometry": geom,
             })
-        if not rows:
+        if not raw:
             logger.warning("PW zoning: no usable district polygons.")
             return None
-        unmapped = sorted({r["zone"] for r in rows if r["zone"] not in DISTRICT_NAMES})
+
+        dcoz = self._fetch_dcoz_geometry(bbox)
+        tagged = 0
+        for row in raw:
+            if dcoz is not None and row["zone"] in self.DCOZ_DISTRICTS:
+                area = row["geometry"].area
+                if area > 0 and row["geometry"].intersection(dcoz).area / area >= 0.5:
+                    row["zone"] = f"{row['zone']} (DCOZ)"
+                    tagged += 1
+            rows.append(row)
+        if dcoz is not None:
+            logger.info("PW zoning: %d district polygons tagged (DCOZ) of %d "
+                        "in the overlay-affected districts.",
+                        tagged, sum(1 for r in raw
+                                    if r["zone"].split(" (DCOZ)")[0]
+                                    in self.DCOZ_DISTRICTS))
+        unmapped = sorted({r["zone"].split(" (DCOZ)")[0] for r in rows
+                           if r["zone"].split(" (DCOZ)")[0] not in DISTRICT_NAMES})
         if unmapped:
             logger.info("PW zoning: %d districts without an ordinance name "
                         "map entry (kept the code): %s",
@@ -309,6 +360,38 @@ class PrinceWilliamParcelAPI:
         logger.info("PW zoning: %d district polygons, %d distinct codes.",
                     len(rows), len({r["zone"] for r in rows}))
         return gpd.GeoDataFrame(rows, crs="EPSG:4326")
+
+    def _fetch_dcoz_geometry(self, bbox: str):
+        """
+        The Data Center Opportunity Zone overlay as one planar geometry,
+        or None when unavailable. The overlay is a single polygon
+        (9,698 acres, adopted by Ord. No. 16-21); None means the
+        conservative SUP reading, never a missing by-right.
+        """
+        features = self._paged(self.DCOZ_URL, bbox, "OBJECTID", where="1=1")
+        if not features:
+            logger.warning("PW DCOZ overlay unavailable — overlay-affected "
+                           "districts keep their SUP treatment.")
+            return None
+        from shapely.ops import unary_union
+        geoms = []
+        for f in features:
+            geometry = f.get("geometry")
+            if not geometry:
+                continue
+            try:
+                g = shape(geometry)
+            except Exception:  # noqa: BLE001
+                continue
+            if not g.is_empty:
+                geoms.append(g if g.is_valid else g.buffer(0))
+        if not geoms:
+            return None
+        # Left in EPSG:4326: the test below is a ratio of areas, and both
+        # the overlay and the district polygons sit in the same small
+        # part of the same CRS, so the local scale factor cancels. What
+        # would NOT cancel is mixing CRSs, so none is mixed.
+        return unary_union(geoms)
 
     def _paged(self, base_url: str, bbox: str, out_fields: str,
                where: str = "1=1") -> Optional[List[Dict[str, Any]]]:

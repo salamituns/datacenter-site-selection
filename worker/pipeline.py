@@ -80,6 +80,15 @@ REGION_PRESETS: Dict[str, Dict[str, Any]] = {
         "county": "Licking",
         "grid_operator": "PJM Interconnection",
     },
+    # The whole county: PW is compact (348 square miles) and 962 parcels
+    # clear the 20-acre floor (probed 2026-09-11), so unlike Licking no
+    # corridor scoping is needed.
+    "VA-PRINCEWILLIAM": {
+        "state": "VA",
+        "bbox": (-77.76, 38.49, -77.20, 38.96),
+        "county": "Prince William",
+        "grid_operator": "PJM Interconnection",
+    },
     "OR-MORROW": {
         "state": "OR",
         "bbox": (-120.05, 45.55, -119.45, 46.15),
@@ -105,6 +114,11 @@ PARCEL_PILOTS: Dict[str, str] = {
     # Same PJM market as Franklin, plus a published township zoning layer
     # (the one thing Franklin lacks) and per-parcel CAUV evidence.
     "OH-LICKING": "Licking County, OH",
+    # The second Virginia jurisdiction: a published county-wide zoning
+    # layer whose by-right status depends on the county's own Data Center
+    # Opportunity Zone overlay, and a CAMA join that carries everything
+    # except the values the county does not publish in bulk.
+    "VA-PRINCEWILLIAM": "Prince William County, VA",
     # Abilene is in ERCOT, so unlike Ohio nothing from the PJM power
     # diligence layer carries over and that gate stays UNKNOWN.
     "TX-TAYLOR": "Taylor County, TX",
@@ -117,6 +131,7 @@ PARCEL_ADAPTERS: Dict[str, str] = {
     "VA-LOUDOUN": "loudoun",
     "OH-FRANKLIN": "franklin",
     "OH-LICKING": "licking",
+    "VA-PRINCEWILLIAM": "princewilliam",
     "TX-TAYLOR": "taylor",
 }
 
@@ -519,6 +534,9 @@ def run_pipeline(
             elif adapter == "licking":
                 from licking_api import LickingParcelAPI
                 county_api = LickingParcelAPI()
+            elif adapter == "princewilliam":
+                from princewilliam_api import PrinceWilliamParcelAPI
+                county_api = PrinceWilliamParcelAPI()
             elif adapter == "loudoun":
                 county_api = LoudounParcelAPI()
             else:
@@ -714,26 +732,47 @@ def run_pipeline(
             # roll — land and improvement value, the taxable base, the
             # county's own estimated levy, and the land-use deferral that
             # carries a roll-back liability on conversion.
+            #
+            # The roll is region-keyed, not unconditional: only Loudoun
+            # publishes a separate bulk extract, and fetching it for
+            # another county would record Loudoun's roll as that run's
+            # assessment source while deciding nothing (the pins never
+            # match). Franklin and Licking carry their values on the
+            # parcel feature itself; Prince William publishes no bulk
+            # roll at all — the public roll is per-parcel on the
+            # Assessor's portal — so its value metrics honestly record
+            # UNKNOWN rather than borrowing a neighbour's numbers.
             import assessment_evidence
-            assessments = assessment_evidence.fetch_assessments()
-            if run is not None:
+            assessments = (assessment_evidence.fetch_assessments()
+                           if region_key == "VA-LOUDOUN" else None)
+            if region_key != "VA-LOUDOUN" and parcels_gdf is not None:
+                logger.info("No separate assessment roll for %s — value "
+                            "metrics come from the parcel layer itself "
+                            "or record UNKNOWN.", region_key)
+            if run is not None and assessments is not None:
                 snapshots["assessment"] = run.snapshot(
                     layer="assessment",
                     source_key="loudoun_assessment_roll",
                     endpoint_url=assessment_evidence.ASSESSMENT_XLSX_URL,
-                    record_count=None if assessments is None else len(assessments),
+                    record_count=len(assessments),
                     evidence_class="observed",
-                    quality=(None if assessments is None else {
+                    quality={
                         "rows": int(len(assessments)),
                         "assessment_year": assessment_evidence.ASSESSMENT_YEAR,
                         "in_land_use_deferral": int(
                             (assessments["deferred_value"].fillna(0) > 0).sum()),
-                    }),
-                    notes=(None if assessments is not None
-                           else "unavailable — assessment values recorded UNKNOWN"),
+                    },
                 )
-            elif assessments is None:
-                logger.warning("Assessment roll unavailable — value metrics will be UNKNOWN.")
+            elif run is not None and region_key == "VA-LOUDOUN":
+                snapshots["assessment"] = run.snapshot(
+                    layer="assessment",
+                    source_key="loudoun_assessment_roll",
+                    endpoint_url=assessment_evidence.ASSESSMENT_XLSX_URL,
+                    record_count=None,
+                    evidence_class="observed",
+                    quality=None,
+                    notes="unavailable — assessment values recorded UNKNOWN",
+                )
 
             # Cost assumptions (Release 4c): the versioned, cited inputs
             # behind every estimated figure. Absent, the estimates are
