@@ -427,3 +427,112 @@ inside the 2021 boundary is almost certainly still served — `PASS` is safe —
 while a parcel outside may have been annexed since, which is why `UNKNOWN`
 rather than `FAIL` is the correct answer there. The existing gate already
 produces exactly this asymmetry; do not tune it away.
+
+---
+
+## Next county — Prince William County, VA
+
+Phase 0 is done, so this is probe → adapter → wiring → verify → publish. The
+region key work already lets `VA-PRINCEWILLIAM` sit beside `VA-LOUDOUN`; the
+sibling-promote test covers it.
+
+### Read this first: the zoning default is Loudoun's
+
+`constraint_rules` is jurisdiction-scoped and every live county has its own
+rows — but the *fallback* is not. `parcel_gates.py` resolves each rule as:
+
+```python
+rules.get("zoning_dc_use", {}).get("params", DEFAULT_RULE_PARAMS["zoning_dc_use"])
+```
+
+and `DEFAULT_RULE_PARAMS["zoning_dc_use"]` holds **Loudoun's district codes**
+— `PDGI`/`PDIP`/`GI`/`IP`/`MRHI` by right, `R1`…`R24`, `C1`, `GB`, `TC`
+prohibited. A county that supplies a zoning layer with no `zoning_dc_use` row
+of its own does not fail and does not concede UNKNOWN: it silently decides
+every parcel against Loudoun's use table.
+
+Two Virginia counties make this concrete rather than theoretical. Prince
+William's ordinance uses `A-1`, `R-4`, `M-1`, `M-2`, `PBD`. Hyphenated codes
+miss Loudoun's lists and land on the safe UNKNOWN branch — but an unhyphenated
+`R4` or `A3` would match, and produce a confident FAIL whose rationale cites
+Prince William's ordinance while the verdict came from Loudoun's use table.
+The answer might even be right; the reasoning would be borrowed and
+unverified, which is the failure this engine exists to refuse.
+
+**Required:** a full `zoning_dc_use` row for `Prince William County, VA`
+before the first run that supplies zoning, built from PW's own ordinance use
+table. Do not derive it from Loudoun's by pattern-matching district letters.
+
+**Also worth doing:** make the pipeline refuse to qualify a region that
+supplies a zoning layer with no matching `zoning_dc_use` rule, instead of
+falling back. The fallback is only safe for a county like Franklin whose
+adapter returns `zoning: None` by construction.
+
+### Adapter
+
+Portal confirmed: Parcels, a Parcel Ownership Table carrying deed acreage,
+and an "Underdeveloped A1 Parcels" layer. Run the five probe questions
+unchanged — they have caught something in all four counties so far.
+
+Two PW specifics:
+
+- **Deed acreage lives in a separate table**, so this is the Loudoun shape
+  (join) rather than the Franklin shape (inline). Reconcile against geometry
+  per row as everywhere else; a row agreeing with neither reading is null.
+- **The "Underdeveloped A1 Parcels" layer is a shortlist, not evidence.**
+  It is somebody's selection, and the engine's job is to derive that from
+  primary data. Use it to sanity-check the run's own output — if the engine
+  disagrees wholesale, something is wrong — never as an input to a verdict.
+
+### Wiring
+
+1. `REGION_PRESETS["VA-PRINCEWILLIAM"]` — bbox, county label, `grid_operator:
+   "PJM Interconnection"`.
+2. `PARCEL_PILOTS["VA-PRINCEWILLIAM"] = "Prince William County, VA"`.
+3. `COUNTY_FIPS["VA-PRINCEWILLIAM"] = "51153"` — **verify the FIPS**, do not
+   trust it from this brief.
+4. `constraint_rules` — the `zoning_dc_use` row above, plus the standard
+   eight. Nine rules total, matching Loudoun.
+5. `cost_assumptions` — **both keys, and neither copied from Loudoun.**
+   - `land_use_rollback`: the statute is statewide (Code of Virginia
+     58.1-3237, 5 years) but **the rate is the county's own adopted real
+     estate rate**, which is not Loudoun's $0.805. Find PW's adopted rate and
+     record it with its source. Copying Loudoun's would price a Prince
+     William parcel with Loudoun's tax bill.
+   - `site_prep`: unit costs are not jurisdiction-specific; copy the params,
+     but the row must exist under PW's own jurisdiction or site prep prices
+     at nothing.
+
+### Water — the refactor lands here
+
+Prince William County Service Authority is its own utility, and this PR
+carries the Licking entry too (see the decision above). Requirements 1, 1a,
+1b, 2, 3 and 4 from the previous section all apply. One seam, two counties:
+PWCSA decides Prince William, the LRWD joint boundary decides 308 Licking
+parcels, and `water_availability` stops being the gate that never generalises.
+
+### What is free
+
+VA already carries 2,507 RTEP records and Prince William is PJM, so power
+diligence, the queue feed and PeeringDB carry over unchanged — unlike Taylor
+County, which is ERCOT and holds `power_capacity` UNKNOWN on all 3,240
+parcels. All federal layers apply as usual.
+
+### Expected coverage
+
+With zoning published and water wired, Prince William should reach 9 of 9
+gates decidable — coverage approaching Loudoun's 0.995 and the highest of any
+county at launch. If the dry-run reads materially below ~0.95, a layer failed
+silently; read the `Qualification complete` line before publishing, not after.
+
+### Acceptance
+
+Publish, then confirm every sibling survived — Loudoun especially, since it is
+the one this county shares a state with:
+
+```sql
+select region_key, count(*) filter (where is_active) as parcels
+from land_parcels group by 1 order by 1;
+-- expect VA-LOUDOUN 2478 unchanged, VA-PRINCEWILLIAM > 0,
+-- OH-FRANKLIN 982, OH-LICKING 1990, TX-TAYLOR 3240
+```
