@@ -11,6 +11,7 @@ fail loudly instead of publishing partial data.
 """
 
 import logging
+import os
 import random
 import uuid as uuidlib
 from datetime import datetime, timezone
@@ -119,8 +120,46 @@ class IngestionRun:
         """Loads {gate_key: {"id": ..., "params": ...}} for a jurisdiction."""
         res = self.client.table("constraint_rules").select("id,gate_key,params") \
             .eq("jurisdiction", jurisdiction).execute()
-        return {r["gate_key"]: {"id": str(r["id"]), "params": r["params"] or {}}
-                for r in (res.data or [])}
+        return _rows_to_rules(res.data or [])
+
+
+def _rows_to_rules(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    return {r["gate_key"]: {"id": str(r["id"]), "params": r["params"] or {}}
+            for r in rows}
+
+
+def load_rules_readonly(jurisdiction: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Reads a jurisdiction's constraint_rules without a write client.
+
+    Same shape and same rows as IngestionRun.load_rules, for the dry run:
+    constraint_rules is world-readable, so a run with no service key still
+    decides against the rules a publish would use. Before this existed the
+    dry run fell back to the built-in defaults, which for zoning_dc_use
+    was another county's use table — and the engine now refuses a
+    zoning-supplying run with no rule row, so the dry run has to be able
+    to see the real one. Returns {} when the rules cannot be read; the
+    refusal in qualify_parcels then stops the run rather than guessing.
+    """
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+    if not url or not key:
+        logger.info("No client for constraint_rules — built-in defaults only; "
+                    "a zoning-supplying run will refuse rather than fall back.")
+        return {}
+    try:
+        from supabase import create_client
+        client = create_client(url, key)
+        res = client.table("constraint_rules").select("id,gate_key,params") \
+            .eq("jurisdiction", jurisdiction).execute()
+        rules = _rows_to_rules(res.data or [])
+        logger.info("constraint_rules for %s (read-only): %s",
+                    jurisdiction, sorted(rules) or "none")
+        return rules
+    except Exception as e:  # noqa: BLE001
+        logger.warning("constraint_rules unreadable (%s) — built-in defaults "
+                       "only; a zoning-supplying run will refuse.", e)
+        return {}
 
     def fetch_power_parcel_evidence(self) -> Dict[str, List[Dict[str, Any]]]:
         """

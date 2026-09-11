@@ -137,7 +137,18 @@ def result():
         nfhl_gdf=nfhl,
         lines_gdf=lines,
         subs_gdf=subs,
-        rules={},  # exercise the shipped DEFAULT_RULE_PARAMS
+        # The synthetic county states its own use table rather than
+        # borrowing one: the engine refuses a zoning layer with no
+        # zoning_dc_use row precisely because the built-in default used to
+        # be Loudoun's, and a borrowed verdict is what these tests exist
+        # to make impossible. Other gates still exercise the shipped
+        # DEFAULT_RULE_PARAMS.
+        rules={"zoning_dc_use": {"params": {
+            "by_right": ["PDGI"],
+            "special_exception": [],
+            "prohibited": ["R1"],
+            "unknown_jurisdiction": ["TOWNS"],
+        }}},
         state_code="VA",
         county_name="Loudoun",
         snapshots={},
@@ -284,3 +295,68 @@ class TestMetricsAreSerialisable:
 
     def test_every_metric_carries_a_retrieval_time(self, result):
         assert all(m["retrieved_at"] for m in result["metrics"])
+
+
+class TestZoningRuleRefusal:
+    """
+    A zoning layer with no zoning_dc_use row for its own jurisdiction is a
+    refusal, not a fallback. The built-in default was Loudoun's use table;
+    a county whose codes collide with it (an unhyphenated R4 where the
+    ordinance writes R-4) would get a confident verdict citing one
+    county's ordinance while the decision came from another's table. The
+    refusal is what makes that path unreachable.
+    """
+
+    def _county(self, zone="R4"):
+        acres = 150.0
+        side = (acres * M2_PER_ACRE) ** 0.5
+        parcels = gpd.GeoDataFrame(
+            {"pin": ["P1"], "legal_acreage": [acres],
+             "geometry": [box(0, 0, side, side)]},
+            crs=PLANAR_CRS,
+        ).to_crs("EPSG:4326")
+        zoning = gpd.GeoDataFrame(
+            {"zone": [zone], "zone_name": [f"{zone} district"],
+             "ordinance": ["2026"], "geometry": [box(-10, -10, side + 10, side + 10)]},
+            crs=PLANAR_CRS,
+        ).to_crs("EPSG:4326")
+        return parcels, zoning
+
+    def _qualify(self, parcels, zoning, rules):
+        return qualify_parcels(
+            parcels_gdf=parcels, zoning_gdf=zoning,
+            wetlands_gdf=None, nfhl_gdf=None, lines_gdf=None, subs_gdf=None,
+            rules=rules, state_code="VA", county_name="Prince William",
+            snapshots={}, retrieve_time="2026-09-11T00:00:00+00:00",
+        )
+
+    def test_zoning_layer_without_a_rule_row_is_refused(self):
+        parcels, zoning = self._county()
+        with pytest.raises(ValueError, match="zoning_dc_use"):
+            self._qualify(parcels, zoning, rules={})
+
+    def test_zoning_layer_with_its_own_rule_row_proceeds(self):
+        # The row exists, the district is prohibited by the county's own
+        # table, and the verdict is the county's — not a borrowed one.
+        parcels, zoning = self._county()
+        _, _, gates, _ = self._qualify(
+            parcels, zoning,
+            rules={"zoning_dc_use": {"params": {
+                "by_right": [], "special_exception": [],
+                "prohibited": ["R4"], "unknown_jurisdiction": [],
+            }}},
+        )
+        zoning_rows = [g for g in gates if g["gate_key"] == "zoning_dc_use"]
+        assert len(zoning_rows) == 1
+        assert zoning_rows[0]["status"] == "FAIL"
+        assert "Prince William" in zoning_rows[0]["rationale"] or \
+            "ordinance" in zoning_rows[0]["rationale"]
+
+    def test_absent_zoning_layer_needs_no_rule(self):
+        # Franklin's shape: the adapter returns zoning: None by
+        # construction, so there is nothing to decide and no row required.
+        parcels, _ = self._county()
+        _, _, gates, _ = self._qualify(parcels, None, rules={})
+        zoning_rows = [g for g in gates if g["gate_key"] == "zoning_dc_use"]
+        assert len(zoning_rows) == 1
+        assert zoning_rows[0]["status"] == "UNKNOWN"

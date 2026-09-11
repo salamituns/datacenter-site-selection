@@ -39,7 +39,7 @@ from hazard_api import HazardAPI
 from loudoun_api import LoudounParcelAPI
 import network_evidence
 from parcel_gates import qualify_parcels, RULE_VERSIONS
-from runs import IngestionRun
+from runs import IngestionRun, load_rules_readonly
 import overlay_layers
 
 load_dotenv()
@@ -645,7 +645,13 @@ def run_pipeline(
                 elif count is None:
                     logger.warning("Layer %s unavailable — its gates will be UNKNOWN.", layer_key)
 
-            rules = run.load_rules(jurisdiction) if run is not None else {}
+            # A dry run reads the same rule rows a publish would (read-only,
+            # world-readable table) rather than the built-in defaults: the
+            # zoning default was another county's use table, and the engine
+            # now refuses a zoning-supplying run with no rule of its own —
+            # a refusal the dry run must be able to see past, not trip on.
+            rules = (run.load_rules(jurisdiction) if run is not None
+                     else load_rules_readonly(jurisdiction))
 
             # Power diligence (Release 2): serving utility, PJM RTEP
             # upgrade evidence, queue activity. Each degrades to UNKNOWN

@@ -48,18 +48,13 @@ RULE_VERSIONS = {
 }
 # Dry-run defaults — identical to the seeded constraint_rules (release0_
 # provenance migration). Live runs always read the rules from the database.
+# There is deliberately no zoning_dc_use entry: the seeded one was
+# Loudoun's use table, and leaving it here as a fallback let a
+# zoning-supplying county without its own row be decided by another
+# county's ordinance. A zoning layer now requires the jurisdiction's own
+# row — qualify_parcels refuses otherwise — so the borrowed-verdict path
+# is unreachable rather than merely discouraged.
 DEFAULT_RULE_PARAMS: Dict[str, Dict[str, Any]] = {
-    "zoning_dc_use": {
-        "by_right": ["PDGI", "PDIP", "GI", "IP", "MRHI"],
-        "special_exception": ["CLI", "PDRDP", "PDCH"],
-        "prohibited": ["A10", "A3", "AR1", "AR2", "CR1", "CR2", "CR3", "CR4", "RC",
-                        "R1", "R2", "R3", "R4", "R8", "R16", "R24", "SCN8", "SCN16",
-                        "SCN24", "PDH3", "PDH4", "PDH6", "PDAAAR", "PDRV", "PDCCRC",
-                        "PDSC", "C1", "GB", "CCCC", "CCNC", "CCSC", "OP", "PDOP",
-                        "TRC", "TC", "TR1LF", "TR1UBF", "TR2", "TR3LBR", "TR3LF",
-                        "TR3UBF", "TR10", "PUD-1", "JLMA1", "JLMA2", "JLMA3", "JLMA20"],
-        "unknown_jurisdiction": ["TOWNS"],
-    },
     "contiguous_acreage": {"min_pass_acres": 100, "min_conditional_acres": 25},
     "floodway": {"floodway_fail_pct": 0.5, "floodplain_conditional": True},
     "wetlands": {"conditional_pct": 5, "fail_pct": 30},
@@ -285,6 +280,26 @@ def qualify_parcels(
                 int(dupes.sum()), len(offenders), ", ".join(offenders[:5]))
             parcels_gdf = parcels_gdf[~dupes]
 
+    # A zoning layer with no zoning_dc_use rule row for this jurisdiction
+    # is a refusal, not a fallback. The built-in default is Loudoun's use
+    # table; a county whose district codes collide with it (an
+    # unhyphenated R4 or A3 where the ordinance writes R-4 / A-1) would
+    # get a confident verdict whose rationale cites one county's ordinance
+    # while the decision came from another's table. The verdict might even
+    # be right — the reasoning would be borrowed and unverified, which is
+    # the failure this engine exists to refuse. The fallback stays safe
+    # only for a county whose adapter returns zoning: None by construction,
+    # and that case never reaches this branch.
+    if zoning_gdf is not None and len(zoning_gdf) > 0 \
+            and "zoning_dc_use" not in rules:
+        raise ValueError(
+            f"A zoning layer was supplied for {county_name or 'this jurisdiction'} "
+            f"but no zoning_dc_use rule row exists for it. Refusing to "
+            f"qualify: the built-in default is another county's use table, "
+            f"and a jurisdiction must be decided by its own ordinance. "
+            f"Insert the zoning_dc_use row in constraint_rules for "
+            f"{county_name or 'the jurisdiction'} and re-run.")
+
     n = len(parcels_gdf)
     assumptions = assumptions or {}
     incentives_of = parcel_incentives or {}
@@ -372,7 +387,11 @@ def qualify_parcels(
     except Exception as e:  # noqa: BLE001
         logger.warning("Assembly adjacency join failed: %s", e)
 
-    dc_map = rules.get("zoning_dc_use", {}).get("params", DEFAULT_RULE_PARAMS["zoning_dc_use"])
+    # The refusal above guarantees the row exists whenever a zoning layer
+    # was supplied; absent zoning leaves dc_map unused, so an empty map
+    # is fine there — a county with no zoning layer needs no use table.
+    dc_map = (rules["zoning_dc_use"]["params"]
+              if zoning_gdf is not None and len(zoning_gdf) > 0 else {})
     acre_rule = rules.get("contiguous_acreage", {}).get("params", DEFAULT_RULE_PARAMS["contiguous_acreage"])
     flood_rule = rules.get("floodway", {}).get("params", DEFAULT_RULE_PARAMS["floodway"])
     wet_rule = rules.get("wetlands", {}).get("params", DEFAULT_RULE_PARAMS["wetlands"])
