@@ -27,6 +27,7 @@ from shapely.ops import unary_union
 
 import network_evidence
 import underwriting
+import water_evidence
 from assessment_evidence import assessment_of
 
 logging.basicConfig(level=logging.INFO)
@@ -496,30 +497,44 @@ def qualify_parcels(
             logger.warning("Legislative application overlay failed: %s", e)
 
     # ── Water availability (Release 3) ───────────────────────────────
-    # Loudoun Water's published service-area boundary: serving areas
-    # (ServiceType W/Both), the utility's explicit "NOT Served" polygon,
+    # The region's published service-area boundary (provider is config
+    # data — see water_evidence.WATER_PROVIDERS): serving areas
+    # (service_type W/Both), the utility's explicit not-served polygon,
     # and per-area records (comment may restrict new connections).
+    # Provider comes from the row where the layer encodes which utility
+    # operates that polygon (a joint district/city layer), so a
+    # Pataskala-operated parcel is never attributed to the district.
+    region_provider = (water_evidence.WATER_PROVIDERS
+                       .get(region_key or "", {}) or {}).get("utility_name")
     water_serving_ix = _OverlapIndex(None)
     water_not_served_ix = _OverlapIndex(None)
     water_layer_edited: Optional[str] = None
+    water_layer_edited_note: Optional[str] = None
     water_area_of: Dict[int, Dict[str, Any]] = {}
     ww_serving_ix = _OverlapIndex(None)
     ww_area_of: Dict[int, Dict[str, Any]] = {}
     if water_gdf is not None and len(water_gdf) > 0:
         serving = water_gdf[water_gdf["service_type"].isin(("W", "Both"))]
         ww_serving = water_gdf[water_gdf["service_type"].isin(("WW", "Both"))]
-        not_served = water_gdf[water_gdf["area_name"] == "NOT Served by LW"]
+        not_served = water_gdf[water_gdf["not_served"]]
         water_serving_ix = _OverlapIndex(serving.to_crs(PLANAR_CRS))
         ww_serving_ix = _OverlapIndex(ww_serving.to_crs(PLANAR_CRS))
         water_not_served_ix = _OverlapIndex(not_served.to_crs(PLANAR_CRS))
+        # The date must appear, one way or another: the service's edit
+        # timestamp, or the layer's recorded vintage honestly labelled —
+        # never a silent null where the rationale would read "edited None".
         water_layer_edited = max(
             (str(d) for d in water_gdf["last_edited"].dropna()), default=None
         )
+        notes = [str(n) for n in water_gdf.get(
+            "edited_note", pd.Series(dtype="object")).dropna()]
+        water_layer_edited_note = notes[0] if notes else None
         try:
             inter = gpd.overlay(
                 planar[["geometry"]].reset_index(names="pidx"),
                 serving.to_crs(PLANAR_CRS)[
-                    ["area_name", "service_type", "comment", "geometry"]],
+                    ["area_name", "service_type", "comment", "provider",
+                     "geometry"]],
                 how="intersection",
             )
             if len(inter) > 0:
@@ -531,7 +546,7 @@ def qualify_parcels(
             ww_inter = gpd.overlay(
                 planar[["geometry"]].reset_index(names="pidx"),
                 ww_serving.to_crs(PLANAR_CRS)[
-                    ["area_name", "service_type", "geometry"]],
+                    ["area_name", "service_type", "provider", "geometry"]],
                 how="intersection",
             )
             if len(ww_inter) > 0:
@@ -1020,13 +1035,18 @@ def qualify_parcels(
                 gate(pin, "road_access", "PASS",
                      f"{rmi:.2f} mi to the nearest primary/secondary road.")
 
-        # Water availability (observed boundary layer — Loudoun Water's
-        # own published service areas; towns run municipal systems that
-        # this layer does not cover, so town parcels stay UNKNOWN).
+        # Water availability (observed boundary layer — the region's own
+        # published service areas; towns and districts the layer does not
+        # cover stay UNKNOWN). Provider is row-level where the layer
+        # encodes the operator, and the boundary's date is stated one way
+        # or another — a service timestamp or the layer's recorded
+        # vintage, never silence.
         if water_gdf is None:
             gate(pin, "water_availability", "UNKNOWN",
-                 "Loudoun Water service-area boundary unavailable for this "
-                 "run — public water availability unverified.")
+                 (f"{region_provider} service-area boundary unavailable for "
+                  f"this run" if region_provider else
+                  "Water service-area boundary unavailable for this run")
+                 + " — public water availability unverified.")
         else:
             w_pct = water_serving_ix.fraction(planar.geometry.loc[i], area_m2)
             ns_pct = water_not_served_ix.fraction(planar.geometry.loc[i], area_m2)
@@ -1035,43 +1055,52 @@ def qualify_parcels(
                    evidence="derived", layer="water_service_areas")
             is_town = (zr is not None
                        and str(zr["zone"]) in dc_map.get("unknown_jurisdiction", []))
-            no_new_conn = bool(wa is not None and "not permitted" in str(wa["comment"]).lower())
+            no_new_conn = bool(wa is not None and wa["comment"] is not None
+                               and "not permitted" in str(wa["comment"]).lower())
+            wa_provider = str(wa["provider"]) if wa is not None else region_provider
+            dated_clause = (
+                f"boundary dated {water_layer_edited} — {water_layer_edited_note}"
+                if water_layer_edited_note else
+                f"utility boundary layer edited {water_layer_edited}")
             if w_pct >= float(water_rule.get("pass_overlap_pct", 50)) and wa is not None:
                 metric(pin, "water_service_provider", None,
-                       text_value=f"Loudoun Water — {wa['area_name']}",
+                       text_value=f"{wa['provider']} — {wa['area_name']}",
                        evidence="observed", layer="water_service_areas",
                        details={"service_type": str(wa["service_type"])})
                 if no_new_conn:
                     gate(pin, "water_availability", "CONDITIONAL",
-                         f"Inside Loudoun Water's published {wa['area_name']} "
+                         f"Inside {wa['provider']}'s published {wa['area_name']} "
                          f"service-area boundary, but the utility's record "
                          f"states: \"{wa['comment']}\" — connection "
-                         f"availability must be confirmed with Loudoun Water.",
+                         f"availability must be confirmed with {wa['provider']}.",
                          affected=w_pct,
                          details={
                              "area_name": str(wa["area_name"]),
                              "service_type": str(wa["service_type"]),
                              "comment": str(wa["comment"]),
+                             "provider": str(wa["provider"]),
                              "layer_edited": water_layer_edited,
                          })
                 else:
                     gate(pin, "water_availability", "PASS",
-                         f"Inside Loudoun Water's published {wa['area_name']} "
+                         f"Inside {wa['provider']}'s published {wa['area_name']} "
                          f"service area ({'water and wastewater' if str(wa['service_type']) == 'Both' else 'water'} "
-                         f"service; utility boundary layer edited "
-                         f"{water_layer_edited}). Public water service is "
+                         f"service; {dated_clause}). Public water service is "
                          f"available — capacity, pressure, and connection "
                          f"fees are diligence items.",
                          details={
                              "area_name": str(wa["area_name"]),
                              "service_type": str(wa["service_type"]),
-                             "provider": "Loudoun Water",
+                             "provider": str(wa["provider"]),
                              "layer_edited": water_layer_edited,
+                             "layer_edited_basis": (
+                                 "layer_vintage" if water_layer_edited_note
+                                 else "service_edit_timestamp"),
                          })
             elif w_pct >= float(water_rule.get("conditional_overlap_pct", 5)):
                 gate(pin, "water_availability", "CONDITIONAL",
-                     f"{w_pct:.1f}% of the parcel lies inside Loudoun Water's "
-                     f"published service area"
+                     f"{w_pct:.1f}% of the parcel lies inside "
+                     f"{wa_provider}'s published service area"
                      + (f" ({wa['area_name']})" if wa is not None else "")
                      + f" — the remainder requires a service extension.",
                      affected=100.0 - w_pct,
@@ -1082,14 +1111,14 @@ def qualify_parcels(
             elif is_town:
                 gate(pin, "water_availability", "UNKNOWN",
                      "Inside an incorporated town — the municipal water "
-                     "provider is not covered by Loudoun Water's boundary "
-                     "layer; provider and capacity unverified.",
+                     f"provider is not covered by {wa_provider or 'the published'}"
+                     " boundary layer; provider and capacity unverified.",
                      details={"layer_edited": water_layer_edited})
             elif ns_pct >= float(water_rule.get("pass_overlap_pct", 50)):
                 gate(pin, "water_availability", "FAIL",
-                     f"Explicitly outside Loudoun Water's published service "
-                     f"area per the utility's own boundary layer (edited "
-                     f"{water_layer_edited}) — no mapped public water "
+                     f"Explicitly outside {region_provider or 'the utility'}'s "
+                     f"published service area per the utility's own boundary "
+                     f"layer ({dated_clause}) — no mapped public water "
                      f"provider; on-site well supply would be required "
                      f"(diligence item).",
                      affected=ns_pct,
@@ -1097,21 +1126,21 @@ def qualify_parcels(
                               "layer_edited": water_layer_edited})
             else:
                 gate(pin, "water_availability", "UNKNOWN",
-                     f"Not covered by Loudoun Water's published service-area "
-                     f"boundary (served-area overlap {w_pct:.1f}%, not-served "
-                     f"overlap {ns_pct:.1f}%) — public water availability "
-                     f"unverified.",
+                     f"Not covered by {region_provider or 'the utility'}'s "
+                     f"published service-area boundary (served-area overlap "
+                     f"{w_pct:.1f}%, not-served overlap {ns_pct:.1f}%) — "
+                     f"public water availability unverified.",
                      details={"layer_edited": water_layer_edited})
 
             # Wastewater companion metrics (informational, same layer —
-            # ServiceType WW/Both areas; never a gate claim).
+            # service_type WW/Both areas; never a gate claim).
             ww_pct = ww_serving_ix.fraction(planar.geometry.loc[i], area_m2)
             metric(pin, "wastewater_service_area_pct", ww_pct, unit="percent",
                    evidence="derived", layer="water_service_areas")
             wwa = ww_area_of.get(i)
             if ww_pct >= float(water_rule.get("pass_overlap_pct", 50)) and wwa is not None:
                 metric(pin, "wastewater_service_provider", None,
-                       text_value=f"Loudoun Water — {wwa['area_name']}",
+                       text_value=f"{wwa['provider']} — {wwa['area_name']}",
                        evidence="observed", layer="water_service_areas",
                        details={"service_type": str(wwa["service_type"])})
 
@@ -1335,7 +1364,8 @@ def qualify_parcels(
             1 for i in water_area_of
             if water_serving_ix.fraction(planar.geometry.loc[i], float(parcel_area_m2.loc[i]))
             >= float(water_rule.get("pass_overlap_pct", 50))
-            and "not permitted" not in str(water_area_of[i]["comment"]).lower()
+            and not (water_area_of[i]["comment"] is not None
+                     and "not permitted" in str(water_area_of[i]["comment"]).lower())
         ),
         "parcels_water_not_served": sum(
             1 for i in planar.index

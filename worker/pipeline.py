@@ -680,18 +680,22 @@ def run_pipeline(
                 run.fetch_power_parcel_evidence() if run is not None else {}
             )
 
-            # Water availability (Release 3): Loudoun Water's published
-            # service-area boundary — serving areas, the explicit
-            # "NOT Served" polygon, and per-area connection records.
+            # Water availability (Release 3): the region's published
+            # service-area boundary (provider is config data — see
+            # water_evidence.WATER_PROVIDERS): serving areas, an explicit
+            # not-served polygon where the utility publishes one, and
+            # per-area connection records. A region with no provider
+            # configured stays UNKNOWN.
             import water_evidence
             water_gdf = water_evidence.fetch_water_service_areas(
-                min_lon, min_lat, max_lon, max_lat
+                region_key, min_lon, min_lat, max_lon, max_lat
             )
-            if run is not None:
+            water_spec = water_evidence.WATER_PROVIDERS.get(region_key)
+            if run is not None and water_spec is not None:
                 snapshots["water_service_areas"] = run.snapshot(
                     layer="water_service_areas",
-                    source_key="loudoun_water_service_area",
-                    endpoint_url=water_evidence.WATER_SERVICE_AREA_URL,
+                    source_key=water_spec["source_key"],
+                    endpoint_url=water_spec["layers"][0]["url"],
                     record_count=None if water_gdf is None else len(water_gdf),
                     evidence_class="observed",
                     quality=(None if water_gdf is None else {
@@ -702,8 +706,9 @@ def run_pipeline(
                     notes=(None if water_gdf is not None
                            else "unavailable — water gates recorded UNKNOWN"),
                 )
-            elif water_gdf is None:
-                logger.warning("Loudoun Water service areas unavailable — water gates will be UNKNOWN.")
+            elif water_gdf is None and water_spec is not None:
+                logger.warning("%s service areas unavailable — water gates "
+                               "will be UNKNOWN.", water_spec["utility_name"])
 
             # Commercial underwriting (Release 4b): the county assessment
             # roll — land and improvement value, the taxable base, the

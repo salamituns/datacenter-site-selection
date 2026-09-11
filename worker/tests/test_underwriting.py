@@ -292,3 +292,129 @@ class TestSitePrepProvenance:
 
         json.dumps(site_prep_cost(50.0, 2.0, SITE_PREP))
         json.dumps(rollback_tax_exposure(1_000_000.0, VA_ROLLBACK))
+
+
+# ── provider attribution (water) ──────────────────────────────────────
+
+class TestProviderAttribution:
+    """
+    Beside the statute test, for the same reason: a rationale that names
+    the wrong authority describes one jurisdiction using another's facts.
+    The water gate used to hard-code Loudoun Water, so wiring a second
+    utility would have given Ohio parcels a rationale reading "Inside
+    Loudoun Water's published service area" — the same class of error as
+    describing Virginia with Ohio's statute. Two regions, two utilities,
+    and neither output naming the other's.
+    """
+
+    @staticmethod
+    def _layer(rows):
+        """A normalized water layer (the water_evidence contract)."""
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from parcel_gates import M2_PER_ACRE, PLANAR_CRS
+
+        geoms, attrs = [], []
+        for slot, r in enumerate(rows):
+            side = (150.0 * M2_PER_ACRE) ** 0.5
+            minx = slot * 4_000.0
+            geoms.append(box(minx, 0, minx + side + 40, side + 40))
+            attrs.append(r)
+        gdf = gpd.GeoDataFrame(attrs, geometry=geoms, crs=PLANAR_CRS)
+        return gdf.to_crs("EPSG:4326")
+
+    @staticmethod
+    def _parcels(n):
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from parcel_gates import M2_PER_ACRE, PLANAR_CRS
+
+        side = (150.0 * M2_PER_ACRE) ** 0.5
+        return gpd.GeoDataFrame(
+            {"pin": [f"P{i}" for i in range(n)],
+             "legal_acreage": [150.0] * n,
+             "geometry": [box(i * 4_000.0 + 20, 20,
+                              i * 4_000.0 + side, side) for i in range(n)]},
+            crs=PLANAR_CRS,
+        ).to_crs("EPSG:4326")
+
+    def _run(self, region_key, county, layer, n_parcels):
+        from parcel_gates import qualify_parcels
+
+        _, metrics, gates, _ = qualify_parcels(
+            parcels_gdf=self._parcels(n_parcels), zoning_gdf=None,
+            wetlands_gdf=None, nfhl_gdf=None, lines_gdf=None, subs_gdf=None,
+            water_gdf=layer, region_key=region_key,
+            rules={}, state_code=region_key.split("-")[0], county_name=county,
+            snapshots={}, retrieve_time="2026-09-11T00:00:00+00:00",
+        )
+        self._last_gates = gates
+        texts = [g["rationale"] for g in gates
+                 if g["gate_key"] == "water_availability"]
+        texts += [m["text_value"] for m in metrics
+                  if m["metric_key"] in ("water_service_provider",
+                                         "wastewater_service_provider")]
+        return texts
+
+    def test_loudoun_outputs_never_name_the_licking_utility(self):
+        layer = self._layer([
+            {"area_name": "Central System", "service_type": "Both",
+             "comment": None, "provider": "Loudoun Water",
+             "last_edited": "2025-11-02", "edited_basis": "service_edit_timestamp",
+             "edited_note": None, "not_served": False},
+            {"area_name": "NOT Served by LW", "service_type": "W",
+             "comment": None, "provider": "Loudoun Water",
+             "last_edited": "2025-11-02", "edited_basis": "service_edit_timestamp",
+             "edited_note": None, "not_served": True},
+        ])
+        texts = self._run("VA-LOUDOUN", "Loudoun", layer, 2)
+        assert any("Loudoun Water" in t for t in texts)
+        assert not any(("Licking" in t) or ("SWLCWSD" in t)
+                       or ("Pataskala" in t) for t in texts), texts
+
+    def test_licking_outputs_never_name_loudoun_water(self):
+        layer = self._layer([
+            # Row-level provider: the district's own polygon.
+            {"area_name": "SWLCWSD", "service_type": "W",
+             "comment": None, "provider": "Licking Regional Water District (formerly SWLCWSD)",
+             "last_edited": "2021-06", "edited_basis": "layer_vintage",
+             "edited_note": "the layer's own name (Water_Service_2021, "
+                            "June 2021); the service exposes no edit timestamp",
+             "not_served": False},
+            # Row-level provider: the city's polygon — never attributed to
+            # the district just because the district publishes the layer.
+            {"area_name": "Pataskala Utility Department", "service_type": "W",
+             "comment": None, "provider": "Pataskala Utility Department",
+             "last_edited": "2021-06", "edited_basis": "layer_vintage",
+             "edited_note": "the layer's own name (Water_Service_2021, "
+                            "June 2021); the service exposes no edit timestamp",
+             "not_served": False},
+        ])
+        texts = self._run("OH-LICKING", "Licking", layer, 2)
+        assert not any("Loudoun" in t for t in texts), texts
+        # The row-level provider appears, and the two parcels carry
+        # different utilities from the same layer.
+        assert any("Licking Regional Water District" in t for t in texts)
+        assert any("Pataskala Utility Department" in t for t in texts)
+        # The vintage is stated, never "edited None": the dated clause
+        # must carry the layer's own explanation.
+        assert any("boundary dated 2021-06" in t for t in texts)
+        assert not any("edited None" in t for t in texts), texts
+
+    def test_an_absent_comment_is_none_not_an_empty_string(self):
+        # The no-new-connections branch reads that text; "" would read as
+        # a utility that said nothing only by accident. A None comment
+        # must not trigger the CONDITIONAL branch or render in the text.
+        layer = self._layer([
+            {"area_name": "SWLCWSD", "service_type": "W",
+             "comment": None, "provider": "Licking Regional Water District (formerly SWLCWSD)",
+             "last_edited": "2021-06", "edited_basis": "layer_vintage",
+             "edited_note": "vintage from the layer name", "not_served": False},
+        ])
+        texts = self._run("OH-LICKING", "Licking", layer, 1)
+        gate_rows = self._last_gates
+        wg = [g for g in gate_rows if g["gate_key"] == "water_availability"]
+        assert wg and all(g["status"] == "PASS" for g in wg), wg
+        assert not any('states: ""' in t or 'states: "None"' in t for t in texts), texts
