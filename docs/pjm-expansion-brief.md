@@ -536,3 +536,65 @@ from land_parcels group by 1 order by 1;
 -- expect VA-LOUDOUN 2478 unchanged, VA-PRINCEWILLIAM > 0,
 -- OH-FRANKLIN 982, OH-LICKING 1990, TX-TAYLOR 3240
 ```
+
+## Outcome — Prince William launched 2026-09-11
+
+Published as run `cd6e66bd-9be4-4d78-b600-bb0416927f0f`: 961 active parcels,
+272 screening cells, 8,649 gate rows, evidence coverage **0.936**. Every
+sibling survived exactly as the acceptance table expects — Loudoun 2478
+unchanged, Franklin 982, Licking 1990, Taylor 3240.
+
+**The zoning rule held.** District verdicts match the section-by-section
+ordinance reading to the parcel: 24 M-1 (DCOZ) and 27 other overlay-tagged
+districts PASS by right (51 total by-right, as measured beforehand), the
+plain M-1 (6), M-2 (10) and their office/B-1/MXD-U kin read CONDITIONAL
+(special exception, 36 total), A-1 FAILs 537, and the deliberately
+unmapped codes stayed UNKNOWN rather than guessed — PMD 11 (land-bay
+designations the layer does not carry), the C-variants and FED/CTY
+placeholders 67, TWN 6 (towns administer their own ordinances). The
+rationale cites the county's own ordinance and says "in this district";
+no verdict borrowed Loudoun's use table, whose fallback this release also
+refused.
+
+**The honest UNKNOWNs are the rest of the coverage gap.** 487 parcels sit
+outside the published water boundary (Prince William Water + Virginia
+American comprehensive-plan layers, dated 2017-10, disclosed in every
+rationale) — no NOT-served polygon exists, so absence is never
+non-service. There is no bulk assessment roll to publish, so value
+metrics and the rollback record UNKNOWN by design; the FY2027 $0.865 rate
+row exists but cannot fire until deferral values are ever sourced.
+
+**Licking republished at 0.899** (from 0.881) in the same release: the
+LRWD joint boundary now decides 307 PASS + 3 CONDITIONAL water verdicts,
+attributed row-level with the 2021-06 vintage stated.
+
+### Two incidents the launch surfaced
+
+1. **`runs.py` class split.** `load_rules_readonly` and `_rows_to_rules`
+   had been inserted as module-level functions into the middle of the
+   `IngestionRun` class body. Python parses that happily (the class's
+   trailing methods become nested locals of the module function), and the
+   suite stayed green because nothing tested the class surface. The first
+   publish to run since (the Licking republish) failed at Step 6c before
+   staging anything — atomic promotion meant no partial data reached the
+   published tables. Fixed by moving the helpers below the class, plus
+   `tests/test_runs_layout.py` pinning the class surface, the helpers'
+   module level, and contiguity of the class body.
+2. **One NFHL feature can sink a county.** FEMA's service 500s
+   deterministically on any GeoJSON query returning one Prince William
+   flood-hazard feature with pathological coordinate precision — at any
+   paging depth, with or without outSR, in both formats (an Ohio control
+   query with identical parameters returns 200). The tiler subdivides on
+   failure, but no subdivision can exclude a feature that lies inside it,
+   so at max depth the whole layer conceded UNKNOWN and the floodway gate
+   went dark county-wide. `geometryPrecision=6` (~0.1 m; it rounds the
+   serialized output, not the source geometries) returns 200 on the same
+   query; it is now pinned onto every page of the NFHL fetch by
+   `tests/test_nfhl_query.py`.
+
+Also worth recording: sciencebase.gov (PAD-US manifest) had a full outage
+on launch day and recovered; the NWI REST service stayed down and the
+official state-geodatabase fallback carried the wetlands gate (21,702
+polygons) — the fallback exists for exactly this, and the first download
+attempt died at 84 MB before a retry completed it.
+
