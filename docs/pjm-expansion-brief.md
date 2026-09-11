@@ -347,3 +347,48 @@ Report the number before writing the adapter. The same probe should check
 whether any Licking township or the Southwest Licking Community Water and
 Sewer District publishes a county-scale boundary — a county-scale source
 would supersede this question entirely.
+
+### The measurement, taken 2026-09-10
+
+Both questions answered. Overlaps computed exactly as the gate does —
+≥50% of parcel area inside a serving polygon, EPSG:3735, against the
+1,990 published OH-LICKING parcels.
+
+| source | polygons | parcels decided (≥50%) | any overlap |
+| --- | --- | --- | --- |
+| Pataskala city, `Utility_Layers_Public` layer 18 | 7 | **31** | 59 |
+| **LRWD joint, `Water_Service_2021_view`** | 19 | **308** | 311 |
+
+The county-scale source exists. The Southwest Licking district — renamed
+**Licking Regional Water District** in 2024 — publishes
+`Water_Service_2021_view` on its own ArcGIS org
+(`services3.arcgis.com/iHpkStKZmEoDkIuv`): a joint water service-area
+boundary for *SWLCWSD and the Pataskala Utility Department together*,
+dated June 2021, with a companion `Waste_Water_Service_2021` sewer layer.
+It is the only service-area boundary in the org's 17 items — the
+district's live water and wastewater web maps carry mains, hydrants,
+plants and tanks but no boundary — so 2021 vintage is what exists. Its
+`Name` field carries `SWLCWSD` / `Pataskala Utility Department` /
+`Joint`, which maps to `area_name`; `service_type` is a constant `W` from
+config and `comment` is genuinely absent, so requirement 3 (None, never
+"") is exercised for real on this source.
+
+Reading the numbers against the gate above:
+
+- Pataskala alone lands in the **fold-into-Prince-William** bucket, and
+  is subsumed anyway: the joint layer already contains the city, so if
+  Licking gets a water source it should be the joint layer, not layer 18.
+- The joint layer decides **308 parcels** — 77% of the ~400 threshold,
+  from a district+city boundary rather than a city one. It does not
+  un-gate the refactor: the rationales still hard-code Loudoun Water,
+  `water_evidence.py` still carries a single URL, and the column
+  contract still needs the `area_name` / `service_type` / `comment`
+  normalisation. But it changes the payoff of the Prince William PR from
+  "one county plus a fraction of another" to "one county plus 308 Licking
+  parcels decided by one config entry" — enough that Licking's water
+  config belongs in that same PR, not queued behind it.
+- Coverage would move 0.881 → ~0.898; the corridor's north and east
+  townships stay UNKNOWN (the 2021 boundary covers the Etna/Pataskala/
+  West-Licking quadrant only). The staleness is a disclosure item for
+  the rationale, not a blocker: the boundary is the utility's own most
+  recent published statement of what it serves.
