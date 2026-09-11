@@ -197,12 +197,12 @@ GET → 200 `[]`, anon `/rpc/decision_author` → `null`). A `SET ROLE` test
 cannot see this — `session_user` stays `postgres` — so the suite pins the
 grant and the comment records the probe.
 
-Outstanding, outside the repo: the Supabase dashboard still has Site URL
-`http://localhost:3000`. Production magic links will redirect wrong until it
-is set to `https://grid.salamituns.com` (Auth → URL Configuration, plus the
-redirect allowlist). The built-in emailer also rate-limits at roughly two
-sends an hour, which is fine for a first user and worth replacing with real
-SMTP if the team grows.
+Outstanding, outside the repo (Site URL resolved 2026-09-11: the
+dashboard was still `http://localhost:3000` at ship time, so production
+magic links redirected wrong until it was set to
+`https://grid.salamituns.com` with the redirect allowlist). The built-in
+emailer also rate-limits at roughly two sends an hour, which is fine for
+a first user and worth replacing with real SMTP if the team grows.
 
 ---
 
@@ -314,6 +314,6 @@ a temporary preview route with an intercepted decisions fetch (the
 built-in emailer's rate limit still blocks a genuine local sign-in,
 and Supabase's hosted auth refuses password login for users inserted
 directly into `auth.users`). The preview route was deleted before the
-commit. The outstanding ops items from release13 stand: the Site URL
-is still `http://localhost:3000` in the Supabase dashboard, and the
-emailer remains rate-limited.
+commit. One ops item from release13 remains: the built-in emailer's
+rate limit (the Site URL was set to `https://grid.salamituns.com` on
+2026-09-11, so production magic links now redirect correctly).
