@@ -266,6 +266,46 @@ function mapLandParcelRows(data: any[]): LandParcel[] {
  * its verdict and rationale, and every metric with evidence class and
  * source lineage.
  */
+/**
+ * Shortlisted parcels by key, across every region.
+ *
+ * The shortlist used to be resolved by filtering the currently loaded
+ * region's parcels, which quietly capped comparison at one county: a
+ * Loudoun site vanished from the table the moment the selector moved to
+ * Prince William, and came back on the way out. With one diligenced county
+ * that was invisible. With five, across two states and two interconnections,
+ * comparing Loudoun against Prince William is the decision the engine exists
+ * to inform, so resolution cannot be scoped to whatever region is on screen.
+ *
+ * Keys carry their own region, so no region argument is needed or wanted.
+ */
+export async function fetchLandParcelsByKeys(
+  keys: string[]
+): Promise<LandParcel[] | null> {
+  if (!supabase || keys.length === 0) return keys.length === 0 ? [] : null;
+  try {
+    const PAGE = 200; // keep the `in` list well inside URL length limits
+    const rows: any[] = [];
+    for (let i = 0; i < keys.length; i += PAGE) {
+      const { data, error } = await supabase
+        .from("v_land_parcels_map")
+        .select(
+          "parcel_key,pin,state_code,county_name,lon,lat,gis_acreage,legal_acreage,overall_status,geojson_geom"
+        )
+        .in("parcel_key", keys.slice(i, i + PAGE));
+      if (error) {
+        console.error("Failed to fetch shortlisted parcels:", error);
+        return rows.length > 0 ? mapLandParcelRows(rows) : null;
+      }
+      if (data) rows.push(...data);
+    }
+    return mapLandParcelRows(rows);
+  } catch (err) {
+    console.error("Failed to fetch shortlisted parcels:", err);
+    return null;
+  }
+}
+
 export async function fetchParcelQualification(
   parcelKey: string
 ): Promise<ParcelQualification | null> {  if (!supabase) return null;

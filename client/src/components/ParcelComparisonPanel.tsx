@@ -103,7 +103,6 @@ export const ParcelComparisonPanel: React.FC<Props> = ({
   parcels, onRemove, onClear, onClose,
 }) => {
   const [rows, setRows] = useState<ParcelComparison[]>([]);
-  const [programs, setPrograms] = useState<JurisdictionProgram[]>([]);
   const [axis, setAxis] = useState<Axis>("cost");
   const [loading, setLoading] = useState(false);
 
@@ -120,13 +119,38 @@ export const ParcelComparisonPanel: React.FC<Props> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keys]);
 
+  /**
+   * Programs are fetched per jurisdiction present in the shortlist, not for
+   * whichever parcel happens to be first.
+   *
+   * This block used to read `parcels[0].state_code` and title itself "same
+   * for every site here" — true only because the shortlist could not span
+   * regions. Now that it can, taking the first parcel's state would show
+   * Virginia's statutory programs above an Ohio site and assert they apply
+   * to it, which is the same misattribution the cost assumptions are scoped
+   * by jurisdiction to prevent.
+   */
+  const stateCodes = useMemo(
+    () => Array.from(new Set(parcels.map((p) => p.state_code))).sort(),
+    [parcels.map((p) => p.state_code).join(",")]
+  );
+  const [programsByState, setProgramsByState] =
+    useState<Record<string, JurisdictionProgram[]>>({});
   useEffect(() => {
-    const code = parcels[0]?.state_code;
-    if (!code) return;
+    if (stateCodes.length === 0) return;
     let alive = true;
-    fetchJurisdictionPrograms(code).then((p) => { if (alive) setPrograms(p); });
+    Promise.all(
+      stateCodes.map((code) =>
+        fetchJurisdictionPrograms(code).then((p) => [code, p] as const)
+      )
+    ).then((pairs) => {
+      if (alive) setProgramsByState(Object.fromEntries(pairs));
+    });
     return () => { alive = false; };
-  }, [parcels[0]?.state_code]);
+  }, [stateCodes.join(",")]);
+
+  /** True when the table is comparing sites under more than one statute. */
+  const mixedJurisdictions = stateCodes.length > 1;
 
   /* Site-prep is carried as a low/high pair with no midpoint, because the
      unit cost behind it is a placeholder rather than a published schedule.
@@ -147,9 +171,23 @@ export const ParcelComparisonPanel: React.FC<Props> = ({
   }), [rows]);
 
   const exportCsv = () => {
-    const head = ["field", ...rows.map((r) => r.parcel.pin)];
+    /* RFC 4180 quoting. Every field goes through it rather than only the
+       ones that look risky today: the column header now carries a county
+       ("(Loudoun, VA)"), and an unquoted comma there would shift every
+       value in the row one column left — a silently wrong spreadsheet
+       rather than a broken one. */
+    const csv = (v: string | number | null): string => {
+      if (v == null) return "";
+      const s = String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    // A PIN is unique only within its assessor's county, so the export
+    // qualifies it — a CSV outlives the screen that explained it.
+    const head = ["field", ...rows.map((r) =>
+      r.parcel.county_name ? `${r.parcel.pin} (${r.parcel.county_name}, ${r.parcel.state_code})`
+                           : r.parcel.pin)];
     const line = (label: string, vals: (string | number | null)[]) =>
-      [label, ...vals.map((v) => (v == null ? "" : String(v)))].join(",");
+      [label, ...vals].map(csv).join(",");
     const body = [
       line("verdict", rows.map((r) => r.parcel.overall_status ?? "")),
       line("gis_acres", rows.map((r) => r.parcel.gis_acreage ?? "")),
@@ -164,7 +202,7 @@ export const ParcelComparisonPanel: React.FC<Props> = ({
       line("unknown_gates", rows.map((r) => r.evidence.unknownGates)),
       line("estimated_metrics", rows.map((r) => r.evidence.estimated)),
     ];
-    const blob = new Blob([[head.join(","), ...body].join("\n")], { type: "text/csv" });
+    const blob = new Blob([[head.map(csv).join(","), ...body].join("\n")], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url; a.download = "shortlist-comparison.csv"; a.click();
@@ -253,11 +291,21 @@ export const ParcelComparisonPanel: React.FC<Props> = ({
                           {c.parcel.pin}
                         </span>
                         <button onClick={() => onRemove(c.parcel.parcel_key)}
-                          aria-label={`Remove ${c.parcel.pin}`}
+                          aria-label={`Remove ${c.parcel.pin}${
+                            c.parcel.county_name ? ` in ${c.parcel.county_name} County` : ""
+                          }`}
                           className="text-muted transition-colors hover:text-danger">
                           <X className="h-3 w-3" />
                         </button>
                       </div>
+                      {/* A PIN is only unique within its assessor's county, so
+                          once the table spans counties the identifier alone
+                          does not say which site a column is. */}
+                      {mixedJurisdictions && (
+                        <div className="mt-0.5 font-mono text-[8.5px] font-normal uppercase tracking-[0.14em] text-muted">
+                          {c.parcel.county_name ?? "Unsurveyed"}, {c.parcel.state_code}
+                        </div>
+                      )}
                       {c.parcel.overall_status && (
                         <span className={`mt-1 inline-block border px-1.5 py-px font-mono text-[8.5px] font-semibold uppercase tracking-[0.14em] ${VERDICT_INK[c.parcel.overall_status]}`}>
                           {c.parcel.overall_status}
@@ -517,12 +565,23 @@ export const ParcelComparisonPanel: React.FC<Props> = ({
               </tbody>
             </table>
 
-            {/* Jurisdiction programs — identical across these sites, so shown
-                once beneath the table rather than repeated per column. */}
-            {programs.length > 0 && (
-              <div className="mt-6 border-t border-border pt-4">
+            {/* Jurisdiction programs. Grouped by statute rather than shown
+                once, because a shortlist may now span states — and a
+                program listed above a site it does not govern is worse than
+                no program at all. */}
+            {stateCodes.map((code) => {
+              const programs = programsByState[code] ?? [];
+              if (programs.length === 0) return null;
+              const sites = parcels.filter((p) => p.state_code === code);
+              return (
+              <div key={code} className="mt-6 border-t border-border pt-4">
                 <h4 className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
-                  Statutory programs · {parcels[0]?.state_code} · same for every site here
+                  Statutory programs · {code} ·{" "}
+                  {mixedJurisdictions
+                    ? `applies to ${sites.length} of ${parcels.length} ${
+                        parcels.length === 1 ? "site" : "sites"
+                      } here`
+                    : "same for every site here"}
                 </h4>
                 <div className="mt-3 space-y-2.5">
                   {programs.map((p) => (
@@ -555,7 +614,8 @@ export const ParcelComparisonPanel: React.FC<Props> = ({
                   ))}
                 </div>
               </div>
-            )}
+              );
+            })}
 
             <p className="mt-5 max-w-prose border-t border-border pt-3 font-sans text-[11.5px] leading-[1.55] text-muted">
               A dash means the source recorded no value — never zero. Estimated

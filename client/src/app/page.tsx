@@ -16,6 +16,7 @@ import { INITIAL_PARCELS } from "@/components/mockData";
 import {
   fetchGridParcels,
   fetchLandParcels,
+  fetchLandParcelsByKeys,
   fetchMapFeatures,
   fetchParcelQualification,
   fetchRegionCounts,
@@ -145,11 +146,32 @@ export default function DashboardPage() {
       return value;
     });
 
+  /**
+   * Shortlisted parcels are fetched by key rather than filtered out of the
+   * region currently on screen. Filtering capped comparison at one county:
+   * a Loudoun site disappeared from the table the moment the selector moved
+   * to Prince William and reappeared on the way back. Comparing across
+   * counties is the decision this engine exists to inform, so the shortlist
+   * cannot be scoped to whichever region happens to be loaded.
+   *
+   * The stored order is the user's, so the fetched rows are re-sorted into
+   * it rather than returned in whatever order the database chose.
+   */
+  const [shortlistParcels, setShortlistParcels] = useState<LandParcel[]>([]);
+  useEffect(() => {
+    if (shortlistKeys.length === 0) { setShortlistParcels([]); return; }
+    let alive = true;
+    fetchLandParcelsByKeys(shortlistKeys)
+      .then((p) => { if (alive) setShortlistParcels(p ?? []); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [shortlistKeys]);
+
   const shortlisted = useMemo(
     () => shortlistKeys
-      .map((k) => landParcels.find((p) => p.parcel_key === k))
+      .map((k) => shortlistParcels.find((p) => p.parcel_key === k))
       .filter((p): p is LandParcel => p !== undefined),
-    [shortlistKeys, landParcels]
+    [shortlistKeys, shortlistParcels]
   );
 
   const toggleShortlist = (key: string) =>
