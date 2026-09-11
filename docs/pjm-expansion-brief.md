@@ -392,3 +392,38 @@ Reading the numbers against the gate above:
   West-Licking quadrant only). The staleness is a disclosure item for
   the rationale, not a blocker: the boundary is the utility's own most
   recent published statement of what it serves.
+
+### Decision (measured)
+
+Licking's water entry ships **in** the Prince William refactor PR, not behind
+it. One seam decides a Virginia county plus 308 Licking parcels; splitting
+them writes the same code twice. Coverage 0.881 → 0.899, verified:
+1,990 x 9 = 17,910 gates, unknowns 2,126 → 1,818.
+
+Use the LRWD joint boundary, not the Pataskala city layer — the joint layer
+contains the city and decides 308 parcels against 31.
+
+Two refinements to the requirements above, both found in the measured data:
+
+**1a. Provider is row-level data here, not just region-level.** Requirement 1
+assumed the region names one utility, which is true for Loudoun (provider
+fixed, `area_name` a sub-zone) and false for this layer. The LRWD layer's only
+attribute is `Name`, holding `SWLCWSD` / `Pataskala Utility Department` /
+`Joint` — that is *which utility operates that polygon*, not a zone label.
+Mapping `Name` → `area_name` while setting provider to the district would
+attribute Pataskala-operated parcels to LRWD. Provider resolves from the row
+where the layer encodes it, and falls back to the region's configured utility
+where it does not.
+
+**1b. `layer_edited` must never be silently null.** The rationale cites
+"utility boundary layer edited {date}", and the vintage is this source's main
+caveat, so the date has to appear. If the service exposes no edit timestamp,
+record the 2021 vintage from the layer's own name as an explicit dated fact
+rather than leaving the clause blank or reading "edited None".
+
+**The vintage is a weaker caveat than it looks, in one direction only.**
+Service areas expand rather than contract in a growth corridor, so a parcel
+inside the 2021 boundary is almost certainly still served — `PASS` is safe —
+while a parcel outside may have been annexed since, which is why `UNKNOWN`
+rather than `FAIL` is the correct answer there. The existing gate already
+produces exactly this asymmetry; do not tune it away.
