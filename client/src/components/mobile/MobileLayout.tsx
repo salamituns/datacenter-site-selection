@@ -6,6 +6,7 @@ import { GridParcel, LayerVisibility, WeightFactors } from "@/types/parcel";
 import { ConstraintSliders } from "@/components/ConstraintSliders";
 import { BenchmarkMark } from "@/components/Header";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { AuthControl } from "@/components/AuthControl";
 import { REGIONS, HOME_REGION } from "@/lib/regions";
 import { LayerChips } from "./LayerChips";
 import { ParcelCards } from "./ParcelCards";
@@ -209,6 +210,9 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
           <RefreshCw className={`h-4 w-4 ${isSyncing ? "animate-spin" : ""}`} />
         </button>
         <ThemeToggle className="h-10 w-10 rounded-[3px] bg-surface/95 shadow-plate backdrop-blur" />
+        {/* Sign-in lives beside the toggle, as on desktop: quiet, and
+            the only place an account appears anywhere on the map. */}
+        <AuthControl compact />
         </div>
       </div>
 

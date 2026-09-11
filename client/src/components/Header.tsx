@@ -1,6 +1,7 @@
 import React from "react";
 import { RefreshCw, ChevronDown } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
+import { AuthControl } from "./AuthControl";
 import { REGIONS, HOME_REGION } from "@/lib/regions";
 
 interface HeaderProps {
@@ -117,6 +118,10 @@ export const Header: React.FC<HeaderProps> = ({
         </button>
 
         <ThemeToggle />
+
+        {/* Sign-in exists for one thing: attributing decisions. Every
+            read surface stays anonymous, so the control stays quiet. */}
+        <AuthControl />
       </div>
     </header>
   );

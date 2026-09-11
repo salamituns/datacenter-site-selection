@@ -283,3 +283,41 @@ export interface ParcelComparison {
   qualification: ParcelQualification | null;
   evidence: EvidenceProfile;
 }
+
+// ── Parcel decisions (Release 5) ──────────────────────────────────────
+
+/** What a person concluded. An override is not a fourth verdict on the
+ *  evidence — it is a human accepting a FAIL or UNKNOWN gate with their
+ *  eyes open, recorded beside the gate, never instead of it. */
+export type DecisionKind = "approve" | "reject" | "hold" | "override";
+
+/** A gate whose status differs between the run a decision was made
+ *  against and the parcel's current run. `was`/`now` is null when the
+ *  gate only exists on one side (added or removed by a republish). */
+export interface MovedGate {
+  gate_key: string;
+  was: GateStatus | null;
+  now: GateStatus | null;
+}
+
+/** One decision row, as served by v_parcel_decisions. The view carries
+ *  the current fingerprint beside the stored one, so the client never
+ *  recomputes a hash: `is_stale` is the view's comparison, and
+ *  `gates_moved` names what changed. A stale decision is never voided
+ *  and never silently refreshed — both would destroy the record. */
+export interface ParcelDecision {
+  id: string;
+  parcel_key: string;
+  decision: DecisionKind;
+  rationale: string;
+  decided_by: string;
+  decided_by_email: string | null;
+  decided_at: string;
+  run_id: string;
+  override_gate: string | null;
+  override_status: GateStatus | null;
+  superseded_by: string | null;
+  is_current: boolean;
+  is_stale: boolean;
+  gates_moved: MovedGate[] | null;
+}

@@ -6,9 +6,12 @@ import {
   JurisdictionProgram,
   LandParcel,
   ParcelComparison,
+  ParcelDecision,
   ParcelMetricRow,
 } from "@/types/parcel";
 import { fetchJurisdictionPrograms, fetchParcelComparison } from "@/lib/supabase";
+import { DECISION_LABELS, fetchParcelDecisions } from "@/lib/decisions";
+import { useSession } from "@/lib/auth";
 import { X, Trash2, Download } from "lucide-react";
 
 interface Props {
@@ -108,6 +111,27 @@ export const ParcelComparisonPanel: React.FC<Props> = ({
 
   const keys = parcels.map((p) => p.parcel_key).join(",");
 
+  // Decision state per parcel — what the team concluded, attributed. Anon
+  // quietly gets none (RLS denies by returning zero rows), so the table is
+  // identical for a signed-out reader apart from this row's dashes.
+  const session = useSession();
+  const [decisionsByKey, setDecisionsByKey] = useState<Record<string, ParcelDecision[]>>({});
+  useEffect(() => {
+    if (parcels.length === 0) { setDecisionsByKey({}); return; }
+    let alive = true;
+    fetchParcelDecisions(parcels.map((p) => p.parcel_key)).then((byKey) => {
+      if (alive) setDecisionsByKey(byKey);
+    });
+    return () => { alive = false; };
+    // Re-run when the session changes: a sign-in mid-comparison should
+    // populate the row without reopening the panel.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keys, session.ready, session.userId]);
+
+  /** The standing decisions on one parcel, newest first. */
+  const standingOn = (key: string): ParcelDecision[] =>
+    (decisionsByKey[key] ?? []).filter((d) => d.is_current);
+
   useEffect(() => {
     if (parcels.length === 0) { setRows([]); return; }
     let alive = true;
@@ -190,6 +214,12 @@ export const ParcelComparisonPanel: React.FC<Props> = ({
       [label, ...vals].map(csv).join(",");
     const body = [
       line("verdict", rows.map((r) => r.parcel.overall_status ?? "")),
+      line("team_decision", rows.map((r) =>
+        standingOn(r.parcel.parcel_key)
+          .map((d) =>
+            `${DECISION_LABELS[d.decision]}${d.is_stale ? " (stale)" : ""}` +
+            ` by ${d.decided_by_email ?? "team member"}`)
+          .join("; "))),
       line("gis_acres", rows.map((r) => r.parcel.gis_acreage ?? "")),
       line("assessed_land_value_usd", rows.map((r) => num(r, "assessed_land_value_usd"))),
       line("land_use_rollback_tax_usd", rows.map((r) => num(r, "land_use_rollback_tax_usd"))),
@@ -517,6 +547,46 @@ export const ParcelComparisonPanel: React.FC<Props> = ({
                           {c.evidence.unknownGates}
                         </Cell>
                       ))}
+                    </Row>
+                    {/* Decision state is context, not evidence: it never
+                        feeds a score or a coverage figure, and a stale
+                        decision says so rather than hiding. Mixed
+                        authorship renders as what it is — several people,
+                        several calls, each attributed. */}
+                    <Row label="Team decision" note="Recorded against the evidence as it stood. Flagged when a republish has moved a gate since.">
+                      {rows.map((c) => {
+                        const standing = standingOn(c.parcel.parcel_key);
+                        if (standing.length === 0) {
+                          return (
+                            <td key={c.parcel.parcel_key} className="py-2.5 pr-5 text-right font-mono text-[11.5px] text-muted">
+                              —
+                            </td>
+                          );
+                        }
+                        return (
+                          <td key={c.parcel.parcel_key} className="py-2.5 pr-5 text-right font-mono text-[11px] leading-snug">
+                            {standing.map((d, i) => (
+                              <span key={d.id} className="block">
+                                <span className={d.is_stale ? "text-warning dark:text-warning-night" : "text-foreground"}>
+                                  {DECISION_LABELS[d.decision]}
+                                  {d.decision === "override" && d.override_status
+                                    ? ` ${d.override_status}`
+                                    : ""}
+                                </span>
+                                {d.is_stale && (
+                                  <span className="text-warning dark:text-warning-night" title="Evidence changed since this decision — open the dossier to see which gates moved">
+                                    {" "}· stale
+                                  </span>
+                                )}
+                                <span className="block text-[9.5px] text-muted">
+                                  {d.decided_by_email ?? "team member"}
+                                  {i < standing.length - 1 ? "" : ""}
+                                </span>
+                              </span>
+                            ))}
+                          </td>
+                        );
+                      })}
                     </Row>
                   </>
                 )}

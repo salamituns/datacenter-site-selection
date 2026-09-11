@@ -173,3 +173,33 @@ Worker suite has no reach here, so these are client and SQL:
 Phase 0 is the only one that changes the product's posture — from a public
 read-only dashboard to one with accounts. Worth a deliberate decision before
 it starts.
+
+---
+
+## Shipped (2026-09-11)
+
+All five phases, released as `release13_parcel_decisions`. Authorship,
+fingerprint and supersede are computed server-side in one
+`SECURITY DEFINER` function (`record_parcel_decision`); there is no INSERT
+policy on the table at all, and the append-only trigger makes even the
+owner's in-place edit or delete raise. Both SQL suites
+(`rls_tests.sql` §5, `decision_tests.sql`) pass against the live database.
+
+One finding worth keeping: `v_parcel_decisions` is `security_invoker` and
+references `decision_author`, and Postgres checks EXECUTE on view functions
+at planning time — before RLS returns the anon its empty set. With EXECUTE
+granted to authenticated only, every anonymous dossier open took a 42501
+instead of the quiet nothing the map promises. The fix grants EXECUTE to
+anon and puts the protection inside the function: the email is returned only
+when the request carries a JWT or the session is a non-API role, so a real
+anon call gets `null` for every uid (verified against PostgREST: anon view
+GET → 200 `[]`, anon `/rpc/decision_author` → `null`). A `SET ROLE` test
+cannot see this — `session_user` stays `postgres` — so the suite pins the
+grant and the comment records the probe.
+
+Outstanding, outside the repo: the Supabase dashboard still has Site URL
+`http://localhost:3000`. Production magic links will redirect wrong until it
+is set to `https://grid.salamituns.com` (Auth → URL Configuration, plus the
+redirect allowlist). The built-in emailer also rate-limits at roughly two
+sends an hour, which is fine for a first user and worth replacing with real
+SMTP if the team grows.

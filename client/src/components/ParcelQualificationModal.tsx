@@ -12,6 +12,7 @@ import {
 } from "@/types/parcel";
 import { fetchParcelPowerEvidence, fetchPowerDocuments } from "@/lib/supabase";
 import { X, Download, ChevronDown, ChevronUp, Scale, Info } from "lucide-react";
+import { DecisionPanel } from "@/components/DecisionPanel";
 
 interface ParcelQualificationModalProps {
   parcel: LandParcel | null;
@@ -45,7 +46,7 @@ const GATE_LABELS: Record<string, string> = {
   water_availability: "Water availability",
 };
 
-function gateLabel(key: string): string {
+export function gateLabel(key: string): string {
   return GATE_LABELS[key] ?? key.replace(/_/g, " ");
 }
 
@@ -827,7 +828,7 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
   const [documents, setDocuments] = useState<PowerDocument[]>([]);
   const [evidence, setEvidence] = useState<ParcelPowerEvidence[]>([]);
 
-  type TabKey = "overview" | "gate_results" | "measured_values" | "utility_documents";
+  type TabKey = "overview" | "gate_results" | "measured_values" | "utility_documents" | "decision";
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [passAccordionOpen, setPassAccordionOpen] = useState(false);
 
@@ -927,6 +928,9 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
     { key: "gate_results", label: "Gates", count: gates.length },
     { key: "measured_values", label: "Measured", count: metrics.length },
     { key: "utility_documents", label: "Evidence", count: documents.length + evidence.length },
+    // No count: the decision tab is a control and a record, not a list —
+    // a number there would invite counting rather than deciding.
+    { key: "decision", label: "Decision", count: null },
   ];
 
   /* ── Qualification body — shared by the desktop modal and mobile sheet ── */
@@ -1230,6 +1234,26 @@ export const ParcelQualificationModal: React.FC<ParcelQualificationModalProps> =
             <p className="mt-5 max-w-prose font-sans text-[11.5px] leading-[1.6] text-muted">
               Capacity figures appear only alongside the dated document that supports them.
               Zone-level forecasts are never restated as parcel claims.
+            </p>
+          </div>
+        )}
+
+        {/* ── Decision: record what you concluded, against this evidence ── */}
+        {activeTab === "decision" && (
+          <div
+            role="tabpanel"
+            id="qual-panel-decision"
+            aria-labelledby="qual-tab-decision"
+            tabIndex={0}
+            className="px-4 py-5 lg:px-6"
+          >
+            <DecisionPanel parcel={parcel} gates={gates} />
+            <p className="mt-5 max-w-prose font-sans text-[11.5px] leading-[1.6] text-muted">
+              A decision is a claim about this parcel at a point in evidence.
+              When a republish moves a gate, the decision stays — flagged as
+              made against earlier evidence, never silently refreshed. An
+              override accepts a failing gate beside it; the gate itself
+              never changes, and no score or coverage reads a decision.
             </p>
           </div>
         )}
