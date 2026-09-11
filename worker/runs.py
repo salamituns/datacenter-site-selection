@@ -118,10 +118,20 @@ class IngestionRun:
 
     def load_rules(self, jurisdiction: str) -> Dict[str, Dict[str, Any]]:
         """Loads {gate_key: {"id": ..., "params": ..., "rule_version": ...}}
-        for a jurisdiction."""
+        for a jurisdiction.
+
+        Rows are read in created_at order so the NEWEST version of a gate's
+        rule wins: constraint_rules is append-only by version, a run's gate
+        rows keep the rule_id that actually decided them, and a new version
+        governs from the next run without mutating the row that decided the
+        last one. Without the ordering the winner would be whichever row
+        PostgREST happened to return last — a coin flip dressed as a
+        version choice.
+        """
         res = self.client.table("constraint_rules") \
             .select("id,gate_key,rule_version,params") \
-            .eq("jurisdiction", jurisdiction).execute()
+            .eq("jurisdiction", jurisdiction) \
+            .order("created_at").execute()
         return _rows_to_rules(res.data or [])
 
     def fetch_power_parcel_evidence(self) -> Dict[str, List[Dict[str, Any]]]:
@@ -185,6 +195,8 @@ class IngestionRun:
 
 
 def _rows_to_rules(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    # Later rows overwrite earlier ones per gate_key, so the caller must
+    # pass the rows in created_at order — the newest version governs.
     return {r["gate_key"]: {"id": str(r["id"]),
                             "params": r["params"] or {},
                             "rule_version": r.get("rule_version")}
@@ -213,8 +225,11 @@ def load_rules_readonly(jurisdiction: str) -> Dict[str, Dict[str, Any]]:
     try:
         from supabase import create_client
         client = create_client(url, key)
-        res = client.table("constraint_rules").select("id,gate_key,params") \
-            .eq("jurisdiction", jurisdiction).execute()
+        # Same newest-version-wins contract as IngestionRun.load_rules:
+        # created_at order, last row per gate_key governs.
+        res = client.table("constraint_rules").select("id,gate_key,rule_version,params") \
+            .eq("jurisdiction", jurisdiction) \
+            .order("created_at").execute()
         rules = _rows_to_rules(res.data or [])
         logger.info("constraint_rules for %s (read-only): %s",
                     jurisdiction, sorted(rules) or "none")

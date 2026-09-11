@@ -360,3 +360,317 @@ class TestZoningRuleRefusal:
         zoning_rows = [g for g in gates if g["gate_key"] == "zoning_dc_use"]
         assert len(zoning_rows) == 1
         assert zoning_rows[0]["status"] == "UNKNOWN"
+
+
+# ── a township-scoped county: base + overlay layers (Licking's shape) ──
+# Jersey Township publishes overlays as separate features ON TOP of a
+# base district and flags them (ZoningOverlay = 'Y'). The gate must read
+# the BASE as the parcel's district and carry the overlay as context the
+# rule row classifies — never let the overlay win the dominance contest
+# and silently lose the base.
+def overlay_county():
+    """Parcels with a base district each, plus overlay features stacked
+    on some of them, in the Licking adapter's column shape."""
+    pins = ["BASE-RR", "RR-IEW", "RR-MUDOD", "C1-GRANVILLE", "C1-WHO",
+            "PUD-CPOW", "BASE-M1", "RR-SLIVER", "RR-TC", "RR-MUDOD-TC"]
+    geoms = {pin: square(150.0, i) for i, pin in enumerate(pins)}
+    parcels = gpd.GeoDataFrame(
+        {"pin": pins, "legal_acreage": [150.0] * len(pins),
+         "geometry": [geoms[p] for p in pins]},
+        crs=PLANAR_CRS,
+    ).to_crs("EPSG:4326")
+
+    def feature(zone, name, township, overlay, geom):
+        return {"zone": zone, "zone_name": name, "ordinance":
+                f"{township} Township Zoning Resolution (2026)",
+                "township": township, "overlay": overlay, "geometry": geom}
+
+    rows = []
+    # Bases: slightly larger than the parcel so dominance is unambiguous.
+    for pin, zone, name, twp in [
+        ("BASE-RR", "RR", "Rural Residential", "Jersey"),
+        ("RR-IEW", "RR", "Rural Residential", "Jersey"),
+        ("RR-MUDOD", "RR", "Rural Residential", "Jersey"),
+        ("C1-GRANVILLE", "C-1", "Conservation", "Granville"),
+        ("C1-WHO", "C-1", "Conservation", "St. Albans"),
+        ("PUD-CPOW", "PUD", "Planned Unit Development", "Jersey"),
+        ("BASE-M1", "M-1", "Light Manufacturing", "Jersey"),
+        ("RR-SLIVER", "RR", "Rural Residential", "Jersey"),
+        ("RR-TC", "RR", "Rural Residential", "Liberty"),
+        ("RR-MUDOD-TC", "RR", "Rural Residential", "Liberty"),
+    ]:
+        rows.append(feature(zone, name, twp, "N", geoms[pin].buffer(50)))
+    # Overlays: published ON TOP of the base, flagged 'Y', and larger
+    # than the base feature — so if the gate let the overlay win the
+    # dominance contest, the base would be lost. That is the bug the
+    # base-first read exists to prevent.
+    for pin, zone, name in [
+        ("RR-IEW", "IE-W", "Innovation Employment Overlay"),
+        ("RR-MUDOD", "MUDOD", "Mixed Use Development Overlay"),
+        ("PUD-CPOW", "CPO-W", "Commercial Professional Office Overlay"),
+        ("PUD-CPOW", "IE-W", "Innovation Employment Overlay"),
+        ("RR-MUDOD-TC", "MUDOD", "Mixed Use Development Overlay"),
+        ("RR-TC", "TC", "Transportation Corridor Overlay"),
+        ("RR-MUDOD-TC", "TC", "Transportation Corridor Overlay"),
+    ]:
+        rows.append(feature(zone, name, "Liberty", "Y", geoms[pin].buffer(200)))
+    # A boundary sliver: a mapped overlay code covering only 3% of the
+    # parcel — measured against Licking's live layer, corridor edges
+    # clip real parcels at 0.9-13.9%. It must not participate.
+    rows.append(feature("MCOB", "Mixed Commercial Overlay B", "Jersey", "Y",
+                        strip_over(geoms["RR-SLIVER"], 0.03)))
+
+    zoning = gpd.GeoDataFrame(rows, crs=PLANAR_CRS).to_crs("EPSG:4326")
+    rules = {"zoning_dc_use": {"params": {
+        "by_right": ["M-1"],
+        "special_exception": ["PUD"],
+        "prohibited": ["RR"],
+        "unknown_jurisdiction": [],
+        # C-1 is scoped: a real finding per township, never a flat row.
+        "district_classes": {"C-1|Granville": "prohibited"},
+        # A mapped overlay decides the combination; an unreviewed one
+        # holds the verdict at UNKNOWN.
+        "overlay_classes": {"IE-W": "special_exception", "CPO-W": "prohibited",
+                            "MCOB": "special_exception"},
+        # Liberty's TC (§811) and FP (§810) set development standards
+        # only — the reviewed text says the base district's uses stand.
+        "standards_only_overlays": ["TC", "FP"],
+        "standards_only_reasons": {
+            "TC": "Liberty Twp. Res. §811: 'Any permitted use allowed in "
+                  "the underlying zoning district'",
+        },
+    }}}
+    return parcels, zoning, rules
+
+
+def qualify_overlay_county(places_gdf=None, extra_rules=None):
+    parcels, zoning, rules = overlay_county()
+    if extra_rules:
+        rules = {k: {**v, **extra_rules.get(k, {})} for k, v in rules.items()}
+    _, _, gates, _ = qualify_parcels(
+        parcels_gdf=parcels, zoning_gdf=zoning,
+        wetlands_gdf=None, nfhl_gdf=None, lines_gdf=None, subs_gdf=None,
+        rules=rules, state_code="OH", county_name="Licking",
+        snapshots={}, retrieve_time="2026-09-12T00:00:00+00:00",
+        places_gdf=places_gdf,
+    )
+    return {(g["parcel_key"], g["gate_key"]): g for g in gates}
+
+
+class TestBaseOverlayRead:
+    def zoning_verdict(self, gates, pin):
+        return gates[(f"OH-LICKING-{pin}", "zoning_dc_use")]
+
+    def test_base_district_is_read_not_the_overlay(self):
+        # RR + IE-W: the district on the verdict is the base RR, and the
+        # overlay rides along as context — the overlay feature is larger
+        # and would have won a plain dominance contest.
+        gates = qualify_overlay_county()
+        g = self.zoning_verdict(gates, "RR-IEW")
+        assert g["status"] == "CONDITIONAL"  # IE-W is a mapped overlay
+        assert g["details"]["zone"] == "RR"
+        assert "IE-W" in g["details"]["overlays"]
+        assert g["details"]["township"] == "Jersey"
+        assert g["details"]["deciding_overlays"] == ["IE-W"]
+
+    def test_overlay_without_base_still_records_a_district(self):
+        # Not constructible from this county's shapes, but the plain
+        # single-feature case must keep working: base only, no overlay.
+        gates = qualify_overlay_county()
+        g = self.zoning_verdict(gates, "BASE-RR")
+        assert g["status"] == "FAIL"
+        assert g["details"]["zone"] == "RR"
+        assert "overlays" not in g["details"]
+
+    def test_unreviewed_overlay_holds_unknown_not_the_base_class(self):
+        # RR is flat-prohibited, but MUDOD has no reviewed overlay class:
+        # the base's FAIL must not stand in for a combination nobody
+        # reviewed.
+        gates = qualify_overlay_county()
+        g = self.zoning_verdict(gates, "RR-MUDOD")
+        assert g["status"] == "UNKNOWN"
+        assert "MUDOD" in g["rationale"]
+        assert g["details"]["unreviewed_overlays"] == ["MUDOD"]
+
+    def test_township_scoped_code_outranks_the_flat_lists(self):
+        gates = qualify_overlay_county()
+        # Granville's C-1 is scoped prohibited — decided by its own row.
+        assert self.zoning_verdict(gates, "C1-GRANVILLE")["status"] == "FAIL"
+        # The same code in a township with no scoped row stays UNKNOWN —
+        # a colliding code is never decided by another township's entry.
+        g = self.zoning_verdict(gates, "C1-WHO")
+        assert g["status"] == "UNKNOWN"
+        assert g["details"]["zone"] == "C-1"
+        assert g["details"]["township"] == "St. Albans"
+
+    def test_mapped_overlay_decides_over_a_decided_base(self):
+        # PUD is flat special_exception; the parcel carries CPO-W
+        # (prohibited) AND IE-W (special_exception). The overlay modifies
+        # the base, and where mapped overlays disagree the MOST
+        # restrictive wins — the min() form shipped inverted in the
+        # first overlay release and read this combination CONDITIONAL.
+        gates = qualify_overlay_county()
+        g = self.zoning_verdict(gates, "PUD-CPOW")
+        assert g["status"] == "FAIL"
+        assert g["details"]["deciding_overlays"] == ["CPO-W"]
+        assert "IE-W" in g["details"]["overlays"]  # context, not deciding
+
+    def test_a_parcel_without_overlays_keeps_the_plain_reading(self):
+        gates = qualify_overlay_county()
+        assert self.zoning_verdict(gates, "BASE-M1")["status"] == "PASS"
+
+
+class TestOverlayFloorAndStandardsOnly:
+    """The two overlay-participation rules measured against Licking's
+    live layer: a boundary sliver (0.9-13.9% of real parcels) must not
+    hold an otherwise-decided verdict, and an overlay the reviewed
+    ordinance text says does not modify uses never decides or holds."""
+
+    def zoning_verdict(self, gates, pin):
+        return gates[(f"OH-LICKING-{pin}", "zoning_dc_use")]
+
+    def test_a_sliver_overlay_does_not_participate(self):
+        # MCOB is a MAPPED overlay (special_exception) — without the
+        # floor this parcel would read CONDITIONAL. It covers 3% of the
+        # parcel: boundary noise, and the base RR's FAIL stands.
+        gates = qualify_overlay_county()
+        g = self.zoning_verdict(gates, "RR-SLIVER")
+        assert g["status"] == "FAIL"
+        assert g["details"]["zone"] == "RR"
+        assert "overlays" not in g["details"]
+
+    def test_a_meaningful_overlay_records_its_share(self):
+        gates = qualify_overlay_county()
+        g = self.zoning_verdict(gates, "RR-IEW")
+        assert g["status"] == "CONDITIONAL"
+        assert g["details"]["overlay_shares"]["IE-W"] == pytest.approx(
+            100.0, abs=0.5)
+
+    def test_a_standards_only_overlay_lets_the_base_decide(self):
+        # Liberty's TC covers this parcel entirely, but §811 defers uses
+        # to the underlying district: RR prohibits, and the verdict says
+        # so with the citation — not UNKNOWN, and not silently ignoring
+        # the overlay either.
+        gates = qualify_overlay_county()
+        g = self.zoning_verdict(gates, "RR-TC")
+        assert g["status"] == "FAIL"
+        assert g["details"]["zone"] == "RR"
+        assert "TC" in g["details"]["standards_only_overlays"]
+        assert "§811" in g["details"]["standards_only_overlays"]["TC"]
+        assert "does not modify the base district" in g["rationale"]
+
+    def test_standards_only_context_rides_along_a_held_verdict(self):
+        # MUDOD (unreviewed) still holds the parcel at UNKNOWN — but the
+        # rationale names only MUDOD as what is unreviewed, and TC rides
+        # along as context rather than joining the hold.
+        gates = qualify_overlay_county()
+        g = self.zoning_verdict(gates, "RR-MUDOD-TC")
+        assert g["status"] == "UNKNOWN"
+        assert "MUDOD" in g["rationale"]
+        assert g["details"]["unreviewed_overlays"] == ["MUDOD"]
+        assert "TC" in g["details"]["standards_only_overlays"]
+
+
+# ── a no-zoning county: the Texas rule, gated on municipal limits ─────
+def taylor_county():
+    """Two parcels, no zoning layer at all (a Texas county's shape), one
+    inside an incorporated place and one outside it."""
+    inside, outside = square(150.0, 0), square(150.0, 1)
+    parcels = gpd.GeoDataFrame(
+        {"pin": ["IN-CITY", "RURAL"], "legal_acreage": [150.0, 150.0],
+         "geometry": [inside, outside]},
+        crs=PLANAR_CRS,
+    ).to_crs("EPSG:4326")
+    places = gpd.GeoDataFrame(
+        {"place_geoid": ["4847796"], "place_name": ["Merkel town"],
+         "place_basename": ["Merkel"], "place_lsad": ["43"],
+         "geometry": [inside.buffer(50)]},
+        crs=PLANAR_CRS,
+    ).to_crs("EPSG:4326")
+    rules = {"zoning_dc_use": {"params": {
+        "by_right": [], "special_exception": [], "prohibited": [],
+        "unknown_jurisdiction": [],
+        "no_county_zoning": {
+            "status": "CONDITIONAL",
+            "rationale": ("No county zoning applies: Texas counties have "
+                          "no general zoning authority over unincorporated "
+                          "land (Local Government Code ch. 231)."),
+        },
+    }}}
+    return parcels, places, rules
+
+
+def qualify_taylor(places_gdf="use-county-places", rules=None):
+    parcels, places, default_rules = taylor_county()
+    if places_gdf == "use-county-places":
+        places_gdf = places
+    _, metrics, gates, _ = qualify_parcels(
+        parcels_gdf=parcels, zoning_gdf=None,
+        wetlands_gdf=None, nfhl_gdf=None, lines_gdf=None, subs_gdf=None,
+        rules=default_rules if rules is None else rules,
+        state_code="TX", county_name="Taylor",
+        snapshots={}, retrieve_time="2026-09-12T00:00:00+00:00",
+        places_gdf=places_gdf,
+    )
+    return {(g["parcel_key"], g["gate_key"]): g for g in gates}, metrics
+
+
+class TestNoCountyZoningRule:
+    def test_outside_every_place_reads_conditional_with_the_statute(self):
+        gates, _ = qualify_taylor()
+        g = gates[("TX-TAYLOR-RURAL", "zoning_dc_use")]
+        assert g["status"] == "CONDITIONAL"
+        assert "ch. 231" in g["rationale"]
+        assert g["details"]["municipal_limits"].startswith("outside every")
+
+    def test_inside_a_place_stays_unknown_and_names_it(self):
+        gates, metrics = qualify_taylor()
+        g = gates[("TX-TAYLOR-IN-CITY", "zoning_dc_use")]
+        assert g["status"] == "UNKNOWN"
+        assert "Merkel" in g["rationale"]
+        assert g["details"]["incorporated_place"] == "Merkel town"
+        # The finding is a metric, not just rationale text.
+        m = [m for m in metrics if m["metric_key"] == "incorporated_place"
+             and m["parcel_key"] == "TX-TAYLOR-IN-CITY"]
+        assert len(m) == 1 and m[0]["text_value"] == "Merkel town"
+
+    def test_unavailable_places_layer_holds_the_rule_back(self):
+        # Silence is not confirmation of unincorporated status.
+        gates, _ = qualify_taylor(places_gdf=None)
+        for pin in ("IN-CITY", "RURAL"):
+            g = gates[(f"TX-TAYLOR-{pin}", "zoning_dc_use")]
+            assert g["status"] == "UNKNOWN"
+            assert "incorporated-places layer is unavailable" in g["rationale"]
+
+    def test_no_rule_and_no_layer_is_the_plain_unknown(self):
+        parcels, _, _ = taylor_county()
+        _, _, gates, _ = qualify_parcels(
+            parcels_gdf=parcels, zoning_gdf=None,
+            wetlands_gdf=None, nfhl_gdf=None, lines_gdf=None, subs_gdf=None,
+            rules={}, state_code="TX", county_name="Taylor",
+            snapshots={}, retrieve_time="2026-09-12T00:00:00+00:00",
+        )
+        g = [g for g in gates if g["gate_key"] == "zoning_dc_use"][0]
+        assert g["status"] == "UNKNOWN"
+        assert "No zoning district overlap" in g["rationale"]
+
+    def test_the_rule_never_fires_when_a_zoning_layer_exists(self):
+        # A layer that misses a parcel is the municipal-gap case, not the
+        # no-county-zoning case: the rule must not reach it.
+        parcels, _, rules = taylor_county()
+        zoning = gpd.GeoDataFrame(
+            {"zone": ["RR"], "zone_name": ["Rural Residential"],
+             "ordinance": ["2026"],
+             "geometry": [square(150.0, 2).buffer(50)]},  # covers neither
+            crs=PLANAR_CRS,
+        ).to_crs("EPSG:4326")
+        _, _, gates, _ = qualify_parcels(
+            parcels_gdf=parcels, zoning_gdf=zoning,
+            wetlands_gdf=None, nfhl_gdf=None, lines_gdf=None, subs_gdf=None,
+            rules=rules, state_code="TX", county_name="Taylor",
+            snapshots={}, retrieve_time="2026-09-12T00:00:00+00:00",
+        )
+        for g in gates:
+            if g["gate_key"] == "zoning_dc_use":
+                assert g["status"] == "UNKNOWN"
+                assert "No zoning district overlap" in g["rationale"]

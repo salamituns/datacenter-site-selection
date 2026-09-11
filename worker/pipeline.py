@@ -622,12 +622,22 @@ def run_pipeline(
                 )
 
             # Verification layers: TIGER roads, PAD-US protected areas,
-            # 3DEP slopes. Each degrades independently to UNKNOWN.
-            logger.info("Step 6b: verification layers (TIGER roads, PAD-US, 3DEP slopes)…")
+            # 3DEP slopes, TIGER incorporated places. Each degrades
+            # independently to UNKNOWN.
+            logger.info("Step 6b: verification layers (TIGER roads, PAD-US, "
+                        "3DEP slopes, TIGER places)…")
             roads_gdf = overlay_layers.fetch_tiger_roads(
                 min_lon, min_lat, max_lon, max_lat, state_code=state_code,
                 region_key=region_key)
             padus_gdf = overlay_layers.fetch_padus(
+                min_lon, min_lat, max_lon, max_lat, state_code=state_code)
+            # Incorporated places for every region, not just Texas: the
+            # no-county-zoning rule needs proof a parcel is outside
+            # municipal limits, and the incorporated-town coverage (the
+            # 58 parcels the county zoning layers mark TWN/TOWNS) needs
+            # the same polygons. A county with none is a real answer and
+            # comes back as a present, empty layer.
+            places_gdf = overlay_layers.fetch_places(
                 min_lon, min_lat, max_lon, max_lat, state_code=state_code)
             slopes = None
             try:
@@ -652,6 +662,11 @@ def run_pipeline(
                  "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/getSamples",
                  (None if slopes is not None
                   else "unavailable — gate recorded UNKNOWN")),
+                ("places", None if places_gdf is None else len(places_gdf),
+                 "census_tiger_places",
+                 "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Places_CouSub_ConCity_SubMCD/MapServer",
+                 (None if places_gdf is not None
+                  else "unavailable — municipal-limits test held back")),
             ):
                 if run is not None:
                     snapshots[layer_key] = run.snapshot(
@@ -855,6 +870,7 @@ def run_pipeline(
                 snapshots=snapshots, retrieve_time=retrieve_time,
                 region_key=region_key,
                 roads_gdf=roads_gdf, padus_gdf=padus_gdf, slopes=slopes,
+                places_gdf=places_gdf,
                 utility_gdf=utility_gdf, rtep_df=rtep_df, queue_gdf=queue_gdf,
                 apps_gdf=apps_gdf, parcel_evidence=parcel_evidence,
                 water_gdf=water_gdf, assessments=assessments,

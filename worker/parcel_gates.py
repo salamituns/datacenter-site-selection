@@ -159,6 +159,107 @@ def _to_multi_wkt(geom) -> str:
     return f"SRID=4326;{geom.wkt}"
 
 
+# Restrictiveness order for a mapped overlay's class. When more than one
+# mapped overlay touches a parcel, the most restrictive decides — a
+# screening verdict must never take the most permissive reading of a
+# combination nobody reviewed as a whole.
+_DC_CLASS_RESTRICTIVENESS = {"by_right": 0, "special_exception": 1, "prohibited": 2}
+
+# An overlay participates in a parcel's use classification only where it
+# covers a meaningful share of the parcel: 5%, the same line the
+# legislative-application read draws between an approved project
+# footprint and a boundary sliver. Measured against the published Licking
+# layer, boundary slivers reach 0.9-13.9% of a parcel (a corridor edge
+# clipping a field corner) — the floor keeps the smallest of those from
+# holding an otherwise-decided parcel at UNKNOWN, while a genuinely
+# overlay-covered parcel (~100%) stays honestly held.
+OVERLAY_MIN_SHARE_PCT = 5.0
+
+
+def _classify_dc_use(
+    zone_code: str,
+    township: Optional[str],
+    overlays: List[Dict[str, Any]],
+    dc_map: Dict[str, Any],
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    The zoning use-table lookup, in the order the rule row states it.
+
+    1. Overlay combinations first — except overlays the rule row lists in
+       standards_only_overlays, which the reviewed ordinance text says do
+       not modify the base district's use permissions (Liberty's TC
+       corridor and FP floodplain overlays: "Any permitted use allowed in
+       the underlying zoning district"). Those are carried as context and
+       never decide or hold; the citation travels in
+       standards_only_reasons.
+    2. Township-scoped codes before flat codes: one code can be two
+       districts in two townships' ordinances (Licking's C-1), so
+       "CODE|Township" in district_classes outranks the flat lists, and
+       a colliding code with no scoped row stays unmapped rather than
+       being decided by whichever township wrote the flat entry.
+    3. The flat by_right / special_exception / unknown_jurisdiction /
+       prohibited lists, exactly as before.
+    """
+    district_classes = dc_map.get("district_classes") or {}
+    overlay_classes = dc_map.get("overlay_classes") or {}
+    standards_only = set(dc_map.get("standards_only_overlays") or [])
+    standards_reasons = dc_map.get("standards_only_reasons") or {}
+    basis: Dict[str, Any] = {}
+    if overlays:
+        inert = sorted({o["zone"] for o in overlays
+                        if o["zone"] in standards_only})
+        active = [o for o in overlays if o["zone"] not in standards_only]
+        if inert:
+            basis["standards_only_overlays"] = {
+                c: str(standards_reasons.get(c)
+                       or "development standards only; does not modify "
+                       "the base district's use permissions")
+                for c in inert
+            }
+        if active:
+            mapped = [o["zone"] for o in active
+                      if o["zone"] in overlay_classes]
+            unmapped = sorted({o["zone"] for o in active
+                               if o["zone"] not in overlay_classes})
+            if unmapped:
+                return "overlay_unmapped", {
+                    **basis, "unreviewed_overlays": unmapped}
+            if mapped:
+                # The most restrictive mapped class decides — max over
+                # the restrictiveness order. (min here would take the
+                # most PERMISSIVE reading of a combination nobody
+                # reviewed as a whole, which is exactly what this
+                # order exists to refuse; it shipped inverted in the
+                # first overlay release and decided one Jersey parcel
+                # CONDITIONAL off a prohibited overlay.) Only the
+                # overlays carrying the winning class are named as
+                # deciding; the rest ride along as context.
+                cls = max(
+                    (overlay_classes[c] for c in mapped),
+                    key=lambda c: _DC_CLASS_RESTRICTIVENESS.get(c, 99),
+                )
+                deciding = sorted({c for c in mapped
+                                   if overlay_classes[c] == cls})
+                return cls, {**basis, "deciding_overlays": deciding}
+        # Only standards-only overlays remain: the base district's use
+        # table answers, with the overlays recorded as context — basis
+        # travels with the base verdict so the citation is not lost on
+        # the fall-through.
+    if township:
+        scoped = f"{zone_code}|{township}"
+        if scoped in district_classes:
+            return district_classes[scoped], {**basis, "scoped_key": scoped}
+    if zone_code in dc_map.get("by_right", []):
+        return "by_right", dict(basis)
+    if zone_code in dc_map.get("special_exception", []):
+        return "special_exception", dict(basis)
+    if zone_code in dc_map.get("unknown_jurisdiction", []):
+        return "unknown_jurisdiction", dict(basis)
+    if zone_code in dc_map.get("prohibited", []):
+        return "prohibited", dict(basis)
+    return "unmapped", dict(basis)
+
+
 class _OverlapIndex:
     """
     Share (0-100%) of a parcel covered by a layer, tested only against the
@@ -251,6 +352,7 @@ def qualify_parcels(
     roads_gdf: Optional[gpd.GeoDataFrame] = None,
     padus_gdf: Optional[gpd.GeoDataFrame] = None,
     slopes: Optional[Dict[Any, Tuple[Optional[float], Optional[float], int]]] = None,
+    places_gdf: Optional[gpd.GeoDataFrame] = None,
     utility_gdf: Optional[gpd.GeoDataFrame] = None,
     rtep_df: Optional[pd.DataFrame] = None,
     queue_gdf: Optional[gpd.GeoDataFrame] = None,
@@ -330,24 +432,143 @@ def qualify_parcels(
         if nfhl_gdf is not None else None
     )
 
-    # Zoning: dominant district per parcel (largest intersection area)
+    # Zoning: dominant district per parcel (largest intersection area).
+    # Two refinements over a plain dominant-district read:
+    # * context columns — a township-scoped layer (Licking) carries the
+    #   township whose resolution governs the code, because the same code
+    #   can mean different districts in different townships' ordinances;
+    # * base vs overlay — a layer that marks overlay features (Licking's
+    #   ZoningOverlay flag) publishes overlays as separate features OVER
+    #   a base district. An overlay does not replace the base; it
+    #   modifies it. Letting the overlay win the dominance contest reads
+    #   the overlay code as the district and loses the base entirely —
+    #   the gate would answer a different question from the one it asks.
+    #   So the base district is the parcel's district, and the overlay
+    #   codes ride along as context the use table can classify
+    #   explicitly (a mapped overlay can modify the verdict; an
+    #   unreviewed one holds it at UNKNOWN rather than letting the base
+    #   answer stand for a combination nobody reviewed) — and only
+    #   overlays covering at least OVERLAY_MIN_SHARE_PCT of the parcel
+    #   participate at all, so a boundary sliver cannot hold a verdict
+    #   the parcel's actual zoning decides.
     zone_of: Dict[int, Dict[str, Any]] = {}
+    overlays_of: Dict[int, List[Dict[str, Any]]] = {}
     zoning_coverage = None
     if zoning_gdf is not None and len(zoning_gdf) > 0:
         try:
+            ctx_cols = [c for c in ("township", "overlay") if c in zoning_gdf.columns]
             inter = gpd.overlay(
                 parcels_gdf[["geometry"]].reset_index(names="pidx"),
-                zoning_gdf[["zone", "zone_name", "ordinance", "geometry"]],
+                zoning_gdf[["zone", "zone_name", "ordinance", *ctx_cols, "geometry"]],
                 how="intersection",
             )
             if len(inter) > 0:
                 inter["area"] = inter.geometry.to_crs(PLANAR_CRS).area
-                best = inter.sort_values("area", ascending=False) \
-                    .drop_duplicates("pidx").set_index("pidx")
-                zone_of = {i: row for i, row in best.iterrows()}
-                zoning_coverage = float(parcels_gdf.index.isin(best.index).mean() * 100)
+                has_overlay_flag = "overlay" in inter.columns
+                if has_overlay_flag:
+                    is_overlay = (inter["overlay"].astype(str).str.strip()
+                                  .str.upper() == "Y")
+                else:
+                    is_overlay = None
+                if is_overlay is not None and is_overlay.any():
+                    base = inter[~is_overlay]
+                    over = inter[is_overlay]
+                    if len(base) > 0:
+                        best = base.sort_values("area", ascending=False) \
+                            .drop_duplicates("pidx").set_index("pidx")
+                        zone_of = {i: row for i, row in best.iterrows()}
+                    # An overlay participates only above the meaningful-
+                    # coverage floor: a corridor edge clipping a field
+                    # corner (measured at 0.9-13.9% of real parcels) is
+                    # boundary noise, not the parcel being in the
+                    # overlay. Share is summed per overlay code — a code
+                    # drawn as several features still counts once, at
+                    # its combined footprint.
+                    if len(over) > 0:
+                        pa = over["pidx"].map(parcel_area_m2)
+                        grp = over.assign(_pa=pa).groupby(["pidx", "zone"]) \
+                            .agg(area=("area", "sum"), pa=("_pa", "first"))
+                        grp["pct"] = grp["area"] / grp["pa"] * 100.0
+                        kept = grp[grp["pct"] >= OVERLAY_MIN_SHARE_PCT]
+                        over_kept = over[
+                            pd.MultiIndex.from_frame(over[["pidx", "zone"]])
+                            .isin(kept.index)
+                        ]
+                        for (pidx, zone), r in kept.iterrows():
+                            feat = over_kept[
+                                (over_kept["pidx"] == pidx)
+                                & (over_kept["zone"] == zone)
+                            ].iloc[0]
+                            overlays_of.setdefault(int(pidx), []).append({
+                                "zone": str(zone),
+                                "zone_name": str(feat["zone_name"]),
+                                **({"township": str(feat["township"])}
+                                   if "township" in over.columns else {}),
+                                "share_pct": round(float(r["pct"]), 3),
+                            })
+                    else:
+                        over_kept = over
+                    # A parcel no base feature covers would otherwise
+                    # silently lose its zoning: keep the dominant overlay
+                    # as the district (the pre-refinement behaviour) and
+                    # say so, rather than recording an uncovered parcel.
+                    # Only overlays that passed the floor qualify — an
+                    # orphan whose every overlay touch was a sliver was
+                    # never covered by this layer at all.
+                    orphans = [p for p in overlays_of if p not in zone_of]
+                    if orphans and len(over_kept) > 0:
+                        logger.warning(
+                            "Zoning overlay: %d parcels covered only by "
+                            "overlay features (no base district) — the "
+                            "overlay code is being read as their district.",
+                            len(orphans))
+                        orphan_best = over_kept[over_kept["pidx"].isin(orphans)] \
+                            .sort_values("area", ascending=False) \
+                            .drop_duplicates("pidx").set_index("pidx")
+                        for i, row in orphan_best.iterrows():
+                            zone_of[i] = row
+                else:
+                    best = inter.sort_values("area", ascending=False) \
+                        .drop_duplicates("pidx").set_index("pidx")
+                    zone_of = {i: row for i, row in best.iterrows()}
+                covered = set(zone_of) | set(overlays_of)
+                zoning_coverage = float(
+                    parcels_gdf.index.isin(covered).mean() * 100)
         except Exception as e:  # noqa: BLE001
             logger.warning("Zoning overlay failed: %s", e)
+
+    # Incorporated places (TIGER): the municipal-limits test. A parcel
+    # whose majority area lies inside an incorporated place is inside
+    # city limits — municipal zoning applies and a county use table (or
+    # a no-county-zoning rule) must not decide it. The boundary case is
+    # decided by majority, not centroid: a parcel half inside the city
+    # is half governed by each, and the dominant share is the honest
+    # screening read. The overlap share travels in the details so the
+    # edge is visible rather than hidden in a boolean.
+    place_of: Dict[int, Dict[str, Any]] = {}
+    if places_gdf is not None and len(places_gdf) > 0:
+        try:
+            inter = gpd.overlay(
+                planar[["geometry"]].reset_index(names="pidx"),
+                places_gdf.to_crs(PLANAR_CRS)[
+                    ["place_geoid", "place_name", "place_basename", "geometry"]],
+                how="intersection",
+            )
+            if len(inter) > 0:
+                inter["area"] = inter.geometry.area
+                parcel_areas = planar.geometry.area
+                inter["pct"] = (
+                    inter["area"] / inter["pidx"].map(parcel_areas) * 100.0)
+                best = inter.sort_values("pct", ascending=False) \
+                    .drop_duplicates("pidx").set_index("pidx")
+                place_of = {
+                    int(i): {"name": str(r.place_name),
+                             "geoid": str(r.place_geoid),
+                             "pct": float(r.pct)}
+                    for i, r in best.iterrows() if r.pct >= 50.0
+                }
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Incorporated-places overlay failed: %s", e)
 
     # Power proximity (real HIFLD only — no synthetic distances ever)
     line_dist_mi: Optional[pd.Series] = None
@@ -834,23 +1055,32 @@ def qualify_parcels(
                        details=slope_details, retrieved_at=slope_at)
 
         zr = zone_of.get(i)
+        dc_status = None
+        dc_basis: Dict[str, Any] = {}
+        overlays: List[Dict[str, Any]] = overlays_of.get(i) or []
+        overlay_names = ", ".join(sorted({o["zone"] for o in overlays})) or None
+        overlay_shares = ({o["zone"]: o.get("share_pct") for o in overlays}
+                          if overlays else None)
         if zr is not None:
             zone_code = str(zr["zone"])
+            raw_township = zr.get("township")
+            township = (str(raw_township).strip()
+                        if raw_township is not None
+                        and str(raw_township).strip() else None)
+            zoning_details: Dict[str, Any] = {"zone_name": zr["zone_name"]}
+            if township:
+                zoning_details["township"] = township
+            if overlay_names:
+                zoning_details["overlays"] = overlay_names
+            if overlay_shares:
+                zoning_details["overlay_shares"] = overlay_shares
             metric(pin, "zoning_district", None, text_value=zone_code, layer="zoning",
-                   details={"zone_name": zr["zone_name"]})
+                   details=zoning_details)
             metric(pin, "zoning_ordinance_vintage", None, text_value=str(zr["ordinance"]),
                    layer="zoning", evidence="observed")
 
-            if zone_code in dc_map.get("by_right", []):
-                dc_status = "by_right"
-            elif zone_code in dc_map.get("special_exception", []):
-                dc_status = "special_exception"
-            elif zone_code in dc_map.get("unknown_jurisdiction", []):
-                dc_status = "unknown_jurisdiction"
-            elif zone_code in dc_map.get("prohibited", []):
-                dc_status = "prohibited"
-            else:
-                dc_status = "unmapped"
+            dc_status, dc_basis = _classify_dc_use(
+                zone_code, township, overlays, dc_map)
             metric(pin, "dc_use_status", None, text_value=dc_status, evidence="manual",
                    layer="zoning", details={
                        "zone": zone_code,
@@ -860,7 +1090,20 @@ def qualify_parcels(
                                  + str(rules["zoning_dc_use"].get("rule_version")
                                        or "screening")
                                  + " (screening, pending ordinance review)"),
+                       **({"township": township} if township else {}),
+                       **({"overlays": overlay_names} if overlay_names else {}),
+                       **dc_basis,
                    })
+
+        # Incorporated place (TIGER): recorded only when the parcel's
+        # majority lies inside one — outside is the common case and the
+        # absence of the row is the finding, never a gap.
+        if places_gdf is not None and i in place_of:
+            p = place_of[i]
+            metric(pin, "incorporated_place", None, text_value=p["name"],
+                   layer="places", evidence="observed",
+                   details={"geoid": p["geoid"],
+                            "overlap_pct": round(p["pct"], 3)})
 
         if line_dist_mi is not None and i in line_dist_mi.index:
             metric(pin, "distance_to_transmission_miles", line_dist_mi.loc[i],
@@ -910,40 +1153,132 @@ def qualify_parcels(
         # ── gates ─────────────────────────────────────────────────────
         # Zoning / data-center use
         if zr is None:
-            gate(pin, "zoning_dc_use", "UNKNOWN",
-                 "No zoning district overlap found — the authoritative zoning map "
-                 "does not cover this parcel (unincorporated/town gap or boundary "
-                 "sliver). Use status remains UNKNOWN until reviewed.",
-                 details={"zoning_layer": "present" if zoning_gdf is not None else "missing"})
+            # A region with no zoning layer at all is not the same case
+            # as a layer that misses this parcel. Where the jurisdiction's
+            # own rule row states the no-county-zoning finding (the
+            # statute citation lives in the row, not in code), the gate
+            # applies it — but ONLY on a parcel the incorporated-places
+            # layer confirms is outside municipal limits. Inside a city
+            # the city's zoning applies; without the places layer the
+            # rule holds at UNKNOWN rather than assume unincorporated.
+            no_county = None
+            if zoning_gdf is None:
+                no_county = (rules.get("zoning_dc_use", {})
+                             .get("params", {}).get("no_county_zoning"))
+            if no_county:
+                if places_gdf is None:
+                    gate(pin, "zoning_dc_use", "UNKNOWN",
+                         "No county zoning layer covers this region and the "
+                         "no-county-zoning rule is on file — but the "
+                         "incorporated-places layer is unavailable, and the "
+                         "rule may only fire on a parcel confirmed outside "
+                         "municipal limits. Use status remains UNKNOWN.",
+                         details={"zoning_layer": "missing",
+                                  "places_layer": "missing"})
+                elif i in place_of:
+                    p = place_of[i]
+                    gate(pin, "zoning_dc_use", "UNKNOWN",
+                         f"Inside {p['name']} — municipal zoning applies, and "
+                         f"the county publishes none of its own. Use status "
+                         f"needs the municipality's ordinance.",
+                         details={"zoning_layer": "missing",
+                                  "places_layer": "present",
+                                  "incorporated_place": p["name"],
+                                  "place_overlap_pct": round(p["pct"], 3)})
+                else:
+                    gate(pin, "zoning_dc_use",
+                         str(no_county.get("status") or "CONDITIONAL"),
+                         str(no_county.get("rationale") or
+                             "No county zoning applies to this parcel."),
+                         details={
+                             "zoning_layer": "missing",
+                             "places_layer": "present",
+                             "basis": ("constraint_rules mapping "
+                                       + str(rules["zoning_dc_use"]
+                                             .get("rule_version")
+                                             or "screening")),
+                             "municipal_limits": ("outside every incorporated "
+                                                  "place (TIGER/Line Places)"),
+                         })
+            else:
+                gate(pin, "zoning_dc_use", "UNKNOWN",
+                     "No zoning district overlap found — the authoritative zoning map "
+                     "does not cover this parcel (unincorporated/town gap or boundary "
+                     "sliver). Use status remains UNKNOWN until reviewed.",
+                     details={"zoning_layer": "present" if zoning_gdf is not None else "missing"})
         else:
             zone_code = str(zr["zone"])
+            zone_details: Dict[str, Any] = {"zone": zone_code,
+                                            "ordinance": str(zr["ordinance"])}
+            if township:
+                zone_details["township"] = township
+            if overlay_names:
+                zone_details["overlays"] = overlay_names
+            if overlay_shares:
+                zone_details["overlay_shares"] = overlay_shares
+            zone_details.update(dc_basis)
+            combo = (f" with the {overlay_names} overlay" if overlay_names else "")
+            # A standards-only overlay (rule row: the reviewed ordinance
+            # text says it does not modify the base's use permissions)
+            # must be named as exactly that on a decided verdict, with
+            # the citation — otherwise the overlay reads as if it had
+            # been silently ignored.
+            inert = dc_basis.get("standards_only_overlays") or {}
+            if inert:
+                combo += " — " + "; ".join(
+                    f"the {code} overlay does not modify the base "
+                    f"district's use permissions ({reason})"
+                    for code, reason in inert.items())
             if dc_status == "by_right":
                 gate(pin, "zoning_dc_use", "PASS",
-                     f"Zoned {zone_code} ({zr['zone_name']}) — data centers are a "
-                     f"by-right principal use in this district under the "
+                     f"Zoned {zone_code} ({zr['zone_name']}){combo} — data centers "
+                     f"are a by-right principal use in this district under the "
                      f"{zr['ordinance']} ordinance (screening mapping).",
-                     details={"zone": zone_code, "ordinance": str(zr["ordinance"])})
+                     details=zone_details)
             elif dc_status == "special_exception":
                 gate(pin, "zoning_dc_use", "CONDITIONAL",
-                     f"Zoned {zone_code} ({zr['zone_name']}) — data centers require a "
-                     f"Special Exception under the {zr['ordinance']} ordinance.",
-                     details={"zone": zone_code, "ordinance": str(zr["ordinance"])})
+                     f"Zoned {zone_code} ({zr['zone_name']}){combo} — data centers "
+                     f"require a Special Exception under the {zr['ordinance']} "
+                     f"ordinance.",
+                     details=zone_details)
             elif dc_status == "prohibited":
                 gate(pin, "zoning_dc_use", "FAIL",
-                     f"Zoned {zone_code} ({zr['zone_name']}) — data centers are not a "
-                     f"permitted use in this district under the {zr['ordinance']} ordinance.",
-                     details={"zone": zone_code, "ordinance": str(zr["ordinance"])})
+                     f"Zoned {zone_code} ({zr['zone_name']}){combo} — data centers "
+                     f"are not a permitted use in this district under the "
+                     f"{zr['ordinance']} ordinance.",
+                     details=zone_details)
             elif dc_status == "unknown_jurisdiction":
+                # The reason text is the rule row's own (data, not code):
+                # "TWN is a town whose ordinance the county does not
+                # publish" and "UZ is a township that administers no
+                # zoning" are different findings that must not share a
+                # sentence.
+                reason = (dc_map.get("jurisdiction_reasons") or {}).get(zone_code)
+                if not reason:
+                    reason = ("the jurisdiction this code marks administers "
+                              "its own rules, which this mapping does not "
+                              "carry")
                 gate(pin, "zoning_dc_use", "UNKNOWN",
-                     f"Zoned {zone_code} — inside an incorporated town with its own "
-                     f"zoning ordinance; county mapping does not apply.",
-                     details={"zone": zone_code})
+                     f"Zoned {zone_code} — {reason}.",
+                     details=zone_details)
+            elif dc_status == "overlay_unmapped":
+                # Name only the overlays that are actually holding the
+                # verdict — a standards-only overlay riding along is
+                # context, not part of what is unreviewed here.
+                held = ", ".join(dc_basis.get("unreviewed_overlays") or [])
+                gate(pin, "zoning_dc_use", "UNKNOWN",
+                     f"Zoned {zone_code} ({zr['zone_name']}) with the "
+                     f"{held} overlay — the overlay district's use "
+                     f"table has not been reviewed, and the base district's "
+                     f"class does not answer for the combination. Use status "
+                     f"remains UNKNOWN until the overlay ordinance is read.",
+                     details=zone_details)
             else:
                 gate(pin, "zoning_dc_use", "UNKNOWN",
                      f"Zoned {zone_code} ({zr['zone_name']}) — district is not in the "
                      f"reviewed mapping; use status remains UNKNOWN until the "
                      f"ordinance use table is checked.",
-                     details={"zone": zone_code})
+                     details=zone_details)
 
         # Contiguous developable acreage
         if developable >= acre_rule.get("min_pass_acres", 100):
@@ -1356,6 +1691,8 @@ def qualify_parcels(
         "nfhl_layer": "present" if nfhl_gdf is not None else "missing",
         "padus_layer": "present" if padus_gdf is not None else "missing",
         "roads_layer": "present" if roads_gdf is not None else "missing",
+        "places_layer": "present" if places_gdf is not None else "missing",
+        "parcels_inside_places": len(place_of),
         "slope_layer": "present" if slopes is not None else "missing",
         "utility_layer": "present" if utility_gdf is not None else "missing",
         "rtep_layer": "present" if rtep_df is not None else "missing",

@@ -19,6 +19,11 @@ Verification layer fetchers — federal-first overlays for every region.
    and cached per envelope across runs, since the DEM is static and a
    republish would otherwise re-ask thousands of identical questions.
    Cached answers carry the date they were really retrieved.
+5. TIGER Places (Census TIGERweb/Places_CouSub_ConCity_SubMCD):
+   incorporated-place polygons for the municipal-limits question — the
+   prerequisite for the Texas no-county-zoning rule and, later, the
+   incorporated-town zoning coverage. State-cached like the roads clip,
+   with the TIGER/Line state PLACE shapefile as fallback.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -281,6 +286,157 @@ def fetch_tiger_roads(
         return tigerline
     logger.warning("TIGER roads: no segments in bbox and no usable cache.")
     return None
+
+
+# TIGERweb Places (Census): incorporated-place polygons — the city-limits
+# question. The Texas no-county-zoning-authority rule may only fire on a
+# parcel confirmed OUTSIDE municipal limits, and the incorporated-town
+# coverage (category B in the zoning brief) needs the same polygons, so
+# this is the one layer both rules key on. Layer 4 of the
+# Places_CouSub_ConCity_SubMCD service is the current-vintage Incorporated
+# Places layer. MTFCC does the disambiguating everywhere: G4110 is an
+# incorporated place, G4210 a census designated place — a CDP is
+# unincorporated by definition and has no zoning authority, so sweeping
+# one in as "a city" would wrongly hold the Texas rule back from land it
+# should decide.
+TIGER_PLACES_URL = (
+    "https://tigerweb.geo.census.gov/arcgis/rest/services/"
+    "TIGERweb/Places_CouSub_ConCity_SubMCD/MapServer/4/query"
+)
+# TIGER/Line state place shapefiles — the canonical fallback when the
+# REST service is WAF-blocked. PLACE is a state-level file (unlike the
+# county road files), and it carries incorporated places AND CDPs, so the
+# MTFCC filter is load-bearing here, not a courtesy.
+TIGERLINE_PLACE_URL = (
+    "https://www2.census.gov/geo/tiger/TIGER2024/PLACE/"
+    "tl_2024_{fips}_place.zip"
+)
+STATE_FIPS = {"VA": "51", "OH": "39", "TX": "48", "OR": "41"}
+INCORPORATED_MTFCC = "G4110"
+
+
+def _tiger_places_cache(state_code: str) -> Path:
+    return (Path(__file__).parent / "cache"
+            / f"tiger_places_{state_code.lower()}_clip.gpkg")
+
+
+def _place_frame(rows: List[Dict[str, Any]]) -> gpd.GeoDataFrame:
+    return gpd.GeoDataFrame(
+        rows, crs="EPSG:4326",
+        columns=["place_geoid", "place_name", "place_basename",
+                 "place_lsad", "geometry"],
+    )
+
+
+def _places_from_features(features: List[Dict[str, Any]]
+                           ) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for f in features:
+        geometry = f.get("geometry")
+        if not geometry:
+            continue
+        try:
+            geom = shape(geometry)
+        except Exception:  # noqa: BLE001
+            continue
+        if geom.is_empty:
+            continue
+        props = f.get("properties", {}) or {}
+        if str(props.get("MTFCC") or "").strip() != INCORPORATED_MTFCC:
+            # The layer is titled Incorporated Places, but the filter is
+            # kept so a CDP can never masquerade as municipal limits.
+            continue
+        rows.append({
+            "place_geoid": str(props.get("GEOID") or "").strip(),
+            "place_name": str(props.get("NAME") or "").strip(),
+            "place_basename": str(props.get("BASENAME") or "").strip(),
+            "place_lsad": str(props.get("LSADC") or "").strip(),
+            "geometry": geom,
+        })
+    return rows
+
+
+def fetch_places(
+    min_lon: float, min_lat: float, max_lon: float, max_lat: float,
+    state_code: str = "VA",
+) -> Optional[gpd.GeoDataFrame]:
+    """
+    Incorporated-place polygons within the bbox, cached per state like the
+    roads clip (TIGER is a yearly vintage and the Census WAF
+    rate-blocks). The empty/None distinction is load-bearing here, more
+    than for any other layer: a county whose bbox contains no
+    incorporated place is a real finding — every parcel is
+    unincorporated, which is exactly what the Texas rule asserts — so an
+    empty result is returned as a PRESENT, empty layer, never None. None
+    means the layer could not be read at all (service down, no cache, no
+    shapefile), and the caller must hold the rule back rather than treat
+    silence as confirmation.
+    """
+    bbox_poly = _bbox_polygon(min_lon, min_lat, max_lon, max_lat)
+    session = requests.Session()
+    session.headers.update({"User-Agent": BROWSER_UA, "Accept": "application/json"})
+    bbox = f"{min_lon},{min_lat},{max_lon},{max_lat}"
+    features = _paged_query(
+        session, TIGER_PLACES_URL, bbox,
+        out_fields="GEOID,BASENAME,NAME,LSADC,MTFCC,FUNCSTAT,STATE",
+        attempts=3, page_pause=0.5,
+    )
+    if features is not None:
+        gdf = _place_frame(_places_from_features(features))
+        _save_cached_clip(_tiger_places_cache(state_code), gdf, bbox_poly)
+        logger.info("TIGER places (%s): %d incorporated places — cached.",
+                    state_code.upper(), len(gdf))
+        return gdf
+    logger.warning("TIGER places: service unavailable this run.")
+    cached = _load_cached_clip(_tiger_places_cache(state_code), bbox_poly)
+    if cached is not None:
+        logger.info("TIGER places: service unavailable — using the cached "
+                    "clip (%d places).", len(cached))
+        return cached
+    # The TIGER/Line state PLACE shapefile is the canonical fallback. It
+    # is a state file, so the lookup is by state FIPS, not region.
+    fips = STATE_FIPS.get(state_code.upper())
+    if not fips:
+        logger.warning("TIGER places: no state FIPS for %r — layer "
+                       "unavailable.", state_code)
+        return None
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / "place.zip"
+            url = TIGERLINE_PLACE_URL.format(fips=fips)
+            logger.info("TIGER places: service unavailable — downloading the "
+                        "state TIGER/Line PLACE shapefile (%s)…",
+                        url.rsplit("/", 1)[-1])
+            dl = requests.get(url, stream=True, timeout=600,
+                              headers={"User-Agent": BROWSER_UA})
+            dl.raise_for_status()
+            with open(zip_path, "wb") as out:
+                for chunk in dl.iter_content(chunk_size=1 << 20):
+                    if chunk:
+                        out.write(chunk)
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(tmp)
+            shp = next(Path(tmp).glob("*.shp"))
+            full = gpd.read_file(str(shp))
+            full = full.to_crs("EPSG:4326")
+            mtfcc = full["MTFCC"].astype(str).str.strip()
+            keep = full[mtfcc == INCORPORATED_MTFCC]
+            keep = keep[keep.geometry.intersects(bbox_poly)]
+            rows = [{
+                "place_geoid": str(r.get("GEOID") or "").strip(),
+                "place_name": str(r.get("NAME") or "").strip(),
+                "place_basename": str(r.get("BASENAME") or "").strip(),
+                "place_lsad": str(r.get("LSAD") or "").strip(),
+                "geometry": r.geometry,
+            } for _, r in keep.iterrows()]
+            gdf = _place_frame(rows)
+            _save_cached_clip(_tiger_places_cache(state_code), gdf, bbox_poly)
+            logger.info("TIGER places: %d incorporated places from the "
+                        "TIGER/Line state shapefile — cached.", len(gdf))
+            return gdf
+    except Exception as e:  # noqa: BLE001
+        logger.warning("TIGER/Line places fetch failed: %s", e)
+        return None
 
 
 def _padus_state_url(state_code: str) -> Optional[str]:
