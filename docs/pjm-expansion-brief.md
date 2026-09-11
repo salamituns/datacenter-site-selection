@@ -44,10 +44,26 @@ power gate decided for every parcel on PJM RTEP area evidence (CONDITIONAL,
 4 Board-approved upgrades active in the county area). The dry-run read
 0.777 because it runs without database credentials, so the curated
 evidence layers read as missing — dry-run coverage is a floor, not a
-forecast. Water availability stays UNKNOWN: the county's Utilities folder
-is unprobed and no service-area layer is wired. Known next steps: probe
-the county Utilities folder for a water layer, and curate the legislative
-applications record once data-center cases exist in the county.
+forecast. Water availability stays UNKNOWN. The follow-up probe found:
+
+- Licking County's own ArcGIS server publishes **no water layer**. The
+  `Utilities` folder is ArcGIS plumbing (GeometryServer, printing,
+  packaging); `Engineer` holds addresses and tax maps; `Hosted` holds
+  surveys and contours.
+- The City of **Pataskala** — inside the corridor — publishes public
+  utility layers at
+  `services7.arcgis.com/koWQgqubB6fcogq8/.../Utility_Layers_Public/FeatureServer`,
+  including *Water Service Areas* (layer 18) and *Wastewater Service
+  Areas* (layer 40), SR 3729, anonymously queryable; 7 water polygons
+  intersect the corridor. It is city-scale, so wiring it would decide
+  Pataskala-served parcels and leave the rural townships UNKNOWN —
+  honest but partial, and worth doing alongside a county-scale source.
+- **Columbus Public Utilities**, which serves the New Albany/Etna edge,
+  publishes no service-area boundary on its open-data portal that the
+  probe could find.
+
+Also pending: curating the legislative applications record once
+data-center cases exist in the county.
 
 ---
 
