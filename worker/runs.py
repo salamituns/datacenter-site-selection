@@ -139,6 +139,7 @@ class IngestionRun:
             .order("created_at").execute()
         rules = _rows_to_rules(res.data or [])
         _log_rule_currency(jurisdiction, rules)
+        _warn_inert_rules(jurisdiction, rules)
         return rules
 
     def fetch_power_parcel_evidence(self) -> Dict[str, List[Dict[str, Any]]]:
@@ -215,6 +216,57 @@ def _rows_to_rules(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
             for r in rows}
 
 
+# The parameter each gate actually reads out of its rule. A rule row whose
+# params omit this key decides nothing: parcel_gates falls through to
+# DEFAULT_RULE_PARAMS and the row sits in the table looking authoritative.
+#
+# Nine rows were in exactly that state — three counties' floodway rules said
+# fail_pct 25 while the gate read floodway_fail_pct and applied 0.5. The
+# values happened to be the safer ones, which is why it went unnoticed: the
+# verdicts were right and the stated reasons were fiction.
+GATE_GOVERNING_PARAM: Dict[str, str] = {
+    "contiguous_acreage": "min_pass_acres",
+    "floodway": "floodway_fail_pct",
+    "protected_land": "fail_pct",
+    "road_access": "fail_miles",
+    "slope": "max_fail_pct",
+    "water_availability": "pass_overlap_pct",
+    "wetlands": "fail_pct",
+    "power_capacity": "queue_radius_miles",
+    "zoning_dc_use": "by_right",
+}
+
+
+def _warn_inert_rules(jurisdiction: str, rules: Dict[str, Dict[str, Any]]) -> None:
+    """
+    Names rules that look authoritative and govern nothing.
+
+    "Rules are data, not code" is the claim this table exists to make good
+    on, and a row whose params the gate never reads quietly breaks it. The
+    failure is silent by construction: the gate finds no key, takes its
+    built-in default, and produces a perfectly reasonable verdict under a
+    threshold nobody wrote down.
+
+    zoning_dc_use is exempt from the refusal elsewhere in the engine (a
+    zoning layer with no use table stops the run outright); here it is simply
+    reported alongside the others.
+    """
+    inert = []
+    for gate_key, rule in rules.items():
+        needed = GATE_GOVERNING_PARAM.get(gate_key)
+        if not needed:
+            continue
+        params = rule.get("params") or {}
+        if needed not in params:
+            inert.append(f"{gate_key} (no '{needed}' in params; "
+                         f"{rule.get('rule_version')})")
+    if inert:
+        logger.warning(
+            "Rules that decide nothing for %s: %s — the gate falls back to its "
+            "built-in default, so the published threshold is not the one on "
+            "file.", jurisdiction, "; ".join(sorted(inert)))
+
+
 def _log_rule_currency(jurisdiction: str, rules: Dict[str, Dict[str, Any]]) -> None:
     """
     States how old the rules deciding this run are.
@@ -270,6 +322,7 @@ def load_rules_readonly(jurisdiction: str) -> Dict[str, Dict[str, Any]]:
             .order("created_at").execute()
         rules = _rows_to_rules(res.data or [])
         _log_rule_currency(jurisdiction, rules)
+        _warn_inert_rules(jurisdiction, rules)
         logger.info("constraint_rules for %s (read-only): %s",
                     jurisdiction, sorted(rules) or "none")
         return rules

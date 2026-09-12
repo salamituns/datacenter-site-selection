@@ -91,3 +91,77 @@ class TestCurrencyLogging:
         with caplog.at_level(logging.WARNING):
             _log_rule_currency("Nowhere County, ZZ", {})
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+class TestInertRules:
+    """
+    A rule row whose params the gate never reads decides nothing.
+
+    "Rules are data, not code" is the claim constraint_rules exists to make
+    good on, and this failure breaks it silently: the gate finds no key,
+    takes its built-in default, and returns a perfectly reasonable verdict
+    under a threshold nobody wrote down. Nine rows across three counties were
+    in that state — the floodway rows said fail_pct 25 while the gate read
+    floodway_fail_pct and applied 0.5.
+
+    The values happened to be the safer ones, which is exactly why it
+    survived: the verdicts were right and the stated reasons were fiction.
+    """
+
+    def test_a_rule_missing_its_governing_param_is_named(self, caplog):
+        from runs import _warn_inert_rules
+        rules = _rows_to_rules([
+            # The real shape of the defect: floodway params the gate cannot use.
+            {"id": "1", "gate_key": "floodway", "rule_version": "v1",
+             "params": {"fail_pct": 25, "conditional_pct": 5},
+             "reviewed_at": None, "reviewed_against": None}])
+        with caplog.at_level(logging.WARNING):
+            _warn_inert_rules("Franklin County, OH", rules)
+        msgs = " ".join(r.getMessage() for r in caplog.records)
+        assert "floodway" in msgs and "floodway_fail_pct" in msgs
+
+    def test_a_correctly_keyed_rule_raises_nothing(self, caplog):
+        from runs import _warn_inert_rules
+        rules = _rows_to_rules([
+            {"id": "1", "gate_key": "floodway", "rule_version": "v2",
+             "params": {"floodway_fail_pct": 0.5, "floodplain_conditional": True},
+             "reviewed_at": "2026-09-12", "reviewed_against": "44 CFR 60.3(d)(3)"}])
+        with caplog.at_level(logging.WARNING):
+            _warn_inert_rules("Franklin County, OH", rules)
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+    def test_every_gate_the_engine_decides_has_a_governing_param_declared(self):
+        """
+        The map must cover the gates, or a gate can go inert unwatched — the
+        blind spot would be invisible in exactly the way the original was.
+        """
+        from parcel_gates import DEFAULT_RULE_PARAMS
+        from runs import GATE_GOVERNING_PARAM
+        assert set(DEFAULT_RULE_PARAMS) <= set(GATE_GOVERNING_PARAM), (
+            "gates with no declared governing param: "
+            f"{set(DEFAULT_RULE_PARAMS) - set(GATE_GOVERNING_PARAM)}")
+
+    def test_each_declared_param_exists_in_that_gate_s_defaults(self):
+        """
+        And the declared key must be one the gate really reads. A typo here
+        would report every rule as inert, which is the same silence in
+        reverse.
+        """
+        from parcel_gates import DEFAULT_RULE_PARAMS
+        from runs import GATE_GOVERNING_PARAM
+        for gate_key, param in GATE_GOVERNING_PARAM.items():
+            defaults = DEFAULT_RULE_PARAMS.get(gate_key)
+            if defaults is None:
+                continue
+            assert param in defaults, (
+                f"{gate_key}: '{param}' is not a key parcel_gates defaults")
+
+    def test_an_unknown_gate_key_is_ignored_rather_than_flagged(self, caplog):
+        from runs import _warn_inert_rules
+        rules = _rows_to_rules([
+            {"id": "1", "gate_key": "some_future_gate", "rule_version": "v1",
+             "params": {"whatever": 1}, "reviewed_at": None,
+             "reviewed_against": None}])
+        with caplog.at_level(logging.WARNING):
+            _warn_inert_rules("Nowhere County, ZZ", rules)
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
