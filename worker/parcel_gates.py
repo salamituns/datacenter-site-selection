@@ -203,12 +203,16 @@ def _classify_dc_use(
        the underlying zoning district"). Those are carried as context and
        never decide or hold; the citation travels in
        standards_only_reasons.
-    2. Township-scoped codes before flat codes: one code can be two
+    2. A township-wide class in township_classes, which outranks every
+       district within it. Some amendments leave the use unauthorised
+       anywhere in the resolution rather than changing one district, and
+       listing districts instead would assert the list is complete.
+    3. Township-scoped codes before flat codes: one code can be two
        districts in two townships' ordinances (Licking's C-1), so
        "CODE|Township" in district_classes outranks the flat lists, and
        a colliding code with no scoped row stays unmapped rather than
        being decided by whichever township wrote the flat entry.
-    3. The flat by_right / special_exception / unknown_jurisdiction /
+    4. The flat by_right / special_exception / unknown_jurisdiction /
        prohibited lists, exactly as before.
     """
     district_classes = dc_map.get("district_classes") or {}
@@ -257,6 +261,23 @@ def _classify_dc_use(
         # travels with the base verdict so the citation is not lost on
         # the fall-through.
     if township:
+        # A township-wide class outranks every district in it.
+        #
+        # Some amendments do not touch one district — they leave the use
+        # with no authorisation anywhere in the resolution. Harrison
+        # Township's 2026-07-06 hearing struck the proposed "Data Centers"
+        # conditional use and its definitions before adoption, so the use is
+        # listed in no district at all.
+        #
+        # Expressing that as a list of "CODE|Harrison" entries would assert
+        # the list is complete, and a district absent from the survey today
+        # would fall straight through to the flat special_exception list —
+        # offering a special exception the township never created. The
+        # township level is where the instrument operates, so it is where
+        # the rule states it.
+        township_class = (dc_map.get("township_classes") or {}).get(township)
+        if township_class:
+            return township_class, {**basis, "township_wide": township}
         scoped = f"{zone_code}|{township}"
         if scoped in district_classes:
             return district_classes[scoped], {**basis, "scoped_key": scoped}

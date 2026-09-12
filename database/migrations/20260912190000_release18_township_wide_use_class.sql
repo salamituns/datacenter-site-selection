@@ -1,0 +1,39 @@
+-- ============================================================================
+-- Migration: release18_township_wide_use_class
+-- Description: Class a use at township level where the amendment does.
+--
+--   Harrison Township's 2026-07-06 public hearing struck the Zoning
+--   Commission's proposed "Data Centers" conditional use from Article 16.2
+--   and the Article 3 definitions before adoption, 3-0. The use is therefore
+--   listed in no district of the township's resolution.
+--
+--   The use table did not reflect it. 2026-township-reviewed3 cited those
+--   minutes in reviewed_against without changing the mapping, so Harrison's
+--   PUD district still fell through to the flat special_exception list and
+--   4 parcels read CONDITIONAL — offering a special exception the trustees
+--   had declined to create — while the moratorium gate read FAIL on the very
+--   same instrument. Two gates, one instrument, opposite reasons.
+--
+--   That is the third appearance of one pattern: a rule version named for an
+--   amendment it does not encode. Loudoun's 2023-ord+2025-zoam listed IP, GI
+--   and MR-HI as by-right after ZOAM-2024-0001 removed exactly that; this is
+--   the same shape at township scale.
+--
+--   township_classes outranks every district within a township. Enumerating
+--   "CODE|Harrison" entries would assert the enumeration is complete, and a
+--   district absent from today's survey would fall straight through to the
+--   flat list. The township level is where the instrument operates, so it is
+--   where the rule states it.
+--
+--   Rule row 2026-township-reviewed4 applied to production 2026-09-12,
+--   superseding reviewed3. St. Albans is included for when the survey reaches
+--   it; its key spelling needs confirming against the county zoning layer at
+--   that point, and until then the moratorium gate covers those parcels from
+--   jurisdiction_restrictions — the two gates cover each other.
+-- ============================================================================
+
+-- Code change only; the rule row is data, applied with this release.
+-- parcel_gates._classify_district now consults params->'township_classes'
+-- after the overlay pass and before "CODE|Township", returning
+-- {"township_wide": "<township>"} in the verdict details so the override is
+-- legible on the parcel rather than inferred from an absent district entry.

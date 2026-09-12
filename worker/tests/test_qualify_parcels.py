@@ -1057,3 +1057,81 @@ class TestParcelSpecificApprovalOutranksDistrict:
         assert status == "PASS"
         assert details["approval_date"] == "2026-06-16"
         assert set(details["approvals"]) == {"ZMAP-2008-0017", "SPEX-2025-0031"}
+
+
+class TestTownshipWideClass:
+    """
+    Some amendments leave a use unauthorised anywhere in a resolution.
+
+    Harrison Township's 2026-07-06 public hearing struck the proposed
+    "Data Centers" conditional use from Article 16.2 and its Article 3
+    definitions before adoption, so the use is listed in no district of the
+    township. Expressing that as a list of `CODE|Harrison` entries would
+    assert the list is complete — and a district absent from today's survey
+    would fall through to the flat special_exception list, offering a special
+    exception the trustees had declined to create. That is precisely what
+    happened: 4 PUD parcels read CONDITIONAL while the moratorium gate read
+    FAIL on the same instrument.
+    """
+
+    def qualify(self, rules, township):
+        geoms = {pin: square(acres, i) for i, (pin, acres, _) in enumerate(PARCELS)}
+        parcels = gpd.GeoDataFrame(
+            {"pin": [p for p, _, _ in PARCELS],
+             "legal_acreage": [a for _, a, _ in PARCELS],
+             "geometry": [geoms[p] for p, _, _ in PARCELS]},
+            crs=PLANAR_CRS).to_crs("EPSG:4326")
+        zoning = gpd.GeoDataFrame(
+            {"zone": [z for _, _, z in PARCELS],
+             "zone_name": [f"{z} district" for _, _, z in PARCELS],
+             "ordinance": ["2026"] * len(PARCELS),
+             "township": [township] * len(PARCELS),
+             "geometry": [geoms[p].buffer(50) for p, _, _ in PARCELS]},
+            crs=PLANAR_CRS).to_crs("EPSG:4326")
+        _, _, gates, _ = qualify_parcels(
+            parcels_gdf=parcels, zoning_gdf=zoning, wetlands_gdf=None,
+            nfhl_gdf=None, lines_gdf=None, subs_gdf=None, rules=rules,
+            state_code="OH", county_name="Licking", snapshots={},
+            retrieve_time="2026-09-12T00:00:00+00:00")
+        g = pd.DataFrame(gates)
+        return g[g["gate_key"] == "zoning_dc_use"]
+
+    # PDGI stands in for a district the flat lists would allow.
+    BASE = {"zoning_dc_use": {"params": {
+        "by_right": [], "special_exception": ["PDGI"],
+        "prohibited": ["R1"], "unknown_jurisdiction": ["TOWNS"]}}}
+
+    def with_township_classes(self, mapping):
+        import copy
+        rules = copy.deepcopy(self.BASE)
+        rules["zoning_dc_use"]["params"]["township_classes"] = mapping
+        return rules
+
+    def test_township_wide_class_prohibits_a_district_the_flat_list_allows(self):
+        z = self.qualify(self.with_township_classes({"Harrison": "prohibited"}),
+                         "Harrison")
+        # Every PDGI parcel would otherwise be CONDITIONAL.
+        assert set(z[z["status"] != "UNKNOWN"]["status"]) == {"FAIL"}
+
+    def test_a_district_not_enumerated_anywhere_is_still_caught(self):
+        """The reason this is township-level: completeness cannot be asserted."""
+        z = self.qualify(self.with_township_classes({"Harrison": "prohibited"}),
+                         "Harrison")
+        row = z[z["parcel_key"] == "OH-LICKING-CLEAN"]
+        assert row["status"].iloc[0] == "FAIL"
+        assert row["details"].iloc[0]["township_wide"] == "Harrison"
+
+    def test_another_township_is_untouched(self):
+        # A township-wide ban binds one township, not its county.
+        z = self.qualify(self.with_township_classes({"Harrison": "prohibited"}),
+                         "Liberty")
+        row = z[z["parcel_key"] == "OH-LICKING-CLEAN"]
+        assert row["status"].iloc[0] == "CONDITIONAL"
+
+    def test_without_the_mapping_the_district_falls_through(self):
+        # The defect itself, pinned: no township class, so the flat
+        # special_exception list answers and offers an exception that the
+        # township removed.
+        z = self.qualify(self.BASE, "Harrison")
+        row = z[z["parcel_key"] == "OH-LICKING-CLEAN"]
+        assert row["status"].iloc[0] == "CONDITIONAL"
