@@ -123,3 +123,96 @@ time, verified, or `UNKNOWN`.
   an unfalsifiable number; this gate records adopted instruments, not mood.
 - **No predicting moratoria.** A county that might pause is not a county that
   has, and the engine does not forecast.
+
+---
+
+## Status and next step (2026-09-12)
+
+**Phase 0 is done.** The TIGER Places join shipped with the Texas no-zoning
+rule; every parcel already resolves to its incorporated place, persisted as
+the `incorporated_place` metric (778 parcels across 18 municipalities).
+
+**The evidence layer is built and populated.** `jurisdiction_restrictions`
+(release 17/17b) holds four statuses rather than a boolean — `adopted`,
+`pending`, `none_found`, `unverified` — with `basis`, `reviewed_at` and
+`sources_checked` required on every row, and `v_jurisdiction_restrictions`
+deriving `in_force_today` from the dates.
+
+Two things were learned populating it, and both change the gate.
+
+### Townships are the level that acts
+
+Licking County has no moratorium — Microsoft restarted 869 MW across Heath,
+Hebron and New Albany during 2026. **St. Albans Township** banned data centres
+outright on 2026-03-10. Other central-Ohio townships (Jackson, Jerome,
+Washington) have adopted temporary pauses.
+
+So the gate matches at three levels, and the table now has a column for each:
+county, incorporated place, and **minor civil division**. In Ohio the township
+is the zoning authority for unincorporated land, which is why the Licking use
+table is township-keyed already.
+
+The engine currently infers township from the `zoning_ordinance_vintage`
+string (`"Bennington Township Zoning Resolution"`). That works and is fragile —
+it depends on how the county labels its own layer. **Persist township properly
+from TIGER county subdivisions**: the same
+`Places_CouSub_ConCity_SubMCD` service already used for places, a different
+layer, cached per state like the rest. Emit it as a metric beside
+`incorporated_place`.
+
+### A ban is not a pause, and they belong to different gates
+
+St. Albans did not adopt a moratorium. It struck "Data Processing Services"
+from its **conditionally permitted uses** — a zoning text amendment. A
+moratorium suspends processing while the use table still permits the use; this
+removed the use. `expires_date` is NULL because a use-table amendment does not
+lapse.
+
+Its enforcement mechanism is therefore the **zoning gate**: if the survey ever
+reaches St. Albans, that township's `constraint_rules` row must carry the
+removal, and the moratorium gate should not be the thing that catches it. The
+temporary township pauses are this gate's actual business.
+
+### Gate logic
+
+Collect every applicable row — the county, plus whichever of place or
+subdivision contains the parcel — and take the most restrictive:
+
+| condition | verdict |
+| --- | --- |
+| any `adopted` with `in_force_today` | `FAIL` |
+| any `unverified` | `UNKNOWN` |
+| any `adopted` that has lapsed, or any `pending` | `CONDITIONAL` |
+| all applicable rows `none_found` | `PASS` |
+| **no row for the jurisdiction at all** | `UNKNOWN` |
+
+That last line is the one to get right. A jurisdiction nobody has reviewed
+must read UNKNOWN, never PASS — `none_found` is a positive statement with a
+date and sources behind it, and the absence of a row is not that statement.
+This is the same refusal the zoning gate already makes for a region with no
+use table.
+
+A lapsed moratorium reads CONDITIONAL rather than PASS: the pause is over, but
+a jurisdiction that paused once is a live political-risk signal, and the row
+survives precisely so that stays visible.
+
+### Verdicts must cite the instrument, not the tracker
+
+`{adopting_body} {instrument}, adopted {adopted_date}` — and for `pending`,
+say what is pending and when it is decided. Record `reviewed_at` in the
+verdict details so a reader can see how fresh the check is, the same way the
+slope cache carries its retrieval date.
+
+### Order
+
+| # | task | gate |
+| --- | --- | --- |
+| 1 | persist township from TIGER CouSub | every unincorporated parcel resolves to a township |
+| 2 | wire `moratorium_status` against the three levels | an unreviewed jurisdiction reads UNKNOWN, not PASS |
+| 3 | dossier surfacing with the instrument cited | verdict names the body and date, never a tracker |
+| 4 | republish all five regions | St. Albans still binds nothing; Pataskala reads CONDITIONAL |
+
+Expect no verdict to change except Pataskala's parcels moving to CONDITIONAL
+on the November ballot measure. That is the correct outcome: the research
+found no adopted restriction binding any currently surveyed parcel, and a gate
+that reports that honestly is doing its job.
