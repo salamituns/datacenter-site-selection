@@ -674,3 +674,98 @@ class TestNoCountyZoningRule:
             if g["gate_key"] == "zoning_dc_use":
                 assert g["status"] == "UNKNOWN"
                 assert "No zoning district overlap" in g["rationale"]
+
+
+class TestParcelSpecificApprovalOutranksDistrict:
+    """
+    An approved ZMAP/SPEX/ZCPA for a data-centre use beats the district.
+
+    Loudoun's ZOAM-2024-0001 ended by-right data centres in IP, GI and MR-HI,
+    which is correct and now reflected in the use tables. It also meant the
+    engine told seven parcels they needed a Special Exception the Board had
+    already granted — one of them holding an approved SPEX in the engine's
+    own curated records. A district classification is a rule about a category
+    the land belongs to; an approval is the governing body permitting this
+    use on this land.
+    """
+
+    def qualify(self, evidence):
+        geoms = {pin: square(acres, i) for i, (pin, acres, _) in enumerate(PARCELS)}
+        parcels = gpd.GeoDataFrame(
+            {"pin": [p for p, _, _ in PARCELS],
+             "legal_acreage": [a for _, a, _ in PARCELS],
+             "geometry": [geoms[p] for p, _, _ in PARCELS]},
+            crs=PLANAR_CRS).to_crs("EPSG:4326")
+        zoning = gpd.GeoDataFrame(
+            {"zone": [z for _, _, z in PARCELS],
+             "zone_name": [f"{z} district" for _, _, z in PARCELS],
+             "ordinance": ["2023"] * len(PARCELS),
+             "geometry": [geoms[p].buffer(50) for p, _, _ in PARCELS]},
+            crs=PLANAR_CRS).to_crs("EPSG:4326")
+        _, _, gates, _ = qualify_parcels(
+            parcels_gdf=parcels, zoning_gdf=zoning,
+            wetlands_gdf=None, nfhl_gdf=None, lines_gdf=None, subs_gdf=None,
+            # HOUSES sits in a district data centres may not occupy; CLEAN in
+            # one requiring a Special Exception.
+            rules={"zoning_dc_use": {"params": {
+                "by_right": [], "special_exception": ["PDGI"],
+                "prohibited": ["R1"], "unknown_jurisdiction": ["TOWNS"]}}},
+            state_code="VA", county_name="Loudoun", snapshots={},
+            retrieve_time="2026-09-11T00:00:00+00:00",
+            parcel_evidence=evidence,
+        )
+        return pd.DataFrame(gates)
+
+    def verdict_for(self, gates, pin):
+        row = gates[(gates["parcel_key"] == f"VA-LOUDOUN-{pin}")
+                    & (gates["gate_key"] == "zoning_dc_use")]
+        return row["status"].iloc[0], row["details"].iloc[0]
+
+    def test_approval_turns_special_exception_into_pass(self):
+        gates = self.qualify({"VA-LOUDOUN-CLEAN": [{
+            "application_number": "SPEX-2019-0028", "application_type": "SPEX",
+            "approval_date": "2020-09-01", "authorizes_dc_use": True,
+            "source_url": "https://example.invalid/spex"}]})
+        status, details = self.verdict_for(gates, "CLEAN")
+        assert status == "PASS"
+        assert details["approvals"] == ["SPEX-2019-0028"]
+        # The district it overrode is recorded, so the override is legible.
+        assert details["district_would_have_read"] == "special_exception"
+
+    def test_without_an_approval_the_district_still_decides(self):
+        gates = self.qualify(None)
+        assert self.verdict_for(gates, "CLEAN")[0] == "CONDITIONAL"
+
+    def test_power_only_evidence_grants_nothing(self):
+        """
+        The reason the flag is explicit. power_parcel_evidence is curated for
+        the power gate and may hold a filing that establishes no land-use
+        right at all; inferring one from the application type would eventually
+        hand out a zoning PASS the record never gave.
+        """
+        gates = self.qualify({"VA-LOUDOUN-CLEAN": [{
+            "application_number": "ZMAP-9999-0001", "application_type": "ZMAP",
+            "approval_date": "2024-01-01", "authorizes_dc_use": False}]})
+        assert self.verdict_for(gates, "CLEAN")[0] == "CONDITIONAL"
+
+    def test_an_approval_does_not_rescue_a_prohibited_district_silently(self):
+        # It still reads PASS — that is the rule — but the details must say
+        # which district it overrode, so nobody reads it as an unqualified
+        # by-right permission.
+        gates = self.qualify({"VA-LOUDOUN-HOUSES": [{
+            "application_number": "ZCPA-2023-0005", "application_type": "ZCPA",
+            "approval_date": "2025-03-18", "authorizes_dc_use": True}]})
+        status, details = self.verdict_for(gates, "HOUSES")
+        assert status == "PASS"
+        assert details["district_would_have_read"] == "prohibited"
+
+    def test_the_most_recent_approval_is_cited(self):
+        gates = self.qualify({"VA-LOUDOUN-CLEAN": [
+            {"application_number": "ZMAP-2008-0017", "application_type": "ZMAP",
+             "approval_date": "2011-07-12", "authorizes_dc_use": True},
+            {"application_number": "SPEX-2025-0031", "application_type": "SPEX",
+             "approval_date": "2026-06-16", "authorizes_dc_use": True}]})
+        status, details = self.verdict_for(gates, "CLEAN")
+        assert status == "PASS"
+        assert details["approval_date"] == "2026-06-16"
+        assert set(details["approvals"]) == {"ZMAP-2008-0017", "SPEX-2025-0031"}

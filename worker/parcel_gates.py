@@ -1229,7 +1229,44 @@ def qualify_parcels(
                     f"the {code} overlay does not modify the base "
                     f"district's use permissions ({reason})"
                     for code, reason in inert.items())
-            if dc_status == "by_right":
+            # A parcel-specific approval outranks its district.
+            #
+            # A district classification is a rule about a category this land
+            # belongs to; an approved ZMAP, SPEX or ZCPA is the governing body
+            # permitting this use on this land, by name and on a date. When
+            # the two disagree the approval is the better evidence, and the
+            # engine must not tell a parcel it needs a Special Exception the
+            # Board has already granted it — which is exactly what Loudoun's
+            # ZOAM-2024-0001 caused on seven parcels, one of them holding an
+            # approved SPEX in this engine's own records.
+            #
+            # Only a record the curator marked as authorising a data-centre
+            # use counts. power_parcel_evidence is curated for the power gate
+            # and may hold filings that establish nothing about land use.
+            dc_approvals = [
+                r for r in evidence_of.get(pin, [])
+                if r.get("authorizes_dc_use")
+            ]
+            if dc_approvals:
+                approval = max(dc_approvals,
+                               key=lambda r: r.get("approval_date") or "")
+                gate(pin, "zoning_dc_use", "PASS",
+                     f"{approval.get('application_type') or 'Application'} "
+                     f"{approval['application_number']} approved "
+                     f"{approval['approval_date']} authorises a data-center use "
+                     f"on this parcel — a parcel-specific approval by the "
+                     f"governing body, which outranks the {zone_code} district "
+                     f"classification. Approval conditions and proffers are a "
+                     f"diligence item.",
+                     details={
+                         **zone_details,
+                         "basis": "parcel-specific land-use approval",
+                         "approvals": [r["application_number"] for r in dc_approvals],
+                         "approval_date": approval["approval_date"],
+                         "source_url": approval.get("source_url"),
+                         "district_would_have_read": dc_status,
+                     })
+            elif dc_status == "by_right":
                 gate(pin, "zoning_dc_use", "PASS",
                      f"Zoned {zone_code} ({zr['zone_name']}){combo} — data centers "
                      f"are a by-right principal use in this district under the "
