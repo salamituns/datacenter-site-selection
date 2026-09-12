@@ -212,7 +212,74 @@ slope cache carries its retrieval date.
 | 3 | dossier surfacing with the instrument cited | verdict names the body and date, never a tracker |
 | 4 | republish all five regions | St. Albans still binds nothing; Pataskala reads CONDITIONAL |
 
-Expect no verdict to change except Pataskala's parcels moving to CONDITIONAL
-on the November ballot measure. That is the correct outcome: the research
-found no adopted restriction binding any currently surveyed parcel, and a gate
-that reports that honestly is doing its job.
+---
+
+## Shipped — the township layer and the gate (2026-09-12, release18)
+
+**The township layer.** `fetch_subdivisions` (TIGERweb
+Places_CouSub_ConCity_SubMCD layer 1, MTFCC G4040; TIGER/Line state
+COUSUB shapefile fallback; state clip cache like the rest) resolves every
+parcel to the minor civil division holding its majority, persisted as the
+`county_subdivision` metric beside `incorporated_place`. Measured: 1,872
+of 1,990 Licking parcels resolve to a township; Loudoun's 37 MCDs are all
+election districts and resolve zero — which is correct, not a gap.
+
+**The gate.** `moratorium_status` collects the rows for the jurisdictions
+that govern each parcel — its county, its incorporated place (if the
+majority lies inside one), its township — and takes the most restrictive:
+`adopted` and in force on the run date → FAIL; any level with no row, or
+any `unverified` row → UNKNOWN; `pending`, or `adopted` but lapsed or not
+yet effective → CONDITIONAL; every level `none_found` → PASS. The verdict
+is evaluated against the run's own date (recorded in the details, so a
+verdict can be re-derived), and a lapsed moratorium re-opens the gate by
+itself while the row survives as a political-risk signal. Rationales cite
+`{adopting_body}, {instrument}, adopted {date}` — never a tracker — and
+carry `reviewed_at`, `source_url` and per-level statuses in the details.
+
+Four semantics the implementation had to decide, each settled by the
+evidence rows' own text:
+
+1. **A county `none_found` row speaks only for the county.** Taylor's row
+   says it outright: "incorporated places within the county are recorded
+   separately as they are reviewed", and Licking's separates the St.
+   Albans township ban from the county. So a parcel inside Abilene or an
+   unreviewed township reads UNKNOWN even where the county is checked
+   clear — the same refusal the zoning gate makes for TWN parcels.
+2. **Only governing MCDs match at the township level.** An MCD is only
+   sometimes a government: an Ohio township (FIPS class 44, functioning)
+   zones unincorporated land; a Virginia election district (27/28) or a
+   Texas CCD (22) is a statistical artefact nobody adopts ordinances
+   through. The class test lives beside the matching logic
+   (`TOWNSHIP_MCD_CLASSES`), extended per state as the survey grows.
+3. **An unavailable subdivision layer holds unincorporated parcels at
+   UNKNOWN**, the same present/None contract as the places layer —
+   silence is never "no township", which is not a thing in a tiled
+   county. Parcels inside a place are unaffected: township zoning does
+   not reach municipal limits.
+4. **A parcel-specific land-use approval outranks the district, not the
+   moratorium** — the approvals override already shipped in the zoning
+   gate is untouched; a moratorium in force fails the parcel regardless
+   of what the use table permits, because a pause suspends processing
+   itself.
+
+**Expected verdicts, confirmed by the dry runs and the republish:** no
+FAIL anywhere (St. Albans binds no surveyed parcel — its corridor has
+none); Pataskala's parcels CONDITIONAL on the pending November ballot
+measure; every other Licking parcel UNKNOWN (townships unreviewed — the
+honest state until each is read); Loudoun CONDITIONAL on the Board's
+pending pause motion, except the 52 town parcels which stay UNKNOWN
+(their municipalities unreviewed); Prince William PASS outside towns,
+UNKNOWN inside them; Taylor PASS outside places, UNKNOWN inside them
+(Abilene et al. unreviewed). Evidence coverage dips where the gate is
+honestly undecided — Licking 0.900 → 0.811 of a now-ten-gate set — which
+is the coverage metric reporting the truth rather than the gate guessing.
+
+**Verification.** Worker suite 241 tests (new: unreviewed-township
+UNKNOWN, pending-measure CONDITIONAL with instrument cited, adopted-ban
+FAIL, all-levels-checked-clear PASS, unavailable-layer hold,
+no-rows-for-state, lapsed → CONDITIONAL, not-yet-effective → CONDITIONAL,
+unverified → UNKNOWN, township metric persisted, missing-subdivision-layer
+hold). Client gate label added (`moratorium_status: "Moratorium /
+restriction"`). One pre-existing parcel decision now flags stale with
+"moratorium_status: added" — the fingerprint view doing exactly its job
+when the gate set grows.

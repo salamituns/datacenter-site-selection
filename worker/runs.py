@@ -158,6 +158,19 @@ class IngestionRun:
                         sum(len(v) for v in out.values()), len(out))
         return out
 
+    def load_jurisdiction_restrictions(self, state_code: str
+                                       ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Moratorium/restriction evidence rows for a state, for the
+        moratorium gate. Rows are few (one per reviewed jurisdiction) and
+        the gate matches them to parcels by county, place and township
+        name, so the whole state loads and the matching happens where the
+        parcel's jurisdictions are known. None means the table could not
+        be read — the gate then holds at UNKNOWN rather than reading
+        silence as "nothing restricted".
+        """
+        return _load_jurisdiction_restrictions(self.client, state_code)
+
     # ── staged writes (chunked inserts, nothing published yet) ──────────
 
     def _stage(self, table: str, rows: List[Dict[str, Any]]) -> None:
@@ -330,3 +343,56 @@ def load_rules_readonly(jurisdiction: str) -> Dict[str, Dict[str, Any]]:
         logger.warning("constraint_rules unreadable (%s) — built-in defaults "
                        "only; a zoning-supplying run will refuse.", e)
         return {}
+
+
+# The moratorium gate's evidence rows — one SELECT, shared by the
+# publishing client and the dry run's read-only one, so both decide
+# against the same rows. None is "could not read", never "no rows": the
+# distinction is the whole contract (an unread layer holds the gate at
+# UNKNOWN; an empty one means no jurisdiction reviewed yet, which also
+# reads UNKNOWN but says so honestly).
+_RESTRICTION_FIELDS = (
+    "state_code,county_name,place_name,subdivision_name,status,"
+    "instrument,adopting_body,adopted_date,effective_date,expires_date,"
+    "scope,source_url,basis,reviewed_at,sources_checked"
+)
+
+
+def _load_jurisdiction_restrictions(client: Any, state_code: str
+                                    ) -> Optional[List[Dict[str, Any]]]:
+    try:
+        res = client.table("jurisdiction_restrictions") \
+            .select(_RESTRICTION_FIELDS) \
+            .eq("state_code", state_code.upper()) \
+            .order("created_at").execute()
+        rows = res.data or []
+        logger.info("jurisdiction_restrictions for %s: %d rows.",
+                    state_code.upper(), len(rows))
+        return rows
+    except Exception as e:  # noqa: BLE001
+        logger.warning("jurisdiction_restrictions unreadable (%s) — "
+                       "moratorium gate held at UNKNOWN.", e)
+        return None
+
+
+def load_jurisdiction_restrictions_readonly(state_code: str
+                                            ) -> Optional[List[Dict[str, Any]]]:
+    """
+    Same rows as IngestionRun.load_jurisdiction_restrictions, without a
+    write client — the table is world-readable, so a dry run decides
+    against the evidence a publish would use.
+    """
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+    if not url or not key:
+        logger.info("No client for jurisdiction_restrictions — moratorium "
+                    "gate held at UNKNOWN.")
+        return None
+    try:
+        from supabase import create_client
+        return _load_jurisdiction_restrictions(
+            create_client(url, key), state_code)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("jurisdiction_restrictions unreadable (%s) — "
+                       "moratorium gate held at UNKNOWN.", e)
+        return None

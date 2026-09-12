@@ -175,6 +175,17 @@ _DC_CLASS_RESTRICTIVENESS = {"by_right": 0, "special_exception": 1, "prohibited"
 # overlay-covered parcel (~100%) stays honestly held.
 OVERLAY_MIN_SHARE_PCT = 5.0
 
+# FIPS MCD classes that are governing jurisdictions — a body that can
+# adopt a moratorium or a zoning text. An Ohio township (class 44,
+# functioning) is the zoning authority for unincorporated land; a
+# Virginia election district (classes 27/28) or a Texas CCD (22) is a
+# statistical artefact nobody adopts ordinances through. A non-functioning
+# MCD (FUNCSTAT N/S/F) is historical. Extended per state as the survey
+# grows; until a state's townships are added, its MCDs simply do not
+# match at this level.
+TOWNSHIP_MCD_CLASSES = {"44"}
+FUNCTIONING_MCD_FUNCSTAT = "A"
+
 
 def _classify_dc_use(
     zone_code: str,
@@ -353,6 +364,8 @@ def qualify_parcels(
     padus_gdf: Optional[gpd.GeoDataFrame] = None,
     slopes: Optional[Dict[Any, Tuple[Optional[float], Optional[float], int]]] = None,
     places_gdf: Optional[gpd.GeoDataFrame] = None,
+    subdivisions_gdf: Optional[gpd.GeoDataFrame] = None,
+    restrictions: Optional[List[Dict[str, Any]]] = None,
     utility_gdf: Optional[gpd.GeoDataFrame] = None,
     rtep_df: Optional[pd.DataFrame] = None,
     queue_gdf: Optional[gpd.GeoDataFrame] = None,
@@ -569,6 +582,65 @@ def qualify_parcels(
                 }
         except Exception as e:  # noqa: BLE001
             logger.warning("Incorporated-places overlay failed: %s", e)
+
+    # County subdivisions (TIGER): the minor civil division containing
+    # the parcel's majority — in the township states, the body that
+    # zones (and pauses) unincorporated land. The same majority test as
+    # places: MCDs tile the county, so a parcel sits overwhelmingly in
+    # one, and the share is recorded rather than hidden in a boolean.
+    # The frame carries every MCD class; which classes are GOVERNING
+    # jurisdictions (an Ohio township is, a Virginia election district
+    # is not) is decided at match time, one constant away from the
+    # matching logic it governs.
+    subdiv_of: Dict[int, Dict[str, Any]] = {}
+    if subdivisions_gdf is not None and len(subdivisions_gdf) > 0:
+        try:
+            inter = gpd.overlay(
+                planar[["geometry"]].reset_index(names="pidx"),
+                subdivisions_gdf.to_crs(PLANAR_CRS)[
+                    ["sub_geoid", "sub_name", "sub_lsad",
+                     "sub_funcstat", "geometry"]],
+                how="intersection",
+            )
+            if len(inter) > 0:
+                inter["area"] = inter.geometry.area
+                parcel_areas = planar.geometry.area
+                inter["pct"] = (
+                    inter["area"] / inter["pidx"].map(parcel_areas) * 100.0)
+                best = inter.sort_values("pct", ascending=False) \
+                    .drop_duplicates("pidx").set_index("pidx")
+                subdiv_of = {
+                    int(i): {"name": str(r.sub_name),
+                             "geoid": str(r.sub_geoid),
+                             "lsad": str(r.sub_lsad),
+                             "funcstat": str(r.sub_funcstat),
+                             "pct": float(r.pct)}
+                    for i, r in best.iterrows() if r.pct >= 50.0
+                }
+        except Exception as e:  # noqa: BLE001
+            logger.warning("County-subdivisions overlay failed: %s", e)
+
+    # Moratorium evidence rows, normalised once. Matching is by
+    # jurisdiction name at three levels — county, incorporated place,
+    # township — and the levels come from the layers above plus the
+    # run's own county. None means the table could not be read (the gate
+    # holds at UNKNOWN); an empty list means no jurisdiction reviewed
+    # yet, which also reads UNKNOWN but says so honestly.
+    restrictions_norm: List[Dict[str, Any]] = []
+    for r in (restrictions or []):
+        if str(r.get("state_code") or "").upper() != state_code.upper():
+            continue
+        rr = dict(r)
+        rr["_level"] = ("place" if r.get("place_name")
+                        else "subdivision" if r.get("subdivision_name")
+                        else "county" if r.get("county_name") else None)
+        rr["_county"] = (str(r.get("county_name") or "").strip().lower()
+                         or None)
+        rr["_place"] = (str(r.get("place_name") or "").strip().lower() or None)
+        rr["_sub"] = (str(r.get("subdivision_name") or "").strip().lower()
+                      or None)
+        if rr["_level"]:
+            restrictions_norm.append(rr)
 
     # Power proximity (real HIFLD only — no synthetic distances ever)
     line_dist_mi: Optional[pd.Series] = None
@@ -1105,6 +1177,19 @@ def qualify_parcels(
                    details={"geoid": p["geoid"],
                             "overlap_pct": round(p["pct"], 3)})
 
+        # County subdivision (TIGER): the MCD containing the majority,
+        # recorded for every parcel the layer resolves. Absent means the
+        # layer was unavailable or the parcel's majority fell in no MCD
+        # — never "no township", which is not a thing in a tiled county.
+        if subdivisions_gdf is not None and i in subdiv_of:
+            s = subdiv_of[i]
+            metric(pin, "county_subdivision", None, text_value=s["name"],
+                   layer="county_subdivisions", evidence="observed",
+                   details={"geoid": s["geoid"],
+                            "lsadc": s["lsad"],
+                            "funcstat": s["funcstat"],
+                            "overlap_pct": round(s["pct"], 3)})
+
         if line_dist_mi is not None and i in line_dist_mi.index:
             metric(pin, "distance_to_transmission_miles", line_dist_mi.loc[i],
                    unit="miles", evidence="derived", layer="power_lines")
@@ -1316,6 +1401,210 @@ def qualify_parcels(
                      f"reviewed mapping; use status remains UNKNOWN until the "
                      f"ordinance use table is checked.",
                      details=zone_details)
+
+        # ── Moratorium / political-risk gate ──────────────────────────
+        # Is a data-centre application pause, or an equivalent adopted
+        # restriction, in force for a jurisdiction that governs THIS
+        # parcel? The evidence is jurisdiction_restrictions — manual
+        # rows, each citing the adopting body's own instrument, because
+        # an ordinance is evidence and a tracker is a search result.
+        #
+        # A parcel is governed at up to three levels: its county, its
+        # incorporated place (if its majority lies inside one), and its
+        # township (in the township states). Each level's row speaks only
+        # for that level — a county checked clear says nothing about its
+        # municipalities, which the rows themselves state ("incorporated
+        # places within the county are recorded separately as they are
+        # reviewed") — so a level with no row reads UNKNOWN, never PASS.
+        #
+        # The verdict is a function of the calendar: it is evaluated
+        # against the run's own date (recorded, so a verdict can be
+        # re-derived), and a lapsed moratorium re-opens the gate by
+        # itself while the row survives as a political-risk signal.
+        if restrictions is None:
+            gate(pin, "moratorium_status", "UNKNOWN",
+                 "Restriction evidence layer unavailable this run — "
+                 "whether a data-centre moratorium binds this parcel is "
+                 "unverified. Never cleared by silence.",
+                 details={"restrictions_layer": "missing"})
+        else:
+            mora_eval_date = str(retrieve_time or "")[:10]
+            place_ref = place_of.get(i)
+            subdiv_ref = subdiv_of.get(i)
+            is_township = (
+                subdiv_ref is not None
+                and subdiv_ref["lsad"] in TOWNSHIP_MCD_CLASSES
+                and subdiv_ref["funcstat"] == FUNCTIONING_MCD_FUNCSTAT)
+            county_key = (county_name or "").strip().lower()
+            place_key = (place_ref["name"].strip().lower()
+                         if place_ref else None)
+            subdiv_key = (subdiv_ref["name"].strip().lower()
+                          if is_township else None)
+            levels: List[Tuple[str, str, List[Dict[str, Any]]]] = [
+                (f"the county ({county_name})", "county",
+                 [r for r in restrictions_norm
+                  if r["_level"] == "county" and r["_county"] == county_key]),
+            ]
+            if place_key:
+                levels.append((f"{place_ref['name']}", "place",
+                               [r for r in restrictions_norm
+                                if r["_level"] == "place"
+                                and r["_place"] == place_key]))
+            if subdiv_key:
+                levels.append((f"{subdiv_ref['name']}", "township",
+                               [r for r in restrictions_norm
+                                if r["_level"] == "subdivision"
+                                and r["_sub"] == subdiv_key]))
+            if subdivisions_gdf is None and place_key is None:
+                # The subdivision layer is unavailable and the parcel
+                # sits outside every incorporated place: in the township
+                # states its township is unreadable, and silence must
+                # not read as "no township", which is not a thing in a
+                # tiled county. (A parcel inside a place is governed by
+                # the municipality — township zoning does not reach
+                # municipal limits — so only unincorporated parcels
+                # carry this level.)
+                levels.append(
+                    ("the township (subdivision layer unavailable)",
+                     "township", []))
+
+            def _in_force(r: Dict[str, Any]) -> Optional[bool]:
+                # True = binding on the run date; False = lapsed;
+                # None = adopted but not yet effective.
+                eff = str(r.get("effective_date") or "")[:10]
+                exp = str(r.get("expires_date") or "")[:10]
+                if eff and eff > mora_eval_date:
+                    return None
+                if exp and exp <= mora_eval_date:
+                    return False
+                return True
+
+            all_rows = [r for _lvl, _kind, rows in levels for r in rows]
+            adopted = [r for r in all_rows if r.get("status") == "adopted"]
+            binding = [r for r in adopted if _in_force(r) is True]
+            not_binding = [r for r in adopted if _in_force(r) is not True]
+            unverified = [r for r in all_rows
+                          if r.get("status") == "unverified"]
+            pending = [r for r in all_rows if r.get("status") == "pending"]
+            unreviewed = [lvl for lvl, _kind, rows in levels if not rows]
+
+            mora_details: Dict[str, Any] = {
+                "evaluation_date": mora_eval_date,
+                "levels": {
+                    kind: {
+                        "jurisdiction": lvl,
+                        "status": (rows[0].get("status") if rows
+                                   else "unreviewed"),
+                        "reviewed_at": (rows[0].get("reviewed_at")
+                                        if rows else None),
+                    }
+                    for lvl, kind, rows in levels
+                },
+            }
+
+            def _cite(r: Dict[str, Any]) -> str:
+                # A pending ballot measure has no adopted date yet, and
+                # "adopted —" would misread as adopted on an unknown
+                # date — the citation simply omits the clause.
+                body = (f"{r.get('adopting_body') or 'the adopting body'}, "
+                        f"{r.get('instrument') or 'the adopted instrument'}")
+                d = str(r.get("adopted_date") or "")[:10]
+                return f"{body}, adopted {d}" if d else body
+
+            if binding:
+                r = max(binding, key=lambda x: str(x.get("adopted_date")
+                                                   or "")[:10])
+                mora_details.update({
+                    "instrument": r.get("instrument"),
+                    "adopting_body": r.get("adopting_body"),
+                    "adopted_date": r.get("adopted_date"),
+                    "effective_date": r.get("effective_date"),
+                    "expires_date": r.get("expires_date"),
+                    "scope": r.get("scope"),
+                    "source_url": r.get("source_url"),
+                    "reviewed_at": r.get("reviewed_at"),
+                })
+                gate(pin, "moratorium_status", "FAIL",
+                     f"A data-centre restriction is in force as of "
+                     f"{mora_eval_date}: {_cite(r)}. Applications of this "
+                     f"kind cannot be approved while it stands"
+                     + (f"; it expires {r.get('expires_date')}"
+                        if r.get("expires_date") else
+                        " with no expiry recorded")
+                     + ". Scope and any exemption paths are diligence "
+                     "items; the row cites the adopting body's own record.",
+                     details=mora_details)
+            elif unverified or unreviewed:
+                # An untraced claim and an unlooked jurisdiction are the
+                # same verdict for different reasons: neither clears the
+                # parcel, and neither may fail it.
+                bits = []
+                for r in unverified:
+                    bits.append(f"{_cite(r)} is recorded UNVERIFIED — the "
+                                "claim could not be traced to the "
+                                "jurisdiction's own record")
+                for lvl in unreviewed:
+                    bits.append(f"no reviewed restriction record exists for "
+                                f"{lvl}")
+                gate(pin, "moratorium_status", "UNKNOWN",
+                     "Moratorium status unverified: " + "; ".join(bits)
+                     + ". A jurisdiction nobody has reviewed reads UNKNOWN, "
+                     "never PASS — absence of a row is not absence of a "
+                     "restriction.",
+                     details=mora_details)
+            elif pending or not_binding:
+                if pending:
+                    r = pending[0]
+                    clause = (f"{_cite(r)} is PENDING — a restriction may "
+                              "bind before a project completes diligence")
+                    mora_details.update({
+                        "instrument": r.get("instrument"),
+                        "adopting_body": r.get("adopting_body"),
+                        "source_url": r.get("source_url"),
+                        "reviewed_at": r.get("reviewed_at"),
+                    })
+                else:
+                    r = not_binding[0]
+                    eff = str(r.get("effective_date") or "")[:10]
+                    if eff and eff > mora_eval_date:
+                        clause = (f"{_cite(r)} is adopted but not yet "
+                                  f"effective (effective {eff})")
+                    else:
+                        clause = (f"{_cite(r)} has lapsed"
+                                  + (f" (expired {r.get('expires_date')})"
+                                     if r.get("expires_date") else "")
+                                  + " — the pause is over, but a "
+                                  "jurisdiction that paused once is a live "
+                                  "political-risk signal")
+                    mora_details.update({
+                        "instrument": r.get("instrument"),
+                        "adopting_body": r.get("adopting_body"),
+                        "adopted_date": r.get("adopted_date"),
+                        "expires_date": r.get("expires_date"),
+                        "source_url": r.get("source_url"),
+                        "reviewed_at": r.get("reviewed_at"),
+                    })
+                gate(pin, "moratorium_status", "CONDITIONAL",
+                     f"{clause}. The gate reads CONDITIONAL as of "
+                     f"{mora_eval_date}; the row survives either way so the "
+                     "jurisdiction's history stays visible.",
+                     details=mora_details)
+            else:
+                # Every governing level carries a checked-clear row: a
+                # positive statement with a date and sources behind it.
+                gate(pin, "moratorium_status", "PASS",
+                     "Every jurisdiction governing this parcel"
+                     + " (" + "; ".join(
+                         f"{lvl} reviewed {rows[0].get('reviewed_at')}"
+                         for lvl, _kind, rows in levels if rows) + ")"
+                     + " has been reviewed and no data-centre moratorium "
+                     "was located"
+                     + (" (sources: " + all_rows[0].get("sources_checked", "")
+                        + ")" if all_rows and all_rows[0].get("sources_checked")
+                        else "")
+                     + ". Absence of a row is not what cleared this — "
+                     "checked-clear rows did.",
+                     details=mora_details)
 
         # Contiguous developable acreage
         if developable >= acre_rule.get("min_pass_acres", 100):
@@ -1730,6 +2019,14 @@ def qualify_parcels(
         "roads_layer": "present" if roads_gdf is not None else "missing",
         "places_layer": "present" if places_gdf is not None else "missing",
         "parcels_inside_places": len(place_of),
+        "subdivisions_layer": ("present" if subdivisions_gdf is not None
+                               else "missing"),
+        "parcels_with_township": sum(
+            1 for s in subdiv_of.values()
+            if s["lsad"] in TOWNSHIP_MCD_CLASSES
+            and s["funcstat"] == FUNCTIONING_MCD_FUNCSTAT),
+        "restrictions_layer": ("present" if restrictions is not None
+                               else "missing"),
         "slope_layer": "present" if slopes is not None else "missing",
         "utility_layer": "present" if utility_gdf is not None else "missing",
         "rtep_layer": "present" if rtep_df is not None else "missing",

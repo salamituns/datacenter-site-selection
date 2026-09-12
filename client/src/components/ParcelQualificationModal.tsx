@@ -44,6 +44,7 @@ const GATE_LABELS: Record<string, string> = {
   road_access: "Road access",
   power_capacity: "Power capacity evidence",
   water_availability: "Water availability",
+  moratorium_status: "Moratorium / restriction",
 };
 
 export function gateLabel(key: string): string {

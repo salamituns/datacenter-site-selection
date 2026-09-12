@@ -39,7 +39,8 @@ from hazard_api import HazardAPI
 from loudoun_api import LoudounParcelAPI
 import network_evidence
 from parcel_gates import qualify_parcels, RULE_VERSIONS
-from runs import IngestionRun, load_rules_readonly
+from runs import (IngestionRun, load_jurisdiction_restrictions_readonly,
+                  load_rules_readonly)
 import overlay_layers
 
 load_dotenv()
@@ -625,7 +626,8 @@ def run_pipeline(
             # 3DEP slopes, TIGER incorporated places. Each degrades
             # independently to UNKNOWN.
             logger.info("Step 6b: verification layers (TIGER roads, PAD-US, "
-                        "3DEP slopes, TIGER places)…")
+                        "3DEP slopes, TIGER places and county "
+                        "subdivisions)…")
             roads_gdf = overlay_layers.fetch_tiger_roads(
                 min_lon, min_lat, max_lon, max_lat, state_code=state_code,
                 region_key=region_key)
@@ -638,6 +640,13 @@ def run_pipeline(
             # the same polygons. A county with none is a real answer and
             # comes back as a present, empty layer.
             places_gdf = overlay_layers.fetch_places(
+                min_lon, min_lat, max_lon, max_lat, state_code=state_code)
+            # County subdivisions (same service, layer 1): the township
+            # level of the moratorium gate, and the persisted minor
+            # civil division for every parcel. Present-empty is a real
+            # answer (a bbox of statistical CCDs only, or wholly inside
+            # one city-MCD); None holds the township level back.
+            subdivisions_gdf = overlay_layers.fetch_subdivisions(
                 min_lon, min_lat, max_lon, max_lat, state_code=state_code)
             slopes = None
             try:
@@ -667,6 +676,12 @@ def run_pipeline(
                  "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Places_CouSub_ConCity_SubMCD/MapServer",
                  (None if places_gdf is not None
                   else "unavailable — municipal-limits test held back")),
+                ("county_subdivisions",
+                 None if subdivisions_gdf is None else len(subdivisions_gdf),
+                 "census_tiger_county_subdivisions",
+                 "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Places_CouSub_ConCity_SubMCD/MapServer/1",
+                 (None if subdivisions_gdf is not None
+                  else "unavailable — township level held back")),
             ):
                 if run is not None:
                     snapshots[layer_key] = run.snapshot(
@@ -685,6 +700,17 @@ def run_pipeline(
             # a refusal the dry run must be able to see past, not trip on.
             rules = (run.load_rules(jurisdiction) if run is not None
                      else load_rules_readonly(jurisdiction))
+
+            # Moratorium evidence: the state's reviewed restriction rows
+            # (manual, instrument-cited). The dry run reads the same
+            # rows a publish would — the table is world-readable. None
+            # (unreadable) holds the gate at UNKNOWN; a read with no
+            # rows for this state means nobody has reviewed any of its
+            # jurisdictions yet, which also reads UNKNOWN and says so.
+            restrictions = (
+                run.load_jurisdiction_restrictions(state_code)
+                if run is not None
+                else load_jurisdiction_restrictions_readonly(state_code))
 
             # Power diligence (Release 2): serving utility, PJM RTEP
             # upgrade evidence, queue activity. Each degrades to UNKNOWN
@@ -870,7 +896,8 @@ def run_pipeline(
                 snapshots=snapshots, retrieve_time=retrieve_time,
                 region_key=region_key,
                 roads_gdf=roads_gdf, padus_gdf=padus_gdf, slopes=slopes,
-                places_gdf=places_gdf,
+                places_gdf=places_gdf, subdivisions_gdf=subdivisions_gdf,
+                restrictions=restrictions,
                 utility_gdf=utility_gdf, rtep_df=rtep_df, queue_gdf=queue_gdf,
                 apps_gdf=apps_gdf, parcel_evidence=parcel_evidence,
                 water_gdf=water_gdf, assessments=assessments,

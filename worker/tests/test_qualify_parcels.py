@@ -676,6 +676,230 @@ class TestNoCountyZoningRule:
                 assert "No zoning district overlap" in g["rationale"]
 
 
+# ── a moratorium county: three governing levels, run-date evaluation ──
+# The fixture mirrors the real Licking evidence: a county checked clear,
+# a pending city ballot measure, and an adopted township ban — plus a
+# parcel in a statistical MCD (an election district) that must NOT be
+# treated as a governing township.
+def moratorium_county():
+    pins = ["RURAL", "IN-CITY", "BANNED", "CLEAR"]
+    geoms = {pin: square(150.0, i) for i, pin in enumerate(pins)}
+    parcels = gpd.GeoDataFrame(
+        {"pin": pins, "legal_acreage": [150.0] * len(pins),
+         "geometry": [geoms[p] for p in pins]},
+        crs=PLANAR_CRS,
+    ).to_crs("EPSG:4326")
+    places = gpd.GeoDataFrame(
+        {"place_geoid": ["3939256"], "place_name": ["Pataskala city"],
+         "place_basename": ["Pataskala"], "place_lsad": ["25"],
+         "geometry": [geoms["IN-CITY"].buffer(200)]},
+        crs=PLANAR_CRS,
+    ).to_crs("EPSG:4326")
+    subdivisions = gpd.GeoDataFrame(
+        [
+            # A functioning Ohio township — a governing jurisdiction.
+            {"sub_geoid": "3908939102", "sub_name": "Jersey township",
+             "sub_lsad": "44", "sub_funcstat": "A",
+             "geometry": geoms["RURAL"].buffer(50)},
+            {"sub_geoid": "3908969456", "sub_name": "St. Albans township",
+             "sub_lsad": "44", "sub_funcstat": "A",
+             "geometry": geoms["BANNED"].buffer(50)},
+            # A city that is its own MCD — governed at the place level.
+            {"sub_geoid": "3908961112", "sub_name": "Pataskala city",
+             "sub_lsad": "25", "sub_funcstat": "F",
+             "geometry": geoms["IN-CITY"].buffer(50)},
+            # A statistical MCD — never a governing jurisdiction.
+            {"sub_geoid": "5100301234", "sub_name": "Catoctin district",
+             "sub_lsad": "27", "sub_funcstat": "N",
+             "geometry": geoms["CLEAR"].buffer(50)},
+        ],
+        crs=PLANAR_CRS,
+    ).to_crs("EPSG:4326")
+    return parcels, places, subdivisions
+
+
+def base_restrictions():
+    """The real Licking rows, shape-faithful (statuses and citations)."""
+    def row(**over):
+        r = {
+            "state_code": "OH", "county_name": "Licking",
+            "place_name": None, "subdivision_name": None,
+            "status": "none_found", "instrument": None,
+            "adopting_body": None, "adopted_date": None,
+            "effective_date": None, "expires_date": None, "scope": None,
+            "source_url": None,
+            "basis": "No county-level data-centre moratorium.",
+            "reviewed_at": "2026-09-12",
+            "sources_checked": "Licking County commissioners record",
+        }
+        r.update(over)
+        return r
+
+    return [
+        row(),
+        row(place_name="Pataskala city", status="pending",
+            instrument="Citizen-initiated ballot measure to prohibit "
+                       "large data centers",
+            adopting_body="City of Pataskala electorate",
+            scope="large data centers within city limits"),
+        row(subdivision_name="St. Albans township", status="adopted",
+            instrument="Zoning text amendment removing data processing "
+                       "services from conditionally permitted uses",
+            adopting_body="St. Albans Township Board of Trustees",
+            adopted_date="2026-03-10", effective_date="2026-03-10",
+            scope="all data-centre uses township-wide"),
+    ]
+
+
+def qualify_moratorium(restrictions="default", places_gdf="use",
+                       subdivisions_gdf="use"):
+    parcels, places, subdivisions = moratorium_county()
+    if restrictions == "default":
+        restrictions = base_restrictions()
+    if places_gdf == "use":
+        places_gdf = places
+    if subdivisions_gdf == "use":
+        subdivisions_gdf = subdivisions
+    _, metrics, gates, _ = qualify_parcels(
+        parcels_gdf=parcels, zoning_gdf=None,
+        wetlands_gdf=None, nfhl_gdf=None, lines_gdf=None, subs_gdf=None,
+        rules={}, state_code="OH", county_name="Licking",
+        snapshots={}, retrieve_time="2026-09-12T00:00:00+00:00",
+        places_gdf=places_gdf, subdivisions_gdf=subdivisions_gdf,
+        restrictions=restrictions,
+    )
+    return {(g["parcel_key"], g["gate_key"]): g for g in gates}, metrics
+
+
+class TestMoratoriumGate:
+    def verdict(self, gates, pin):
+        return gates[(f"OH-LICKING-{pin}", "moratorium_status")]
+
+    def metric(self, metrics, pin, key):
+        return [m for m in metrics
+                if m["metric_key"] == key
+                and m["parcel_key"] == f"OH-LICKING-{pin}"]
+
+    def test_an_unreviewed_township_reads_unknown_not_pass(self):
+        # The county is checked clear, but the parcel's township has no
+        # row: a county none_found speaks only for the county, and a
+        # jurisdiction nobody has reviewed reads UNKNOWN, never PASS.
+        gates, _ = qualify_moratorium()
+        g = self.verdict(gates, "RURAL")
+        assert g["status"] == "UNKNOWN"
+        assert "Jersey township" in g["rationale"]
+        assert "no reviewed restriction record" in g["rationale"]
+        assert g["details"]["levels"]["township"]["status"] == "unreviewed"
+        assert g["details"]["levels"]["county"]["status"] == "none_found"
+
+    def test_a_pending_measure_reads_conditional_citing_the_instrument(self):
+        gates, metrics = qualify_moratorium()
+        g = self.verdict(gates, "IN-CITY")
+        assert g["status"] == "CONDITIONAL"
+        assert "City of Pataskala electorate" in g["rationale"]
+        assert "ballot measure" in g["rationale"]
+        # Evaluated against the run's own date, recorded so the verdict
+        # can be re-derived.
+        assert g["details"]["evaluation_date"] == "2026-09-12"
+        assert g["details"]["levels"]["place"]["status"] == "pending"
+        # The city MCD is not a township: governed at the place level.
+        assert "township" not in g["details"]["levels"]
+        m = self.metric(metrics, "IN-CITY", "county_subdivision")
+        assert m and m[0]["text_value"] == "Pataskala city"
+
+    def test_an_adopted_ban_fails_citing_the_instrument(self):
+        gates, _ = qualify_moratorium()
+        g = self.verdict(gates, "BANNED")
+        assert g["status"] == "FAIL"
+        assert "St. Albans Township Board of Trustees" in g["rationale"]
+        assert "2026-03-10" in g["rationale"]
+        assert "no expiry recorded" in g["rationale"]
+        assert g["details"]["instrument"].startswith("Zoning text amendment")
+
+    def test_every_level_checked_clear_reads_pass(self):
+        # The election district is a statistical MCD, not a governing
+        # township, so the county's checked-clear row is the whole story.
+        gates, _ = qualify_moratorium()
+        g = self.verdict(gates, "CLEAR")
+        assert g["status"] == "PASS"
+        assert "reviewed 2026-09-12" in g["rationale"]
+        assert "checked-clear" in g["rationale"]
+        assert "township" not in g["details"]["levels"]
+
+    def test_unavailable_evidence_holds_unknown_never_clears(self):
+        gates, _ = qualify_moratorium(restrictions=None)
+        for pin in ("RURAL", "IN-CITY", "BANNED", "CLEAR"):
+            g = self.verdict(gates, pin)
+            assert g["status"] == "UNKNOWN"
+            assert "unavailable" in g["rationale"]
+
+    def test_no_rows_for_the_state_reads_unknown(self):
+        gates, _ = qualify_moratorium(restrictions=[])
+        for pin in ("RURAL", "CLEAR"):
+            assert self.verdict(gates, pin)["status"] == "UNKNOWN"
+
+    def test_a_lapsed_moratorium_reopens_as_conditional(self):
+        # The calendar is part of the verdict: expired on the run date,
+        # the pause no longer fails the parcel — but the history stays
+        # visible as a political-risk signal.
+        rows = [dict(r) for r in base_restrictions()]
+        rows[0].update(status="adopted",
+                       instrument="Emergency ordinance 26-026, a 12-month "
+                                  "pause on data-centre applications",
+                       adopting_body="Board of County Commissioners",
+                       adopted_date="2025-09-01", effective_date="2025-09-01",
+                       expires_date="2026-09-01")
+        gates, _ = qualify_moratorium(restrictions=rows)
+        g = self.verdict(gates, "CLEAR")
+        assert g["status"] == "CONDITIONAL"
+        assert "has lapsed" in g["rationale"]
+        assert "2026-09-01" in g["rationale"]
+
+    def test_adopted_but_not_yet_effective_reads_conditional(self):
+        rows = [dict(r) for r in base_restrictions()]
+        rows[0].update(status="adopted",
+                       instrument="Ordinance 27-001, a data-centre pause",
+                       adopting_body="Board of County Commissioners",
+                       adopted_date="2026-09-10",
+                       effective_date="2026-10-01")
+        gates, _ = qualify_moratorium(restrictions=rows)
+        g = self.verdict(gates, "CLEAR")
+        assert g["status"] == "CONDITIONAL"
+        assert "not yet effective" in g["rationale"]
+        assert "2026-10-01" in g["rationale"]
+
+    def test_an_unverified_claim_holds_unknown(self):
+        # Neither fails the parcel on an untraced claim nor clears it.
+        rows = [dict(r) for r in base_restrictions()]
+        rows[0].update(status="unverified",
+                       instrument="Reported 12-month county pause",
+                       basis="Could not be traced to the county's record.")
+        gates, _ = qualify_moratorium(restrictions=rows)
+        g = self.verdict(gates, "CLEAR")
+        assert g["status"] == "UNKNOWN"
+        assert "UNVERIFIED" in g["rationale"]
+
+    def test_the_township_metric_is_persisted_beside_the_place(self):
+        gates, metrics = qualify_moratorium()
+        m = self.metric(metrics, "RURAL", "county_subdivision")
+        assert m and m[0]["text_value"] == "Jersey township"
+        assert m[0]["details"]["lsadc"] == "44"
+        assert m[0]["evidence_class"] == "observed"
+        # And the incorporated place metric still lands beside it.
+        assert self.metric(metrics, "IN-CITY", "incorporated_place")
+
+    def test_a_missing_subdivision_layer_holds_unincorporated_parcels(self):
+        # No MCD layer: an unincorporated parcel's township is unreadable,
+        # and silence must not read as "no township" — it reads UNKNOWN.
+        # A parcel inside a place is governed by the municipality, so the
+        # place's pending measure still decides it.
+        gates, _ = qualify_moratorium(subdivisions_gdf=None)
+        g = self.verdict(gates, "RURAL")
+        assert g["status"] == "UNKNOWN"
+        assert "subdivision layer unavailable" in g["rationale"]
+        assert self.verdict(gates, "IN-CITY")["status"] == "CONDITIONAL"
+
+
 class TestParcelSpecificApprovalOutranksDistrict:
     """
     An approved ZMAP/SPEX/ZCPA for a data-centre use beats the district.

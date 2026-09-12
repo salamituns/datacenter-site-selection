@@ -24,6 +24,14 @@ Verification layer fetchers — federal-first overlays for every region.
    prerequisite for the Texas no-county-zoning rule and, later, the
    incorporated-town zoning coverage. State-cached like the roads clip,
    with the TIGER/Line state PLACE shapefile as fallback.
+6. TIGER County Subdivisions (same service, layer 1): minor civil
+   divisions — in Ohio, the township, which is the zoning and moratorium
+   authority for unincorporated land. Fetched whole (an MCD is only
+   sometimes a government: a Virginia election district and a Texas CCD
+   are statistical artefacts with no power to adopt anything); which
+   MCDs count as governing jurisdictions is decided where they are
+   matched, in parcel_gates. State-cached like the rest, with the
+   TIGER/Line state COUSUB shapefile as fallback.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -436,6 +444,147 @@ def fetch_places(
             return gdf
     except Exception as e:  # noqa: BLE001
         logger.warning("TIGER/Line places fetch failed: %s", e)
+        return None
+
+
+# TIGERweb County Subdivisions — layer 1 of the same service as the
+# places layer. A minor civil division is only sometimes a government:
+# an Ohio township (LSADC 44, functioning) is the zoning authority for
+# unincorporated land, which is what the moratorium gate matches on;
+# a Virginia election district (LSADC 27/28) or a Texas CCD (22) is a
+# statistical artefact nobody adopts ordinances through. The layer is
+# fetched whole and the governing-class test is made where the rows are
+# matched (parcel_gates), so the classification lives beside the
+# matching logic it governs rather than baked into the fetch.
+TIGER_COUSUB_URL = (
+    "https://tigerweb.geo.census.gov/arcgis/rest/services/"
+    "TIGERweb/Places_CouSub_ConCity_SubMCD/MapServer/1/query"
+)
+# TIGER/Line state COUSUB shapefile — the canonical fallback, same
+# pattern as PLACE. COUSUB is a state-level file.
+TIGERLINE_COUSUB_URL = (
+    "https://www2.census.gov/geo/tiger/TIGER2024/COUSUB/"
+    "tl_2024_{fips}_cousub.zip"
+)
+COUSUB_MTFCC = "G4040"
+
+
+def _tiger_cousub_cache(state_code: str) -> Path:
+    return (Path(__file__).parent / "cache"
+            / f"tiger_cousub_{state_code.lower()}_clip.gpkg")
+
+
+def _subdiv_frame(rows: List[Dict[str, Any]]) -> gpd.GeoDataFrame:
+    return gpd.GeoDataFrame(
+        rows, crs="EPSG:4326",
+        columns=["sub_geoid", "sub_name", "sub_lsad",
+                 "sub_funcstat", "geometry"],
+    )
+
+
+def _subdivs_from_features(features: List[Dict[str, Any]]
+                            ) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for f in features:
+        geometry = f.get("geometry")
+        if not geometry:
+            continue
+        try:
+            geom = shape(geometry)
+        except Exception:  # noqa: BLE001
+            continue
+        if geom.is_empty:
+            continue
+        props = f.get("properties", {}) or {}
+        # The layer should be all county subdivisions; the filter stays
+        # because a different MTFCC here is not a county subdivision and
+        # must not become one by landing in this frame.
+        if str(props.get("MTFCC") or "").strip() != COUSUB_MTFCC:
+            continue
+        rows.append({
+            "sub_geoid": str(props.get("GEOID") or "").strip(),
+            "sub_name": str(props.get("NAME") or "").strip(),
+            "sub_lsad": str(props.get("LSADC") or "").strip(),
+            "sub_funcstat": str(props.get("FUNCSTAT") or "").strip(),
+            "geometry": geom,
+        })
+    return rows
+
+
+def fetch_subdivisions(
+    min_lon: float, min_lat: float, max_lon: float, max_lat: float,
+    state_code: str = "VA",
+) -> Optional[gpd.GeoDataFrame]:
+    """
+    County-subdivision (minor civil division) polygons within the bbox,
+    cached per state like the places clip. Same present-empty contract
+    as fetch_places: a present, empty frame is a real answer (no MCDs
+    here — Texas counties mostly have only statistical CCDs, and some
+    bboxes sit entirely inside a single city-MCD), while None means the
+    layer could not be read at all and the caller must hold the
+    subdivision level back rather than treat silence as an answer.
+    """
+    bbox_poly = _bbox_polygon(min_lon, min_lat, max_lon, max_lat)
+    session = requests.Session()
+    session.headers.update({"User-Agent": BROWSER_UA, "Accept": "application/json"})
+    bbox = f"{min_lon},{min_lat},{max_lon},{max_lat}"
+    features = _paged_query(
+        session, TIGER_COUSUB_URL, bbox,
+        out_fields="GEOID,NAME,LSADC,FUNCSTAT,MTFCC,STATE",
+        attempts=3, page_pause=0.5,
+    )
+    if features is not None:
+        gdf = _subdiv_frame(_subdivs_from_features(features))
+        _save_cached_clip(_tiger_cousub_cache(state_code), gdf, bbox_poly)
+        logger.info("TIGER county subdivisions (%s): %d MCDs — cached.",
+                    state_code.upper(), len(gdf))
+        return gdf
+    logger.warning("TIGER county subdivisions: service unavailable this run.")
+    cached = _load_cached_clip(_tiger_cousub_cache(state_code), bbox_poly)
+    if cached is not None:
+        logger.info("TIGER county subdivisions: service unavailable — using "
+                    "the cached clip (%d MCDs).", len(cached))
+        return cached
+    fips = STATE_FIPS.get(state_code.upper())
+    if not fips:
+        logger.warning("TIGER county subdivisions: no state FIPS for %r — "
+                       "layer unavailable.", state_code)
+        return None
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / "cousub.zip"
+            url = TIGERLINE_COUSUB_URL.format(fips=fips)
+            logger.info("TIGER county subdivisions: service unavailable — "
+                        "downloading the state TIGER/Line COUSUB shapefile "
+                        "(%s)…", url.rsplit("/", 1)[-1])
+            dl = requests.get(url, stream=True, timeout=600,
+                              headers={"User-Agent": BROWSER_UA})
+            dl.raise_for_status()
+            with open(zip_path, "wb") as out:
+                for chunk in dl.iter_content(chunk_size=1 << 20):
+                    out.write(chunk)
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(tmp)
+            shp = next(Path(tmp).glob("*.shp"))
+            full = gpd.read_file(str(shp))
+            full = full.to_crs("EPSG:4326")
+            mtfcc = full["MTFCC"].astype(str).str.strip()
+            keep = full[mtfcc == COUSUB_MTFCC]
+            keep = keep[keep.geometry.intersects(bbox_poly)]
+            rows = [{
+                "sub_geoid": str(r.get("GEOID") or "").strip(),
+                "sub_name": str(r.get("NAME") or "").strip(),
+                "sub_lsad": str(r.get("LSAD") or "").strip(),
+                "sub_funcstat": str(r.get("FUNCSTAT") or "").strip(),
+                "geometry": r.geometry,
+            } for _, r in keep.iterrows()]
+            gdf = _subdiv_frame(rows)
+            _save_cached_clip(_tiger_cousub_cache(state_code), gdf, bbox_poly)
+            logger.info("TIGER county subdivisions: %d MCDs from the "
+                        "TIGER/Line state shapefile — cached.", len(gdf))
+            return gdf
+    except Exception as e:  # noqa: BLE001
+        logger.warning("TIGER/Line county subdivisions fetch failed: %s", e)
         return None
 
 
