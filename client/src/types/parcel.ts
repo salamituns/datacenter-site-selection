@@ -133,6 +133,11 @@ export interface ParcelGateRow {
   status: GateStatus;
   affected_area_pct: number | null;
   rationale: string | null;
+  /** Structured evidence the rationale cites in prose — the moratorium
+   *  gate's instrument, dates, source and per-level statuses travel here.
+   *  Null where a gate records nothing beyond its rationale; the dossier
+   *  renders only what this actually carries. */
+  details?: Record<string, unknown> | null;
 }
 
 export interface ParcelMetricRow {

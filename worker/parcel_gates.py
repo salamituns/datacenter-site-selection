@@ -1438,8 +1438,17 @@ def qualify_parcels(
             county_key = (county_name or "").strip().lower()
             place_key = (place_ref["name"].strip().lower()
                          if place_ref else None)
+            # A township's instruments stop at municipal limits: inside a
+            # city or village the municipality's ordinance governs, and
+            # the township's moratorium — Jackson's own letter says its
+            # limits "do not control land once it is annexed into the
+            # city" — cannot bind the parcel. So the township level is
+            # carried only by unincorporated parcels, the same scoping
+            # the unavailable-layer branch below already states. A parcel
+            # inside a place in a restricted township reads on its county
+            # and place rows, not the township's.
             subdiv_key = (subdiv_ref["name"].strip().lower()
-                          if is_township else None)
+                          if is_township and place_key is None else None)
             levels: List[Tuple[str, str, List[Dict[str, Any]]]] = [
                 (f"the county ({county_name})", "county",
                  [r for r in restrictions_norm

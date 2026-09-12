@@ -313,7 +313,7 @@ export async function fetchParcelQualification(
     const [gatesRes, metricsRes] = await Promise.all([
       supabase
         .from("v_parcel_gates")
-        .select("gate_key,status,affected_area_pct,rationale")
+        .select("gate_key,status,affected_area_pct,rationale,details")
         .eq("parcel_key", parcelKey),
       supabase
         .from("v_parcel_metrics")

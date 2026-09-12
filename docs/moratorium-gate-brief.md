@@ -283,3 +283,122 @@ hold). Client gate label added (`moratorium_status: "Moratorium /
 restriction"`). One pre-existing parcel decision now flags stale with
 "moratorium_status: added" — the fingerprint view doing exactly its job
 when the gate set grows.
+
+---
+
+## Shipped — the township reviews (2026-09-12, release19)
+
+**The review.** Every Ohio township governing surveyed parcels — 13 in
+Licking, 15 in Franklin — was researched to the layer's own standard:
+the township's own record first (minutes, resolutions, notices), reputable
+coverage naming the action, date and vote acceptable, tracker claims
+never citable. The decoy problem was real and handled row by row: the
+"Plain Township moratorium" is Stark County's, the "Liberty Township
+votes" are Butler County's, the "Granville Township data-center
+ordinance" is Mifflin County, Pennsylvania's, the "Monroe Township
+moratorium" is Adams County's, the "Blendon Township moratorium" is
+Ottawa County, Michigan's, and the heavily covered "Perry Township"
+fight is Stark County's. Twenty-eight rows, each with basis,
+sources_checked and reviewed_at.
+
+**What it found.** Six adopted restrictions among the 28:
+
+- **Harrison Township (Licking), 2026-07-06** — trustees struck the
+  Zoning Commission's proposed M-1 conditional use "Data Centers" and
+  the proposed DATA CENTER / DATA CENTER CAMPUS definitions (3-0 roll
+  call, their own minutes): no data-centre authorization exists anywhere
+  in the resolution. A township-wide exclusion, recorded like St.
+  Albans — its 184 unincorporated parcels FAIL the moratorium gate (six
+  more, inside Kirkersville village, read UNKNOWN on the village's own
+  unreviewed row), and the zoning gate now
+  carries the removal where it belongs: a scoped `"M-1|Harrison":
+  "prohibited"` district class in `2026-township-reviewed3`, because the
+  flat M-1 by_right entry (true of other townships' resolutions) must
+  not speak for Harrison's. Its PUD parcels remain special_exception —
+  the amendment does not address planned developments.
+- **Etna Township (Licking), August 2026** — a text amendment removing
+  data centres from General Business districts only; the ordinance
+  continues to allow them in industrial and overlay districts. NOT
+  recorded as a township restriction: a district-level use-table fact,
+  which the county mapping already carries (GB1 prohibited), so Etna
+  reads none_found with the amendment documented in its basis. Failing
+  Etna's industrial parcels on a GB-district amendment would be the
+  wrong jurisdiction claiming the wrong land.
+- **Jackson Township (Franklin), 2026-05-12** — one-year moratorium on
+  new data-centre development in the unincorporated portions (the
+  township's own community letter, corroborated by the Dispatch, 10TV,
+  ABC6). expires_date 2027-05-12 is derived from the stated one-year
+  term, so the gate re-opens by itself if no extension is recorded.
+- **Pleasant Township (Franklin), 2026-02-24** — Resolution 11, "to put
+  a moratorium on any building of data centers in Pleasant Township"
+  (the township's own meeting highlights; vote reported 2-1). No
+  duration appears anywhere in the record, so expires_date stays NULL
+  rather than inferred: the moratorium stands until the township says
+  otherwise.
+- **Washington Township (Franklin), 2025-12-09** — 90-day moratorium,
+  extended six months to 2026-09-05 (both in the township's own
+  minutes). The Sept 8, 2026 agenda lists a further extension, but its
+  minutes were not yet posted, so the extension is unrecorded and the
+  verified record reads lapsed as of the run date: CONDITIONAL, the row
+  surviving as the political-risk signal it is, to be re-dated when the
+  minutes post.
+- **Prairie Township (Franklin), 2026-04-15** — Resolution 18-26, a
+  six-month suspension of every zoning-permit application for a data
+  centre, expiring 2026-10-15 (the trustees' own signed resolution);
+  permanent text amendments were still in process at review time.
+
+The other 22 townships checked clear — none_found with their sources
+listed, not unverified; nothing traceable was left dangling. Two
+residual gaps are recorded in the rows themselves: Monroe's trustee
+minutes sit behind a SharePoint link (its public-notices page, which
+would legally have to advertise any zoning hearing, was checked
+directly), and Sharon's Aug 11, 2026 hearing notice on unspecified
+zoning changes 404'd before it could be read.
+
+**Licking republished** (`2baaddac`, then `28fba0ec` with the
+municipal-limits fix below): moratorium verdicts 1,645 PASS /
+24 CONDITIONAL (Pataskala's pending ballot) / 184 FAIL (Harrison,
+unincorporated) / 137 UNKNOWN — the UNKNOWNs being parcels inside
+incorporated places (Newark, Heath, Granville village, Johnstown,
+Kirkersville), whose municipal reviews are the follow-on batch.
+Harrison's M-1 parcels read prohibited on the zoning gate under the
+township's own resolution. Evidence coverage 0.811 → 0.903 of the
+ten-gate set.
+
+**Franklin republished** (`cbb1f32f`, then `3feeab22` with the fix):
+180 PASS / 2 CONDITIONAL (Washington's lapsed pause, unincorporated) /
+61 FAIL (Jackson 19 unincorporated, Pleasant 37, Prairie 5) / 739
+UNKNOWN — every UNKNOWN sitting inside an incorporated city or village
+(Columbus, Dublin, Grove City, Groveport, Gahanna, Hilliard, Obetz,
+Worthington, Reynoldsburg, Whitehall, Westerville, Upper Arlington,
+Bexley, Grandview Heights, Canal Winchester, Urbancrest), the
+place-level follow-on batch. The county GIS endpoint went unreachable
+mid-release and the pipeline refused to publish on screening cells
+alone — the deactivation guard doing exactly its job — until it
+returned.
+
+**A fifth settled semantic, found on the first Franklin republish.**
+The gate was applying a township's row to parcels inside municipal
+limits — 34 Grove City and Urbancrest parcels inside Jackson township
+read FAIL on a moratorium whose own letter says it covers "the
+unincorporated portions" and that township limits "do not control land
+once it is annexed into the city." A township's instruments stop at
+municipal limits, the same scoping the unavailable-layer branch already
+stated and the zoning gate practices: the township level is now carried
+only by unincorporated parcels, so a parcel inside a place reads on its
+county and place rows, never the township whose MCD contains it. Both
+regions republished; six Kirkersville village parcels inside Harrison
+township's MCD flipped from FAIL to UNKNOWN for the same reason, and
+the regression test (`test_a_township_row_does_not_reach_inside_
+municipal_limits`) pins the Grove City-in-Jackson shape. Worker suite
+242.
+
+**Dossier surfacing (task 3).** The client now fetches `details` with
+each gate row and the moratorium gate renders its record under the
+rationale: the adopting body and instrument, the adopted / effective /
+expires dates (an instrument with no expiry says "no expiry recorded" —
+a finding, not a blank), the scope, a link to the jurisdiction's own
+record, reviewed and evaluation dates, and a per-level ledger showing
+what the county, place and township reviews each found — so an UNKNOWN
+verdict names exactly which level is unreviewed. Six new client tests
+(43 passing); worker suite 242 with the municipal-limits regression.

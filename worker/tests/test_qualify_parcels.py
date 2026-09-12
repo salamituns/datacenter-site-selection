@@ -20,7 +20,7 @@ in, so stated acreages are exact rather than approximately reprojected.
 import geopandas as gpd
 import pandas as pd
 import pytest
-from shapely.geometry import LineString, Point, box
+from shapely.geometry import LineString, Point, box, MultiPolygon
 
 from parcel_gates import M2_PER_ACRE, PLANAR_CRS, qualify_parcels
 
@@ -682,10 +682,22 @@ class TestNoCountyZoningRule:
 # parcel in a statistical MCD (an election district) that must NOT be
 # treated as a governing township.
 def moratorium_county():
-    pins = ["RURAL", "IN-CITY", "BANNED", "CLEAR"]
+    pins = ["RURAL", "IN-CITY", "BANNED", "CLEAR", "GROVE"]
     geoms = {pin: square(150.0, i) for i, pin in enumerate(pins)}
+    # A small parcel annexed into the city: wholly inside the Pataskala
+    # place polygon, but majority-inside a governing township's MCD —
+    # the Grove City-in-Jackson shape. A township's instruments stop at
+    # municipal limits, so what governs this parcel is the city, not the
+    # township whose MCD contains it. Placed east of the city-MCD
+    # buffer (IN-CITY + 50 m) but inside the place buffer (+ 200 m).
+    minx, miny, _maxx, _maxy = geoms["IN-CITY"].bounds
+    side = (4.0 * M2_PER_ACRE) ** 0.5
+    geoms["ANNEXED"] = box(minx + 832.0, miny + 318.0,
+                           minx + 832.0 + side, miny + 318.0 + side)
+    pins = pins + ["ANNEXED"]
     parcels = gpd.GeoDataFrame(
-        {"pin": pins, "legal_acreage": [150.0] * len(pins),
+        {"pin": pins,
+         "legal_acreage": [150.0] * (len(pins) - 1) + [4.0],
          "geometry": [geoms[p] for p in pins]},
         crs=PLANAR_CRS,
     ).to_crs("EPSG:4326")
@@ -712,6 +724,16 @@ def moratorium_county():
             {"sub_geoid": "5100301234", "sub_name": "Catoctin district",
              "sub_lsad": "27", "sub_funcstat": "N",
              "geometry": geoms["CLEAR"].buffer(50)},
+            # A governing township whose moratorium covers its
+            # unincorporated land only — and one parcel of it (ANNEXED)
+            # sits inside a city. The MCD is governing; whether it
+            # governs THAT parcel is a different question the gate
+            # answers by place.
+            {"sub_geoid": "3908941186", "sub_name": "Jackson township",
+             "sub_lsad": "44", "sub_funcstat": "A",
+             "geometry": MultiPolygon(
+                 [geoms["ANNEXED"].buffer(80),
+                  geoms["GROVE"].buffer(50)])},
         ],
         crs=PLANAR_CRS,
     ).to_crs("EPSG:4326")
@@ -898,6 +920,48 @@ class TestMoratoriumGate:
         assert g["status"] == "UNKNOWN"
         assert "subdivision layer unavailable" in g["rationale"]
         assert self.verdict(gates, "IN-CITY")["status"] == "CONDITIONAL"
+
+    def test_a_township_row_does_not_reach_inside_municipal_limits(self):
+        # Jackson Township's own letter: its limits "do not control land
+        # once it is annexed into the city." A parcel inside a place is
+        # governed by the municipality — an adopted, in-force township
+        # moratorium must not fail it, and the township level is not
+        # even carried. The unincorporated parcel in the same township
+        # still fails on the township's own instrument. Found on the
+        # real Franklin republish: 34 Grove City / Urbancrest parcels
+        # inside Jackson township read FAIL before this rule.
+        rows = [dict(r) for r in base_restrictions()]
+        rows.append({
+            "state_code": "OH", "county_name": "Licking",
+            "place_name": None, "subdivision_name": "Jackson township",
+            "status": "adopted",
+            "instrument": "One-year moratorium on new data center "
+                          "developments within the unincorporated "
+                          "portions of the township",
+            "adopting_body": "Jackson Township Board of Trustees",
+            "adopted_date": "2026-05-12", "effective_date": "2026-05-12",
+            "expires_date": "2027-05-12",
+            "scope": "new data-centre development, unincorporated "
+                     "portions only",
+            "source_url": "https://jacksontwpfranklinoh.gov/",
+            "basis": "The trustees' own community letter, corroborated "
+                     "by the Dispatch.",
+            "reviewed_at": "2026-09-12",
+            "sources_checked": "township letter; Columbus Dispatch",
+        })
+        gates, _ = qualify_moratorium(restrictions=rows)
+        # The annexed parcel: the city's pending ballot measure decides
+        # it, not the township whose MCD contains it.
+        g = self.verdict(gates, "ANNEXED")
+        assert g["status"] == "CONDITIONAL"
+        assert "township" not in g["details"]["levels"]
+        assert g["details"]["levels"]["place"]["status"] == "pending"
+        # Its neighbour outside the city fails on the township's own
+        # instrument, cited.
+        g2 = self.verdict(gates, "GROVE")
+        assert g2["status"] == "FAIL"
+        assert "Jackson Township Board of Trustees" in g2["rationale"]
+        assert g2["details"]["levels"]["township"]["status"] == "adopted"
 
 
 class TestParcelSpecificApprovalOutranksDistrict:

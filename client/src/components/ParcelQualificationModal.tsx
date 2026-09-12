@@ -11,6 +11,12 @@ import {
   PowerDocument,
 } from "@/types/parcel";
 import { fetchParcelPowerEvidence, fetchPowerDocuments } from "@/lib/supabase";
+import {
+  RestrictionRecordView,
+  levelName,
+  levelStatusText,
+  restrictionRecord,
+} from "@/lib/restrictionRecord";
 import { X, Download, ChevronDown, ChevronUp, Scale, Info } from "lucide-react";
 import { DecisionPanel } from "@/components/DecisionPanel";
 
@@ -674,6 +680,103 @@ function OverviewPanel({ parcel, gates, metrics }: {
 /* ── A gate as a card. The verdict is a dot and the ink of the label;
       the rationale is prose at reading size; a coverage figure is a bar
       rather than a ruled-off row. ── */
+
+/** The moratorium gate's own record, under the rationale: the instrument
+ *  and its dates (expiry first among them — this verdict is a function
+ *  of the calendar), the adopting jurisdiction's own source, and what
+ *  each governing level's review found. Rendered only when the gate's
+ *  details actually carry one. */
+function RestrictionRecordBlock({ record }: { record: RestrictionRecordView }) {
+  return (
+    <div className="mt-4 border-t border-border/50 pt-3">
+      {record.adoptingBody && (
+        <p className="font-sans text-[12px] leading-snug text-foreground/90">
+          {record.adoptingBody}
+          {record.instrument && (
+            <> — <span className="font-medium">{record.instrument}</span></>
+          )}
+        </p>
+      )}
+
+      {/* Dates as mono facts. Expiry always states itself, because
+          "no expiry recorded" is a finding (a use-table amendment does
+          not lapse), not a blank. */}
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1">
+        {record.adoptedDate && (
+          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+            adopted <span className="text-foreground">{record.adoptedDate}</span>
+          </span>
+        )}
+        {record.effectiveDate && (
+          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+            effective <span className="text-foreground">{record.effectiveDate}</span>
+          </span>
+        )}
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+          {record.expiresDate ? (
+            <>
+              expires{" "}
+              <span className="text-power dark:text-power-night">{record.expiresDate}</span>
+            </>
+          ) : record.noExpiry ? (
+            <>no expiry recorded</>
+          ) : null}
+        </span>
+      </div>
+
+      {record.scope && (
+        <p className="mt-2 max-w-prose font-sans text-[11.5px] leading-[1.55] text-muted">
+          {record.scope}
+        </p>
+      )}
+
+      {/* The level ledger: what each governing jurisdiction's review
+          found. An unreviewed level is named as such — it is the reason
+          an UNKNOWN verdict reads UNKNOWN. */}
+      {record.levels.length > 0 && (
+        <ul className="mt-3 space-y-1">
+          {record.levels.map((l) => (
+            <li key={l.kind} className="flex flex-wrap items-baseline gap-x-2">
+              <span className="font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted">
+                {levelName(l.kind)}
+              </span>
+              <span className="font-sans text-[11.5px] leading-snug text-foreground/80">
+                {l.jurisdiction ?? "—"}: {levelStatusText(l.status)}
+                {l.reviewedAt && (
+                  <span className="text-muted"> · reviewed {l.reviewedAt}</span>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        {record.sourceUrl && (
+          <a
+            href={record.sourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono text-[10px] uppercase tracking-[0.08em] text-foreground underline decoration-border-strong underline-offset-2 hover:decoration-foreground"
+          >
+            the jurisdiction's own record
+          </a>
+        )}
+        {record.reviewedAt && (
+          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+            reviewed {record.reviewedAt}
+          </span>
+        )}
+        {record.evaluationDate && (
+          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+            evaluated as of {record.evaluationDate}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function BlockingGateRow({ gate }: { gate: ParcelGateRow }) {
   const tone = {
     FAIL: "danger", CONDITIONAL: "warn", UNKNOWN: "muted", PASS: "good",
@@ -684,6 +787,7 @@ function BlockingGateRow({ gate }: { gate: ParcelGateRow }) {
     good: "text-success dark:text-success-night",
     muted: "text-muted",
   }[tone];
+  const record = restrictionRecord(gate);
   return (
     <div className="rounded-xl bg-surface-raised/40 p-5">
       <div className="flex items-start justify-between gap-4">
@@ -702,6 +806,7 @@ function BlockingGateRow({ gate }: { gate: ParcelGateRow }) {
           {gate.rationale}
         </p>
       )}
+      {record && <RestrictionRecordBlock record={record} />}
       {gate.affected_area_pct != null && (
         <div className="mt-4">
           <Bar label="Parcel area affected" pct={gate.affected_area_pct} tone={tone === "muted" ? "neutral" : tone} />
