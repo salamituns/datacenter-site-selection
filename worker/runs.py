@@ -120,19 +120,26 @@ class IngestionRun:
         """Loads {gate_key: {"id": ..., "params": ..., "rule_version": ...}}
         for a jurisdiction.
 
-        Rows are read in created_at order so the NEWEST version of a gate's
-        rule wins: constraint_rules is append-only by version, a run's gate
-        rows keep the rule_id that actually decided them, and a new version
-        governs from the next run without mutating the row that decided the
-        last one. Without the ordering the winner would be whichever row
-        PostgREST happened to return last — a coin flip dressed as a
-        version choice.
+        Only unsuperseded rows are read, so which version governs is a fact
+        recorded in the table rather than an inference from insertion order.
+        constraint_rules stays append-only: a run's gate rows keep the
+        rule_id that actually decided them, and a new version governs from
+        the next run without mutating the row that decided the last one.
+
+        This replaced a newest-by-created_at convention. That convention was
+        correct and invisible — supersession lived in the description text
+        as "(supersedes X)", so nothing could answer "is this run deciding
+        under the current rule?" without parsing English. v_region_rule_drift
+        answers it now, and only because the relationship became data.
         """
         res = self.client.table("constraint_rules") \
-            .select("id,gate_key,rule_version,params") \
+            .select("id,gate_key,rule_version,params,reviewed_at,reviewed_against") \
             .eq("jurisdiction", jurisdiction) \
+            .is_("superseded_by", "null") \
             .order("created_at").execute()
-        return _rows_to_rules(res.data or [])
+        rules = _rows_to_rules(res.data or [])
+        _log_rule_currency(jurisdiction, rules)
+        return rules
 
     def fetch_power_parcel_evidence(self) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -195,12 +202,41 @@ class IngestionRun:
 
 
 def _rows_to_rules(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    # Later rows overwrite earlier ones per gate_key, so the caller must
-    # pass the rows in created_at order — the newest version governs.
+    # Callers filter on superseded_by IS NULL, so at most one row per
+    # gate_key arrives and "which version governs" is a fact in the table
+    # rather than a convention about insertion order. created_at ordering is
+    # kept only as a tiebreak for the transitional case of two unsuperseded
+    # rows, which the backfill left none of.
     return {r["gate_key"]: {"id": str(r["id"]),
                             "params": r["params"] or {},
-                            "rule_version": r.get("rule_version")}
+                            "rule_version": r.get("rule_version"),
+                            "reviewed_at": r.get("reviewed_at"),
+                            "reviewed_against": r.get("reviewed_against")}
             for r in rows}
+
+
+def _log_rule_currency(jurisdiction: str, rules: Dict[str, Dict[str, Any]]) -> None:
+    """
+    States how old the rules deciding this run are.
+
+    The engine cannot know an ordinance changed — only that nobody has
+    checked lately. Loudoun's use table claimed to reflect a March 2025
+    amendment it did not reflect, and decided 119 parcels for months before
+    anyone read the ordinance again. A rule with no recorded review is
+    reported as exactly that, because "never checked" is a finding and not
+    a default.
+    """
+    unreviewed = sorted(k for k, v in rules.items() if not v.get("reviewed_at"))
+    reviewed = {k: v.get("reviewed_at") for k, v in rules.items()
+                if v.get("reviewed_at")}
+    if reviewed:
+        logger.info("Rule review dates for %s: %s", jurisdiction,
+                    ", ".join(f"{k} {d}" for k, d in sorted(reviewed.items())))
+    if unreviewed:
+        logger.warning(
+            "Rules with no recorded review for %s: %s — these decide gates "
+            "against a source nobody has verified on the record.",
+            jurisdiction, ", ".join(unreviewed))
 
 
 def load_rules_readonly(jurisdiction: str) -> Dict[str, Dict[str, Any]]:
@@ -227,10 +263,13 @@ def load_rules_readonly(jurisdiction: str) -> Dict[str, Dict[str, Any]]:
         client = create_client(url, key)
         # Same newest-version-wins contract as IngestionRun.load_rules:
         # created_at order, last row per gate_key governs.
-        res = client.table("constraint_rules").select("id,gate_key,rule_version,params") \
+        res = client.table("constraint_rules") \
+            .select("id,gate_key,rule_version,params,reviewed_at,reviewed_against") \
             .eq("jurisdiction", jurisdiction) \
+            .is_("superseded_by", "null") \
             .order("created_at").execute()
         rules = _rows_to_rules(res.data or [])
+        _log_rule_currency(jurisdiction, rules)
         logger.info("constraint_rules for %s (read-only): %s",
                     jurisdiction, sorted(rules) or "none")
         return rules
