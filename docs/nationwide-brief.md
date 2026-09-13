@@ -212,3 +212,51 @@ Recommended: **2**, with the overview question answered as its own task. It
 gets national coverage moving without touching a published verdict, and the
 difference between the two measurements becomes a documented property of the
 tiers rather than an unexplained discrepancy.
+
+### Calibration: the thresholds cannot be translated
+
+Attempted on 30 Loudoun parcels with both measurements — the `getSamples`
+figures already published, and an `exportImage` raster over the same area:
+
+| statistic | correlation | ratio (DEM ÷ stored) | p10 → p90 |
+| --- | --- | --- | --- |
+| **max** | 0.731 | 2.32× | **1.28 → 5.67** |
+| **median** | 0.907 | 1.24× | 1.02 → 1.83 |
+
+`max` is not convertible. A 4.4-fold spread in the ratio means no constant
+carries `max_fail_pct = 25` across to the DEM method, and `max` is precisely
+what the FAIL threshold reads. Fitting one anyway would be inventing a
+threshold and calling it a translation.
+
+The reason is physical rather than statistical. At 10 m resolution the maximum
+over a parcel is decided by its single steepest pixel — a road cut, a stream
+bank, a quarry face — so it measures the worst artefact in the parcel rather
+than its buildability. The 32×32 lattice smooths those away by construction,
+which is why it has served as a screening statistic.
+
+**Median survives the change; max does not.** Correlation 0.907 and a 1.02–1.83
+ratio still is not a conversion factor, but median is a robust statistic at
+native resolution in a way max is not.
+
+### Revised recommendation
+
+A national screening slope gate should:
+
+* use the **export raster**, which is fast and scales with area;
+* decide on **median** slope, not max — at native resolution max measures the
+  worst pixel, and screening wants the typical grade;
+* carry its **own threshold, set on its own terms**, not derived from 25.
+  Note that `slope.max_fail_pct = 25` is itself recorded as project judgement
+  with no external authority, so calibrating a new judgement against it
+  through a noisy ratio would compound rather than ground it;
+* emit under **distinct metric keys** so a screening-tier slope is never
+  compared with a parcel-tier one as though they were the same measurement.
+
+This is not a code change waiting to be written. It is a threshold that needs
+deciding — what median grade makes a 100+ MW pad uneconomic — and that is the
+same kind of judgement call the acreage and road-access thresholds already
+are, to be recorded with its basis like them.
+
+**Not shipped.** The engineering is solved and the measurement is understood;
+what remains is a number nobody has justified yet, and guessing it would put
+an unfounded threshold underneath national coverage.
