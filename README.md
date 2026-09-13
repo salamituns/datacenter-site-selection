@@ -151,9 +151,9 @@ npm run dev     # http://localhost:3000
 
 ```bash
 cd worker && pip install -r requirements-dev.txt
-python -m pytest -q   # 149 tests, offline: no network, no database
+python -m pytest -q   # 246 tests, offline: no network, no database
 
-cd client && npm test # 24 tests
+cd client && npm test # 43 tests
 ```
 
 The worker suite is regression-shaped: it pins the defects this pipeline has

@@ -166,3 +166,50 @@ jobs:
 
           echo "Running pipeline for $REGION (dry run: ${DRY_RUN:-no})..."
           python pipeline.py --region "$REGION" $DRY_RUN
+
+  # Once every region has published, drop the generations nothing reads.
+  # The promote deletes by run_id and re-inserts, so each republish leaves a
+  # full generation behind: 88.5% of parcel_metric_values was superseded
+  # history before this existed. Runs here rather than inside promote so a
+  # defect in the keep-set logic cannot destroy history on every publish —
+  # and after the matrix, so it prunes a consistent set rather than pruning
+  # mid-refresh while four regions still carry last week's runs.
+  #
+  # always() so a region that failed does not leave the pruning skipped for
+  # a week; the keep set is computed from what actually published.
+  prune:
+    name: Prune superseded evidence
+    needs: run-pipeline
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      # --fail-with-body, not plain -sS: PostgREST answers a missing function
+      # or a bad key with a 404/401 and a JSON body, and curl exits 0 on both.
+      # This step would then print the error and report success -- the shape of
+      # failure this pipeline has produced before. Exit on the status code, and
+      # assert on the payload rather than trusting that 200 meant it ran.
+      - name: Prune
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          response=$(curl -sS --fail-with-body --retry 2 --max-time 1500 \
+            -X POST "$SUPABASE_URL/rest/v1/rpc/prune_superseded_evidence" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"p_execute": true}')
+          echo "$response" | python3 -m json.tool
+          python3 -c "
+          import json, sys
+          r = json.loads(sys.argv[1])
+          if not r.get('executed'):
+              sys.exit('prune returned executed=false -- it ran as a dry run')
+          if not r.get('runs_retained'):
+              sys.exit('prune retained no runs -- refusing to call this a success')
+          m, g = r['metrics'], r['gates']
+          print(f\"pruned {m['deleted']:,} metric rows and {g['deleted']:,} gate \"
+                f\"rows across {r['runs_retained']} retained runs; \"
+                f\"{m['retained']:,} metrics and {g['retained']:,} gates kept\")
+          " "$response"
