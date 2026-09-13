@@ -22,9 +22,62 @@ on:
       - main
 
 jobs:
-  run-pipeline:
-    name: Run Ingestion, Scikit-Learn Clustering & Supabase PostGIS Sync
+  # Which regions this run covers. The weekly cron used to take the
+  # workflow's own default and refresh VA-LOUDOUN alone, so the other four
+  # regions drifted until somebody dispatched them by hand — which is
+  # exactly how Licking came to publish under a superseded zoning rule.
+  #
+  # The list is read out of worker/pipeline.py rather than restated here.
+  # A region added to REGION_PRESETS joins the weekly refresh with no
+  # workflow edit, and the two cannot disagree about what exists. Parsed
+  # with ast instead of imported: the real module needs geopandas and the
+  # whole geospatial stack, and this job only needs the dictionary keys.
+  regions:
+    name: Resolve regions
     runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.resolve.outputs.list }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: resolve
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import ast, json, os
+          event = os.environ["EVENT"]
+          requested = os.environ.get("REGION") or ""
+          if event == "schedule":
+              tree = ast.parse(open("worker/pipeline.py").read())
+              regions = next(
+                  [k.value for k in n.value.keys]
+                  for n in tree.body
+                  if isinstance(n, ast.AnnAssign)
+                  and getattr(getattr(n, "target", None), "id", "") == "REGION_PRESETS"
+              )
+          else:
+              # A manual dispatch runs what was asked for; a push validates
+              # one region as a dry run, since the point is the code path
+              # and not the coverage.
+              regions = [requested or "VA-LOUDOUN"]
+          print("list=" + json.dumps(regions))
+          PY
+        env:
+          EVENT: ${{ github.event_name }}
+          REGION: ${{ github.event.inputs.region }}
+
+  run-pipeline:
+    name: ${{ matrix.region }}
+    needs: regions
+    runs-on: ubuntu-latest
+    strategy:
+      # One region at a time. Four concurrent publishes would quadruple
+      # request pressure on 3DEP, PAD-US, NWI and TIGERweb from one IP
+      # range, and this repo has been rate-limited by two of them already.
+      max-parallel: 1
+      # A region that fails must not cancel the rest: one county's cadastre
+      # going down is not a reason to leave four others a week stale.
+      fail-fast: false
+      matrix:
+        region: ${{ fromJson(needs.regions.outputs.list) }}
     # A Franklin publish (982 parcels) measured 23m25s: no cache, the NWI
     # geodatabase fallback, and the atomic promote on top of the ingest.
     # The Licking corridor survey is ~2,900 parcels, so 90 leaves headroom
@@ -109,7 +162,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd worker
-          REGION="${{ github.event.inputs.region || 'VA-LOUDOUN' }}"
+          REGION="${{ matrix.region }}"
 
           echo "Running pipeline for $REGION (dry run: ${DRY_RUN:-no})..."
           python pipeline.py --region "$REGION" $DRY_RUN
