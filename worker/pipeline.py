@@ -42,61 +42,55 @@ from parcel_gates import qualify_parcels, RULE_VERSIONS
 from runs import (IngestionRun, load_jurisdiction_restrictions_readonly,
                   load_rules_readonly)
 import overlay_layers
+import region_registry
 
 load_dotenv()
 
 PIPELINE_VERSION = "3.0.0"
 
-# Survey region presets, keyed by region slug (STATE-COUNTY). The slug is
-# the region's identity in the database: promote swaps, uniqueness and
-# supersession are scoped by region_key, so two counties of one state
-# (OH-FRANKLIN, OH-LICKING) coexist instead of overwriting each other.
-# bbox is (min_lon, min_lat, max_lon, max_lat).
-REGION_PRESETS: Dict[str, Dict[str, Any]] = {
-    "VA-LOUDOUN": {
-        "state": "VA",
-        "bbox": (-77.85, 38.75, -77.25, 39.25),
-        "county": "Loudoun",
-        "grid_operator": "PJM Interconnection",
-    },
-    "TX-TAYLOR": {
-        "state": "TX",
-        "bbox": (-100.05, 32.15, -99.45, 32.75),
-        "county": "Taylor",
-        "grid_operator": "ERCOT",
-    },
-    "OH-FRANKLIN": {
-        "state": "OH",
-        "bbox": (-83.15, 39.85, -82.55, 40.35),
-        "county": "Franklin",
-        "grid_operator": "PJM Interconnection",
-    },
-    # The west-Licking corridor: Jersey, Etna, Monroe and Harrison
-    # townships along I-70, where the New Albany data-center campus and
-    # the Intel site actually sit. 2,853 parcels at the 20-acre floor
-    # (probed 2026-09-10) — the full county would be 5,271.
-    "OH-LICKING": {
-        "state": "OH",
-        "bbox": (-82.75, 39.95, -82.40, 40.25),
-        "county": "Licking",
-        "grid_operator": "PJM Interconnection",
-    },
-    # The whole county: PW is compact (348 square miles) and 962 parcels
-    # clear the 20-acre floor (probed 2026-09-11), so unlike Licking no
-    # corridor scoping is needed.
-    "VA-PRINCEWILLIAM": {
-        "state": "VA",
-        "bbox": (-77.76, 38.49, -77.20, 38.96),
-        "county": "Prince William",
-        "grid_operator": "PJM Interconnection",
-    },
-    "OR-MORROW": {
-        "state": "OR",
-        "bbox": (-120.05, 45.55, -119.45, 46.15),
-        "county": "Morrow",
-        "grid_operator": "Bonneville Power Administration",
-    },
-}
+# The regions the weekly refresh covers, as region slugs (STATE-COUNTY).
+# The slug is the region's identity in the database: promote swaps,
+# uniqueness and supersession are scoped by region_key, so two counties of
+# one state (OH-FRANKLIN, OH-LICKING) coexist instead of overwriting each
+# other.
+#
+# This is a list of names, not of geometry. Everything else about a region —
+# its bounding box, its county name, its FIPS code — comes from the Census
+# county file via region_registry, because those were hand-typed constants
+# and four of the six were wrong: Loudoun's box missed 66 square miles of
+# Loudoun, Taylor's missed 291, Franklin's 168, Morrow's 1,476. A parcel in
+# the missed strip did not read UNKNOWN, it was simply absent.
+#
+# Adding a region here joins it to the weekly refresh. Any of the 3,222
+# counties in the Census file can be run on demand with --region without
+# appearing here.
+SURVEY_REGIONS: Tuple[str, ...] = (
+    "VA-LOUDOUN",
+    "TX-TAYLOR",
+    "OH-FRANKLIN",
+    "OH-LICKING",
+    "VA-PRINCEWILLIAM",
+    "OR-MORROW",
+)
+
+
+def resolve_region(region_key: str) -> region_registry.Region:
+    """
+    The bbox, county name, FIPS and grid operator for a region slug.
+
+    Raises rather than returning a default: a region that cannot be resolved
+    is a typo or a county that does not exist, and inventing a bounding box
+    for it would survey the wrong ground under a real region's name.
+    """
+    region = region_registry.resolve(region_key)
+    if region is None:
+        raise SystemExit(
+            f"No such county: {region_key!r}. Region slugs are STATE-COUNTY, "
+            "e.g. OH-LICKING; independent cities take a CITY suffix, "
+            "e.g. VA-ROANOKECITY."
+        )
+    return region
+
 
 # Equal-area projection for the screening grid. The parcel tier uses a
 # local UTM zone, which is right for one county and wrong for a country;
@@ -328,10 +322,14 @@ def run_pipeline(
     county of the same state. State-scoped artefacts (PAD-US, TIGER,
     PJM RTEP) are still keyed by the state half of the slug.
     """
-    preset = REGION_PRESETS.get(region_key, {})
+    region = region_registry.resolve(region_key)
     state_code = region_key.split("-", 1)[0]
-    county_name = county_name or preset.get("county", "Regional")
-    grid_operator = grid_operator or preset.get("grid_operator", "PJM Interconnection")
+    county_name = county_name or (region.county if region else "Regional")
+    # No default operator. Defaulting to PJM was harmless while six regions
+    # were hand-listed and five of them really were PJM, but RTO footprints
+    # do not follow state lines, and at national scale that default would
+    # label every unmapped county in the country as PJM.
+    grid_operator = grid_operator or (region.grid_operator if region else None)
     logger.info("=" * 75)
     logger.info("DATA CENTER SITE SELECTION PIPELINE v%s", PIPELINE_VERSION)
     logger.info("Target Region: %s [%s, %s, %s, %s]",
@@ -1004,8 +1002,8 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="Run locally without publishing to Supabase")
     parser.add_argument("--region", default="VA-LOUDOUN",
                         help="Region slug (e.g. VA-LOUDOUN, OH-FRANKLIN, TX-TAYLOR, OR-MORROW). "
-                             "A legacy bare state code maps to that state's one preset.")
-    parser.add_argument("--county", default=None, help="Override the preset county/region name")
+                             "A legacy bare state code maps to that state's one survey region.")
+    parser.add_argument("--county", default=None, help="Override the county/region name from the Census file")
     parser.add_argument("--bbox", default=None, help="Override bbox: min_lon,min_lat,max_lon,max_lat")
     parser.add_argument("--geojson", default=None, help="Output GeoJSON filepath")
     parser.add_argument("--no-parcels", action="store_true",
@@ -1016,30 +1014,35 @@ if __name__ == "__main__":
 
     # A bare state code cannot name a region any more — one state can host
     # several diligenced counties — but the four legacy codes each had
-    # exactly one preset, so they map unambiguously.
+    # exactly one survey region, so they map unambiguously.
     if region_key in ("VA", "TX", "OH", "OR"):
-        legacy = [k for k, v in REGION_PRESETS.items() if v["state"] == region_key]
-        if not legacy:
-            raise SystemExit(f"No region preset for state '{region_key}'. "
-                             "Pass a region slug like OH-LICKING.")
+        legacy = [k for k in SURVEY_REGIONS if k.split("-", 1)[0] == region_key]
+        if len(legacy) != 1:
+            raise SystemExit(
+                f"'{region_key}' is a state, not a region, and {len(legacy)} "
+                f"survey regions are in it. Pass a region slug like OH-LICKING.")
         region_key = legacy[0]
         logger.warning("--region %s is a legacy state code; running %s.",
                        args.region.upper(), region_key)
-
-    preset = REGION_PRESETS.get(region_key, {})
 
     if args.bbox:
         try:
             min_lon, min_lat, max_lon, max_lat = [float(x) for x in args.bbox.split(",")]
         except ValueError:
             raise SystemExit("--bbox must be four comma-separated numbers: min_lon,min_lat,max_lon,max_lat")
-    elif preset.get("bbox"):
-        min_lon, min_lat, max_lon, max_lat = preset["bbox"]
+        region = region_registry.resolve(region_key)
+        county = args.county or (region.county if region else "Regional")
+        operator = region.grid_operator if region else None
     else:
-        raise SystemExit(f"No bbox preset for region '{region_key}'. Pass --bbox min_lon,min_lat,max_lon,max_lat.")
-
-    county = args.county or preset.get("county", "Regional")
-    operator = preset.get("grid_operator", "PJM Interconnection")
+        # Derived from the county's own geometry, never typed.
+        region = resolve_region(region_key)
+        region_key = region.region_key          # canonical, e.g. VA-ROANOKECITY
+        min_lon, min_lat, max_lon, max_lat = region.bbox
+        county = args.county or region.county
+        operator = region.grid_operator
+        if region.is_windowed:
+            logger.info("Survey window for %s (less than the whole county): %s",
+                        region.region_key, region.survey_window_reason)
 
     try:
         run_pipeline(

@@ -52,6 +52,8 @@ import numpy as np
 import requests
 from shapely.geometry import shape
 
+import region_registry
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("overlay_layers")
 
@@ -74,19 +76,14 @@ TIGERLINE_ROADS_URL = (
     "https://www2.census.gov/geo/tiger/TIGER2024/ROADS/"
     "tl_2024_{fips}_roads.zip"
 )
-# TIGER/Line is a county file, so this is keyed by region slug, not state —
-# Licking County (39089) and Franklin County (39049) are different
-# downloads. The TIGERweb clip cache stays state-keyed: the vintage is a
-# state-year artefact either county can share.
-COUNTY_FIPS = {
-    "VA-LOUDOUN": "51107",
-    # Verified against the Census 2020 ANSI county reference, not from
-    # the brief: VA|51|153|Prince William County.
-    "VA-PRINCEWILLIAM": "51153",
-    "OH-FRANKLIN": "39049",
-    "OH-LICKING": "39089",
-    "TX-TAYLOR": "48441",
-}
+# TIGER/Line is a county file, so the download is keyed by county FIPS --
+# Licking (39089) and Franklin (39049) are different downloads. The FIPS code
+# comes from the Census county file via region_registry rather than a hand-kept
+# table here: the table listed five regions and the engine can now run any of
+# 3,222, and a county whose FIPS nobody had typed would silently fall back to
+# UNKNOWN roads rather than downloading its file.
+# The TIGERweb clip cache stays state-keyed: the vintage is a state-year
+# artefact either county can share.
 TIGER_ROAD_CLASSES = {"S1100": "primary", "S1200": "secondary"}
 
 
@@ -98,7 +95,7 @@ def _fetch_tigerline_roads(
     the fallback when the TIGERweb REST service is WAF-blocked. None when
     the region has no mapped county (the caller then concedes UNKNOWN).
     """
-    fips = COUNTY_FIPS.get((region_key or "").upper())
+    fips = region_registry.county_fips(region_key)
     if not fips:
         return None
     try:

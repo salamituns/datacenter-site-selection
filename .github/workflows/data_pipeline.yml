@@ -28,10 +28,10 @@ jobs:
   # exactly how Licking came to publish under a superseded zoning rule.
   #
   # The list is read out of worker/pipeline.py rather than restated here.
-  # A region added to REGION_PRESETS joins the weekly refresh with no
+  # A region added to SURVEY_REGIONS joins the weekly refresh with no
   # workflow edit, and the two cannot disagree about what exists. Parsed
   # with ast instead of imported: the real module needs geopandas and the
-  # whole geospatial stack, and this job only needs the dictionary keys.
+  # whole geospatial stack, and this job only needs the names.
   regions:
     name: Resolve regions
     runs-on: ubuntu-latest
@@ -48,11 +48,14 @@ jobs:
           if event == "schedule":
               tree = ast.parse(open("worker/pipeline.py").read())
               regions = next(
-                  [k.value for k in n.value.keys]
+                  [e.value for e in n.value.elts]
                   for n in tree.body
                   if isinstance(n, ast.AnnAssign)
-                  and getattr(getattr(n, "target", None), "id", "") == "REGION_PRESETS"
+                  and getattr(getattr(n, "target", None), "id", "") == "SURVEY_REGIONS"
               )
+              if not regions:
+                  raise SystemExit("SURVEY_REGIONS parsed empty; refusing to "
+                                   "run a weekly refresh over no regions")
           else:
               # A manual dispatch runs what was asked for; a push validates
               # one region as a dry run, since the point is the code path

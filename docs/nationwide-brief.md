@@ -88,18 +88,59 @@ pin the evidence they were made against, so this preserves exactly the history
 that is load-bearing); or archive superseded generations out of the hot table.
 The middle option is the one that fits what the engine already promises.
 
-## Blocker 4 — the region model is hand-maintained
+## Blocker 4 — the region model is hand-maintained — **SOLVED 2026-09-13**
 
-`REGION_PRESETS` carries a hand-written bbox per county and `COUNTY_FIPS` a
+`REGION_PRESETS` carried a hand-written bbox per county and `COUNTY_FIPS` a
 hand-written FIPS. Six entries is fine; 3,143 is not a list anyone maintains.
 
-Derive both from the Census county layer — the same TIGER service already used
-for roads, places and county subdivisions. A county becomes a region by FIPS,
-its bbox comes from its own geometry, and adding coverage stops being an edit
-to a Python dict.
+Both are now derived from the Census cartographic boundary file (900 KB, all
+3,222 county-equivalents) in `worker/region_registry.py`. `SURVEY_REGIONS` is
+reduced to a list of six names; everything geometric comes from the county's
+own polygon. Any county in the country runs with `--region`.
 
-The weekly cron already reads its region list out of `REGION_PRESETS`, so this
-change carries the refresh with it.
+**The hand-typed boxes were wrong, and not in one direction.** Measured
+against the real county geometry:
+
+| region | county area | outside the typed box | |
+| --- | --- | --- | --- |
+| VA-LOUDOUN | 519.5 mi² | 66.4 mi² | 12.8% |
+| TX-TAYLOR | 919.0 mi² | 291.1 mi² | 31.7% |
+| OH-FRANKLIN | 553.0 mi² | 168.3 mi² | 30.4% |
+| OR-MORROW | 2,059.0 mi² | 1,475.7 mi² | 71.7% |
+| VA-PRINCEWILLIAM | 334.2 mi² | 0.0 mi² | 0.0% |
+| OH-LICKING | 690.0 mi² | 307.6 mi² | deliberate corridor |
+
+Four of six claimed a whole county and surveyed part of one. Loudoun's
+published parcels stop at -77.8547 and 39.2614 — hugging the typed box's
+edges — while the county runs to -77.96 and 39.32. A parcel in that strip
+never read UNKNOWN; it was absent, and absence is invisible in a dossier.
+
+Loudoun's box was also too *large* on the east, running to -77.25 where the
+county ends at -77.32. Harmless in practice only because the cadastral API is
+county-authoritative and refused to serve the neighbours' parcels — the
+screening grid had no such protection. Being wrong in both directions at once
+is what a typed constant does and a derived one cannot.
+
+Two further defects the derivation exposed:
+
+* **Six region keys collided.** Virginia's independent cities are
+  county-equivalents sharing a name with the county beside them — Fairfax,
+  Franklin, Richmond, Roanoke, plus Baltimore and St. Louis. Since `promote`
+  swaps on `region_key`, two counties sharing one would have overwritten each
+  other's parcels with no error raised. Independent cities (Census LSAD 25)
+  now carry a `CITY` suffix, and building the cache fails if any key is not
+  unique.
+* **`grid_operator` defaulted to `"PJM Interconnection"`.** Harmless across
+  six hand-listed regions, five of which really are PJM. Across 3,222 it
+  would have labelled every unmapped county in the country as PJM. RTO
+  footprints do not follow state lines, so the operator is now `None` unless
+  explicitly mapped.
+
+The weekly cron reads its region list out of `SURVEY_REGIONS`, so the refresh
+still carries with it, and a region outside that list is a `--region` away.
+
+**Not yet republished.** The corrected boxes only take effect on the next run
+for each region, which will pull in the previously-missed strips.
 
 ---
 
@@ -129,8 +170,8 @@ what it does not know.
 | # | task | depends on |
 | --- | --- | --- |
 | 1 | tile-first slope | nothing — do this first, it unblocks any rollout |
-| 2 | metric retention policy | nothing |
-| 3 | region model from Census counties | nothing |
+| 2 | metric retention policy | **done 2026-09-13** |
+| 3 | region model from Census counties | **done 2026-09-13** |
 | 4 | partition `parcel_metric_values` / `parcel_gate_results` by region or run | 2 |
 | 5 | national parcel adapter | a licence |
 | 6 | progressive rollout, PJM footprint first | 1–5 |
