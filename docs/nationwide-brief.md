@@ -137,3 +137,78 @@ what it does not know.
 
 Items 1–4 are prerequisites regardless of vendor and can start immediately.
 Item 5 is a purchase.
+
+---
+
+## Tile-first slope: measured, and it is not a drop-in
+
+Attempted 2026-09-13. The plan above assumed tile-first slope was an
+optimisation. It is not — it is a **method change**, and the measurements
+below are why.
+
+### What was tried
+
+| approach | result |
+| --- | --- |
+| Windowed reads from the S3 COG via `/vsicurl/` | **6.8 parcels/sec — slower than the 9.4/sec API.** Cost is per-read HTTP overhead, not block misses; ordering the reads by 512px block made it worse (4.7/sec), so the block-reuse premise was simply wrong. |
+| Download the whole 1°×1° tile (489 MB) | Viable only on fast links. 1.37 MB/s measured locally = 6 min/tile, worse than the API for a county the size of Loudoun. CI bandwidth to S3 is likely far better, but this was not measurable from here. |
+| `exportImage` bulk raster, chunked | **Works and is fast.** 4096px fails with HTTP 500; 2048px returns 16.8 MB in 4.4 s. Loudoun needs 9 chunks ≈ 40 s against 265 s today, and the cost is O(area) rather than O(parcels) — a county with 50,000 parcels costs the same 40 s instead of 89 minutes. |
+
+So the throughput problem is solved. The correctness problem is not.
+
+### The values do not match, and that is the blocker
+
+Seven Loudoun parcels, comparing stored `getSamples` figures against the
+export at native resolution:
+
+| parcel | stored max | tiled max | stored median | tiled median |
+| --- | --- | --- | --- | --- |
+| 151107395000 | 97.1 | 220.9 | 29.3 | 16.3 |
+| 152491104000 | 81.5 | 220.9 | 14.2 | 10.6 |
+| 150405648000 | 63.8 | 184.9 | 5.5 | 7.4 |
+
+Reproducing the 32×32 lattice geometry from the raster did not close it
+(170.9 against 97.1). Neither did asking the service for a 32×32 export over
+exactly the same envelope (152.9 against 97.1) — the same service, the same
+extent, the same grid, a different answer.
+
+`getSamples` resolves each sample through a mosaic rule and
+`returnFirstValueOnly`, and that behaviour is not reproducible from
+`exportImage`. Five experiments failed to match it.
+
+### Why this matters more than the speed
+
+`slope.max_fail_pct = 25` was calibrated against the `getSamples` figure.
+Switching method would move every slope value upward — natively-resolved
+maxima catch ditches, road cuts and stream banks that a lattice over a large
+envelope smooths away — and would fail parcels the engine currently passes,
+silently, across all five regions.
+
+That is the change this project refuses to make quietly.
+
+It also raises a question about the **existing** values rather than the new
+ones. If `getSamples` is resolving through a coarser overview than the
+1/3-arcsecond product, today's slope figures are systematically low, and the
+threshold was calibrated against a smoothed measurement without that being
+recorded anywhere. Worth establishing before either method is trusted at
+national scale.
+
+### Options
+
+1. **Treat it as a method change.** New slope method, thresholds recalibrated
+   against it, recorded as a new `constraint_rules` version with its basis,
+   all regions republished. Honest and substantial, and it should settle the
+   overview question first.
+2. **Split by tier.** Keep `getSamples` for diligenced counties and use the
+   export-based method for national screening coverage, under its own metric
+   key and threshold. This fits the tiering model the engine already has —
+   national coverage is explicitly a different, coarser product — and avoids
+   changing any verdict already published.
+3. **Leave slope out of the national six.** Nationwide becomes five free
+   gates with slope UNKNOWN until a county is diligenced. Costs nothing, loses
+   a genuinely useful screening signal.
+
+Recommended: **2**, with the overview question answered as its own task. It
+gets national coverage moving without touching a published verdict, and the
+difference between the two measurements becomes a documented property of the
+tiers rather than an unexplained discrepancy.
