@@ -85,6 +85,9 @@ GRID_OPERATORS: Dict[str, str] = {
     "VA-FAUQUIER": "PJM Interconnection",
     "OH-FRANKLIN": "PJM Interconnection",
     "OH-LICKING": "PJM Interconnection",
+    "OH-FAIRFIELD": "PJM Interconnection",
+    "OH-UNION": "PJM Interconnection",
+    "OH-DELAWARE": "PJM Interconnection",
     "TX-TAYLOR": "ERCOT",
     "OR-MORROW": "Bonneville Power Administration",
 }

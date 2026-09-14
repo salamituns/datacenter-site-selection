@@ -72,6 +72,9 @@ SURVEY_REGIONS: Tuple[str, ...] = (
     "OH-LICKING",
     "VA-PRINCEWILLIAM",
     "VA-FAUQUIER",
+    "OH-FAIRFIELD",
+    "OH-UNION",
+    "OH-DELAWARE",
     "OR-MORROW",
 )
 
@@ -124,6 +127,14 @@ PARCEL_PILOTS: Dict[str, str] = {
     # yet (docs/fauquier-research.md), so zoning_dc_use reads UNKNOWN
     # county-wide until the ordinance is in hand.
     "VA-FAUQUIER": "Fauquier County, VA",
+    # Three counties on one adapter: the City of Columbus publishes a
+    # regional parcels layer, so these joined by name rather than by a new
+    # fetcher. All three read zoning UNKNOWN — Ohio zones by township, and
+    # none of them publishes a county-wide layer (docs/ohio-expansion-
+    # shortlist.md). Franklin sits in the same state.
+    "OH-FAIRFIELD": "Fairfield County, OH",
+    "OH-UNION": "Union County, OH",
+    "OH-DELAWARE": "Delaware County, OH",
 }
 
 # One adapter per parcel-pilot region. Dispatch is by region slug, never
@@ -136,6 +147,9 @@ PARCEL_ADAPTERS: Dict[str, str] = {
     "VA-PRINCEWILLIAM": "princewilliam",
     "TX-TAYLOR": "taylor",
     "VA-FAUQUIER": "fauquier",
+    "OH-FAIRFIELD": "central_ohio",
+    "OH-UNION": "central_ohio",
+    "OH-DELAWARE": "central_ohio",
 }
 
 logging.basicConfig(
@@ -545,6 +559,11 @@ def run_pipeline(
             elif adapter == "fauquier":
                 from fauquier_api import FauquierParcelAPI
                 county_api = FauquierParcelAPI()
+            elif adapter == "central_ohio":
+                # The only adapter that serves more than one county, so it is
+                # the only one that needs to know which it is running.
+                from central_ohio_api import CentralOhioParcelAPI
+                county_api = CentralOhioParcelAPI(region_key)
             elif adapter == "licking":
                 from licking_api import LickingParcelAPI
                 county_api = LickingParcelAPI()
