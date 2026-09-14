@@ -42,6 +42,7 @@ from parcel_gates import qualify_parcels, RULE_VERSIONS
 from runs import (IngestionRun, load_jurisdiction_restrictions_readonly,
                   load_rules_readonly)
 import overlay_layers
+import national_metrics
 import region_registry
 
 load_dotenv()
@@ -238,6 +239,10 @@ def _grid_records(gdf: gpd.GeoDataFrame, region_key: str) -> List[Dict[str, Any]
                     "source (utility study / PJM agreement). See power documents."
                 ),
                 "sources": ["HIFLD", "USGS NWIS", "NOAA ACIS", "FEMA NRI", "USGS seismic"],
+                # Federal-layer measurements, present only for a region with
+                # no cadastre. Measurements, not verdicts — see national_metrics.
+                **({"federal_metrics": row["federal_metrics"]}
+                   if row.get("federal_metrics") else {}),
             },
         })
     return records
@@ -917,6 +922,18 @@ def run_pipeline(
                 run.stage_land_parcels(parcel_records)
                 run.stage_parcel_metrics(metric_rows)
                 run.stage_parcel_gates(gate_rows)
+
+        elif qualify_parcels_flag:
+            # No cadastre in this county, so the federal layers are measured
+            # over the screening cells instead. Measurements only: the gate
+            # thresholds are calibrated for parcels and a cell is ~250x
+            # larger, so a verdict here would be arithmetic rather than an
+            # answer. evidence_coverage stays 0.0 and the tier stays
+            # screening, so these cells rank below every diligenced parcel.
+            logger.info("Step 6: federal-layer metrics for %s (no cadastre)…",
+                        region_key)
+            clustered_gdf["federal_metrics"] = national_metrics.measure(
+                clustered_gdf, min_lon, min_lat, max_lon, max_lat, state_code)
 
         # ── Evidence tier and coverage weighting ───────────────────────
         # Ranking is lexicographic: evidence tier first, score second. A

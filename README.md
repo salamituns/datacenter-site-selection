@@ -151,7 +151,7 @@ npm run dev     # http://localhost:3000
 
 ```bash
 cd worker && pip install -r requirements-dev.txt
-python -m pytest -q   # 264 tests, offline: no network, no database
+python -m pytest -q   # 267 tests, offline: no network, no database
 
 cd client && npm test # 43 tests
 ```
