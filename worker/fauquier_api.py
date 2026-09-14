@@ -66,10 +66,15 @@ ORG = "https://services.arcgis.com/oAoeYJ1kqmAwcEC2/arcgis/rest/services"
 PARCELS_URL = f"{ORG}/Tax_Parcels_DL/FeatureServer/0/query"
 ZONING_URL = f"{ORG}/Zoning_Districts_DL/FeatureServer/0/query"
 
-# Recorded on every zoning row so the dossier cites where the districts came
-# from. It is NOT a use table: it names the map, not what the map permits.
-ORDINANCE = ("Fauquier County Zoning Ordinance — official zoning map "
-             "(Zoning_Districts_DL, Department of Community Development)")
+# Recorded on every zoning row so the dossier cites the instrument the
+# districts come from. The gate appends "ordinance" after this string, so it
+# reads as a citation rather than ending in the word itself.
+#
+# It names the map and the sections that govern the use, but it is not the
+# use table — that lives in constraint_rules, where it can be superseded when
+# the ordinance changes without touching this adapter.
+ORDINANCE = ("Fauquier County Zoning Ordinance, Art. 3 Secs. 3-100/3-400 and "
+             "Art. 4 Part 6 Secs. 4-603/4-605")
 
 
 class FauquierParcelAPI:
