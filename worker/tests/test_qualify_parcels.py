@@ -652,7 +652,12 @@ class TestNoCountyZoningRule:
         )
         g = [g for g in gates if g["gate_key"] == "zoning_dc_use"][0]
         assert g["status"] == "UNKNOWN"
-        assert "No zoning district overlap" in g["rationale"]
+        # This test used to assert "No zoning district overlap", which was the
+        # sentence a no-layer county got — it describes a published map that
+        # misses the parcel, and there is no map here at all. The assertion
+        # was pinning the wrong message in place. See tests/test_zoning_grade.py.
+        assert "publishes no zoning layer" in g["rationale"]
+        assert g["details"]["zoning_grade"] == "screening"
 
     def test_the_rule_never_fires_when_a_zoning_layer_exists(self):
         # A layer that misses a parcel is the municipal-gap case, not the

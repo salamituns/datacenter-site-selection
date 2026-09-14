@@ -1307,11 +1307,35 @@ def qualify_parcels(
                                                   "place (TIGER/Line Places)"),
                          })
             else:
-                gate(pin, "zoning_dc_use", "UNKNOWN",
-                     "No zoning district overlap found — the authoritative zoning map "
-                     "does not cover this parcel (unincorporated/town gap or boundary "
-                     "sliver). Use status remains UNKNOWN until reviewed.",
-                     details={"zoning_layer": "present" if zoning_gdf is not None else "missing"})
+                # Two different facts wore one sentence here. A parcel that
+                # falls in a gap of a published map is not the same as a
+                # county that publishes no map, and the second is most of
+                # Ohio: zoning there is municipal and township business, so
+                # Franklin has no county layer to read at all. Every one of
+                # its 982 parcels used to say "the authoritative zoning map
+                # does not cover this parcel", which invites the reader to
+                # picture a map with a hole in it.
+                #
+                # The details dict already carried zoning_layer: missing.
+                # This makes the rationale agree with it, so the dossier
+                # says which of the two states it is in.
+                if zoning_gdf is None or len(zoning_gdf) == 0:
+                    gate(pin, "zoning_dc_use", "UNKNOWN",
+                         "This jurisdiction publishes no zoning layer, so no "
+                         "district can be read for any parcel in it. The use "
+                         "status is screening-grade and stays UNKNOWN until a "
+                         "zoning source is obtained — it is not a gap in a map, "
+                         "it is the absence of one.",
+                         details={"zoning_layer": "missing",
+                                  "zoning_grade": "screening"})
+                else:
+                    gate(pin, "zoning_dc_use", "UNKNOWN",
+                         "No zoning district overlap found — the authoritative "
+                         "zoning map covers this jurisdiction but not this parcel "
+                         "(unincorporated/town gap or boundary sliver). Use status "
+                         "remains UNKNOWN until reviewed.",
+                         details={"zoning_layer": "present",
+                                  "zoning_grade": "parcel"})
         else:
             zone_code = str(zr["zone"])
             zone_details: Dict[str, Any] = {"zone": zone_code,

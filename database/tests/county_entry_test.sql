@@ -23,7 +23,7 @@ WITH cur AS (
   SELECT p.region_key, p.id AS parcel_id, p.latest_run_id
     FROM public.land_parcels p WHERE p.is_active
 ), g AS (
-  SELECT c.region_key, gr.gate_key, gr.status, gr.rationale
+  SELECT c.region_key, gr.gate_key, gr.status, gr.rationale, gr.details
     FROM cur c
     JOIN public.parcel_gate_results gr
       ON gr.parcel_id = c.parcel_id AND gr.run_id = c.latest_run_id
@@ -43,7 +43,13 @@ WITH cur AS (
     --    whole product exists to avoid -- a confident answer with nothing
     --    behind it. A wrong UNKNOWN is recoverable; this is not.
     count(*) FILTER (WHERE status<>'UNKNOWN'
-                       AND (rationale IS NULL OR btrim(rationale)='')) AS verdicts_without_rationale
+                       AND (rationale IS NULL OR btrim(rationale)='')) AS verdicts_without_rationale,
+    -- Screening-grade zoning: the jurisdiction publishes no zoning layer at
+    -- all, so no parcel in it can be decided. Distinct from a parcel falling
+    -- in a gap of a published map, and the distinction is the difference
+    -- between a county that is mislabelled and one that is merely incomplete.
+    bool_or(gate_key='zoning_dc_use' AND details->>'zoning_grade'='screening')
+      AS zoning_is_screening_grade
   FROM g GROUP BY region_key
 ), parcels AS (
   SELECT region_key, count(*) AS n, (array_agg(DISTINCT latest_run_id))[1] AS run_id
@@ -58,6 +64,7 @@ SELECT
   (SELECT count(*) FROM public.source_snapshots ss
     WHERE ss.run_id = p.run_id)                         AS "5_snapshots",
   s.verdicts_without_rationale                          AS "6_verdicts_no_rationale",
+  coalesce(s.zoning_is_screening_grade, false)          AS zoning_screening_grade,
   CASE WHEN s.acreage_pct >= 99
         AND s.zoning_pct  >= 80
         AND s.water_rows = p.n
@@ -70,7 +77,8 @@ SELECT
     CASE WHEN s.water_rows <> p.n THEN 'water unclassified on some parcels' END,
     CASE WHEN (SELECT count(*) FROM public.source_snapshots ss WHERE ss.run_id = p.run_id) < 19
          THEN 'fewer than 19 source snapshots' END,
-    CASE WHEN s.verdicts_without_rationale > 0 THEN 'verdicts without rationale' END
+    CASE WHEN s.verdicts_without_rationale > 0 THEN 'verdicts without rationale' END,
+    CASE WHEN s.zoning_is_screening_grade THEN 'no zoning layer published (screening-grade zoning)' END
   )                                                     AS fails_on
 FROM scored s JOIN parcels p USING (region_key)
 ORDER BY tier1 DESC, s.region_key;
