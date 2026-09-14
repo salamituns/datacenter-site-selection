@@ -91,11 +91,16 @@ jobs:
     timeout-minutes: 90
 
     env:
+      # One source of truth for whether this run publishes. The --dry-run
+      # flag and the credential gate below both derive from it, so they
+      # cannot disagree — and disagreeing is exactly what happened before:
+      # the comment here said a push "needs no credentials" while the run
+      # step handed every push the production service-role key.
+      #
       # A push under worker/ validates the pipeline end to end without
-      # publishing: it needs no credentials, and a code change can never
-      # write to the production database on its own. Publication is
-      # reserved for the weekly cron and manual dispatch.
-      DRY_RUN: ${{ (github.event_name == 'push' || github.event.inputs.dry_run == 'true') && '--dry-run' || '' }}
+      # publishing. Publication is reserved for the weekly cron and manual
+      # dispatch.
+      PUBLISHING: ${{ github.event_name != 'push' && github.event.inputs.dry_run != 'true' }}
 
     steps:
       - name: Checkout Repository
@@ -151,13 +156,25 @@ jobs:
       # rather than clearing the cache, so one moving file does not cost a
       # re-download of a gigabyte of static ones.
       - name: Force-refresh time-varying sources on a publishing run
-        if: env.DRY_RUN == ''
+        if: env.PUBLISHING == 'true'
         run: rm -f worker/cache/pjm_project_cost_upgrades.xml
 
       - name: Run Pipeline & Sync PostGIS Data
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Withheld from a dry run. A push under worker/ runs code that has
+          # not necessarily been reviewed, and handing it a key that can
+          # write to production is a standing risk for no benefit: a dry run
+          # never opens a write client.
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.PUBLISHING == 'true' && secrets.SUPABASE_SERVICE_ROLE_KEY || '' }}
+          # A dry run still reads constraint_rules, which is world-readable.
+          # Giving it no key at all would not be safer, it would be wrong:
+          # load_rules_readonly falls back to built-in defaults, and a
+          # zoning-supplying region then refuses the run outright rather
+          # than deciding against another county's use table. The anon key
+          # is the publishable one already shipped in the browser bundle —
+          # it reads what RLS allows and cannot write.
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           # Reads the mirrored Taylor County shapefile from this repo's
           # releases. The district's host blocks datacenter IPs, so a CI
           # runner cannot fetch from source; the repo is private, so the
@@ -167,7 +184,12 @@ jobs:
           cd worker
           REGION="${{ matrix.region }}"
 
-          echo "Running pipeline for $REGION (dry run: ${DRY_RUN:-no})..."
+          # Defaults to a dry run: if PUBLISHING is ever unset or malformed,
+          # the run declines to publish rather than publishing by accident.
+          DRY_RUN="--dry-run"
+          if [ "$PUBLISHING" = "true" ]; then DRY_RUN=""; fi
+
+          echo "Running pipeline for $REGION (publishing: $PUBLISHING)..."
           python pipeline.py --region "$REGION" $DRY_RUN
 
   # Once every region has published, drop the generations nothing reads.
