@@ -82,6 +82,7 @@ SURVEY_WINDOWS: Dict[str, Dict[str, Any]] = {
 GRID_OPERATORS: Dict[str, str] = {
     "VA-LOUDOUN": "PJM Interconnection",
     "VA-PRINCEWILLIAM": "PJM Interconnection",
+    "VA-FAUQUIER": "PJM Interconnection",
     "OH-FRANKLIN": "PJM Interconnection",
     "OH-LICKING": "PJM Interconnection",
     "TX-TAYLOR": "ERCOT",

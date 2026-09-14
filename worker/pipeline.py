@@ -71,6 +71,7 @@ SURVEY_REGIONS: Tuple[str, ...] = (
     "OH-FRANKLIN",
     "OH-LICKING",
     "VA-PRINCEWILLIAM",
+    "VA-FAUQUIER",
     "OR-MORROW",
 )
 
@@ -118,6 +119,11 @@ PARCEL_PILOTS: Dict[str, str] = {
     # Abilene is in ERCOT, so unlike Ohio nothing from the PJM power
     # diligence layer carries over and that gate stays UNKNOWN.
     "TX-TAYLOR": "Taylor County, TX",
+    # The third Virginia county, adjacent to Loudoun and in the same PJM
+    # market. Its zoning districts are ingested but no use table exists
+    # yet (docs/fauquier-research.md), so zoning_dc_use reads UNKNOWN
+    # county-wide until the ordinance is in hand.
+    "VA-FAUQUIER": "Fauquier County, VA",
 }
 
 # One adapter per parcel-pilot region. Dispatch is by region slug, never
@@ -129,6 +135,7 @@ PARCEL_ADAPTERS: Dict[str, str] = {
     "OH-LICKING": "licking",
     "VA-PRINCEWILLIAM": "princewilliam",
     "TX-TAYLOR": "taylor",
+    "VA-FAUQUIER": "fauquier",
 }
 
 logging.basicConfig(
@@ -535,6 +542,9 @@ def run_pipeline(
             elif adapter == "taylor":
                 from taylor_api import TaylorParcelAPI
                 county_api = TaylorParcelAPI()
+            elif adapter == "fauquier":
+                from fauquier_api import FauquierParcelAPI
+                county_api = FauquierParcelAPI()
             elif adapter == "licking":
                 from licking_api import LickingParcelAPI
                 county_api = LickingParcelAPI()
