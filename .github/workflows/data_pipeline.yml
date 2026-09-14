@@ -123,6 +123,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      # The region-identity tests read the cached Census county extract and
+      # skip without it. The geospatial cache is restored below, after this
+      # step, so in CI they skipped every time — 18 tests that guard the one
+      # defect that silently overwrites a county's parcels (two
+      # county-equivalents resolving to one region_key) were decorative.
+      # 900 KB, under a second, and they run.
+      - name: Warm the Census county cache
+        run: |
+          cd worker
+          python -c "import region_registry; region_registry._counties()"
+
       # Runs before any network fetch: the gate logic, the JSON guards, the
       # SQL rounding parity and the overlay geometry are all decidable
       # offline, and a run that would compute wrong verdicts should fail in
