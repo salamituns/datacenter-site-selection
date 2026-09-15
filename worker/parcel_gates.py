@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import geopandas as gpd
 import pandas as pd
-from shapely import STRtree
+from shapely import STRtree, make_valid
 from shapely.geometry import MultiPolygon
 from shapely.ops import unary_union
 
@@ -327,14 +327,49 @@ class _OverlapIndex:
 
     def __init__(self, gdf: Optional[gpd.GeoDataFrame]):
         parts: List[Any] = []
+        repaired = 0
         if gdf is not None and len(gdf):
             for g in gdf.geometry:
                 if g is None or g.is_empty:
                     continue
-                if g.geom_type == "MultiPolygon":
-                    parts.extend(p for p in g.geoms if not p.is_empty)
-                else:
-                    parts.append(g)
+                # Layer geometry was never validated here, only parcel
+                # geometry was — every adapter runs buffer(0) on what it
+                # fetches, and nothing ran on what it is measured against.
+                # GEOS raises TopologyException from intersection() on an
+                # invalid polygon, which fails the whole run twenty minutes
+                # in. Franklin's corrected bounding box reached 168 square
+                # miles the hand-typed one had missed, that new ground
+                # carried a malformed PAD-US feature, and the run died on it.
+                #
+                # make_valid rather than buffer(0): buffer(0) silently
+                # discards the parts of a self-intersecting polygon it cannot
+                # resolve, and this index decides a gate that FAILS on 0.5%
+                # overlap — quietly shrinking a protected area turns a FAIL
+                # into a PASS, which is the one direction that must not
+                # happen by accident.
+                if not g.is_valid:
+                    g = make_valid(g)
+                    repaired += 1
+                    if g.is_empty:
+                        continue
+                for part in getattr(g, "geoms", [g]):
+                    # make_valid can return a GeometryCollection carrying
+                    # lines and points alongside polygons. This is an area
+                    # index; a line has no area and would contribute nothing
+                    # but a crash risk.
+                    if part.is_empty or part.geom_type not in (
+                            "Polygon", "MultiPolygon"):
+                        continue
+                    if part.geom_type == "MultiPolygon":
+                        parts.extend(p for p in part.geoms if not p.is_empty)
+                    else:
+                        parts.append(part)
+        if repaired:
+            logger.warning(
+                "Overlay layer: %d invalid geometries were repaired with "
+                "make_valid before indexing. An upstream layer is publishing "
+                "malformed polygons — worth knowing, since the repair changes "
+                "what the gate measures.", repaired)
         self._parts = parts
         self._tree = STRtree(parts) if parts else None
 
