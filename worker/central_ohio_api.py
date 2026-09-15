@@ -41,15 +41,22 @@ WHAT THE PROBE FOUND, all of it handled below:
     the zoning gate would produce confident verdicts from a tax roll. This
     adapter reads none of them.
 
-ZONING IS NOT AVAILABLE, and that is structural rather than an omission.
-Ohio zones by municipality and township, not by county, so there is no
-county-wide layer for any of these three: Delaware publishes one township of
-about nineteen, Union nothing county-wide, and Fairfield nothing — the
-LancasterGIS zoning layers are the city of Lancaster's, and the county's own
-CALU service is Current Agricultural Land Use. The regional service carries
-no zoning either. zoning is None by construction, so the gate reads UNKNOWN
-and says that the jurisdiction publishes no zoning layer rather than implying
-a map with a gap in it.
+ZONING: Delaware publishes it, Union and Fairfield do not.
+
+An earlier pass concluded that none of the three published zoning, and that
+was wrong for Delaware. Nobody names these services the way a searcher would
+guess — they are `porterzon`, `harlemzon`, `sciotozon`, one per township,
+owned by a named individual at the planning commission rather than by an
+organisation account — so an ArcGIS Online title search returns a single
+township and invites the wrong conclusion. Tracing the county's public zoning
+web map to its `operationalLayers` returns all sixteen services, 3,510
+polygons, covering every one of Delaware's eighteen townships.
+
+For Fairfield and Union zoning stays None: Fairfield genuinely publishes none
+at any level (checked the county ArcGIS server, the RPC, AGOL for the county
+and for Greenfield specifically) and Union has not been traced yet. The gate
+then reads UNKNOWN and says the jurisdiction publishes no zoning layer rather
+than implying a map with a gap in it.
 """
 
 import logging
@@ -81,6 +88,44 @@ SERVED_COUNTIES = {
 # facts, and a future reader should not have to rediscover which this is.
 IN_LAYER_BUT_NO_ACREAGE = ("Madison", "Pickaway")
 
+# Delaware County zoning, one feature service per township, found by tracing
+# the county's public zoning web map rather than by searching for them. Layer
+# ids are not all 0 — Porter is 382, Oxford 383, the county service 385 —
+# because these were published out of a single enterprise map document, so
+# each entry carries its own path rather than a name plus an assumed suffix.
+DELAWARE_ZONING_HOST = ("https://services2.arcgis.com/ziXVKVy3BiopMCCU"
+                        "/arcgis/rest/services/")
+
+# Thompson, Radnor and Marlboro adopted the COUNTY code under ORC 303 rather
+# than writing their own, so one service carries all three. Its township is
+# recorded as the county code itself: the three read the same instrument, and
+# labelling a polygon with one township's name would imply the other two were
+# surveyed separately.
+DELAWARE_COUNTY_CODE_LABEL = "Delaware County code"
+
+DELAWARE_ZONING_SERVICES = (
+    ("Berkshire township", "Berkshire_Zoning/FeatureServer/0"),
+    ("Berlin township",    "Berlin_Zoning/FeatureServer/0"),
+    ("Brown township",     "Brown_Township_Zoning/FeatureServer/0"),
+    ("Concord township",   "concordzon/FeatureServer/0"),
+    ("Delaware township",  "delawarezon/FeatureServer/0"),
+    ("Genoa township",     "Genoa_Zoning/FeatureServer/0"),
+    ("Harlem township",    "harlemzon/FeatureServer/0"),
+    ("Kingston township",  "kingstonzon/FeatureServer/0"),
+    ("Liberty township",   "Liberty_Zoning/FeatureServer/0"),
+    ("Orange township",    "orangezon/FeatureServer/0"),
+    ("Oxford township",    "oxfordzon/FeatureServer/383"),
+    ("Porter township",    "porterzon/FeatureServer/382"),
+    ("Scioto township",    "sciotozon/FeatureServer/0"),
+    ("Trenton township",   "Trenton_Zoning/FeatureServer/0"),
+    ("Troy township",      "troyzon/FeatureServer/0"),
+    (DELAWARE_COUNTY_CODE_LABEL,
+     "Thompson_Radnor_Marlboro_Zoning/FeatureServer/385"),
+)
+
+DELAWARE_ORDINANCE = ("Delaware County township zoning resolutions, published "
+                      "by the Delaware County Regional Planning Commission")
+
 
 class CentralOhioParcelAPI:
     """One adapter, one county at a time, the same contract as the rest."""
@@ -109,7 +154,10 @@ class CentralOhioParcelAPI:
         return {
             "parcels": {"source_key": "central_ohio_parcels",
                         "endpoint": PARCELS_URL},
-            "zoning": {"source_key": None, "endpoint": None},
+            "zoning": ({"source_key": "delaware_township_zoning",
+                        "endpoint": DELAWARE_ZONING_HOST}
+                       if self.county == "Delaware"
+                       else {"source_key": None, "endpoint": None}),
             "wetlands": {"source_key": "nwi_wetlands", "endpoint": None},
             "nfhl": {"source_key": None, "endpoint": None},
         }
@@ -121,10 +169,149 @@ class CentralOhioParcelAPI:
         bbox = f"{min_lon},{min_lat},{max_lon},{max_lat}"
         return {
             "parcels": self.fetch_parcels(bbox, min_acres),
-            "zoning": None,     # Ohio zones by township; see the module note
+            # Delaware publishes township zoning; Fairfield and Union do not.
+            "zoning": (self.fetch_zoning()
+                       if self.county == "Delaware" else None),
             "wetlands": None,   # national NWI, fetched by the pipeline
             "nfhl": None,       # national NFHL, fetched by the pipeline
         }
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _zoning_fields(meta: Dict[str, Any]) -> tuple:
+        """
+        (code_field, name_field) for one township's service.
+
+        The sixteen services share a shape but not a schema: each is a join of
+        zoning polygons to a district table, and the join prefixes every field
+        with the source name — Scioto_Zoning_ZONING, berkshirezon_ZONING,
+        Troy_Zoning_DSC_ZONE. Matching on the suffix rather than hard-coding
+        sixteen names means a service renamed upstream still resolves.
+
+        The county service is the exception and is handled by the caller: its
+        {prefix}_Zoning field holds an integer row id, not a district code.
+        """
+        names = [f["name"] for f in meta.get("fields", [])]
+        code = next((n for n in names
+                     if n.upper().endswith("_ZONING")
+                     and not n.startswith(("Zoning__", "Zoning2__"))), None)
+        label = next((n for n in names if n.upper().endswith("_DSC_ZONE")), None)
+        if label is None:
+            label = next((n for n in names
+                          if n.endswith("__Zoning_District")), None)
+        return code, label
+
+    def fetch_zoning(self) -> Optional[gpd.GeoDataFrame]:
+        """
+        Delaware's township zoning, sixteen services normalised into one frame.
+
+        Every row carries its township, and that is not decoration: FR-1, A-1
+        and PC appear in several townships, each under its own resolution, so
+        the same code can mean different things a mile apart. The engine
+        already has the mechanism — district_classes keyed "CODE|Township"
+        outranks the flat lists — and it only works if the frame says which
+        township a polygon belongs to.
+
+        A service that fails leaves its township absent rather than failing the
+        county: a parcel there then reads UNKNOWN, which is true, instead of
+        taking a neighbouring township's use table.
+        """
+        rows: List[Dict[str, Any]] = []
+        failed: List[str] = []
+        for township, path in DELAWARE_ZONING_SERVICES:
+            url = DELAWARE_ZONING_HOST + path
+            try:
+                meta = requests.get(url, params={"f": "json"}, timeout=90).json()
+                if "error" in meta:
+                    failed.append(township)
+                    continue
+                if township == DELAWARE_COUNTY_CODE_LABEL:
+                    # Its own *_Zoning field is a row id; the district code
+                    # lives in the joined column, padded with trailing spaces.
+                    code_field = next(
+                        (f["name"] for f in meta.get("fields", [])
+                         if f["name"].endswith("__Zoning_District")), None)
+                    name_field = None
+                else:
+                    code_field, name_field = self._zoning_fields(meta)
+                if not code_field:
+                    failed.append(township)
+                    continue
+                out = ",".join(f for f in (code_field, name_field) if f)
+                feats = self._paged_url(url, out)
+                if feats is None:
+                    failed.append(township)
+                    continue
+                kept = 0
+                for f in feats:
+                    props = f.get("properties") or {}
+                    code = str(props.get(code_field) or "").strip()
+                    geometry = f.get("geometry")
+                    if not code or not geometry:
+                        continue
+                    try:
+                        geom = shape(geometry)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if geom.is_empty or not geom.is_valid:
+                        geom = geom.buffer(0)
+                    if geom.is_empty:
+                        continue
+                    label = (str(props.get(name_field) or "").strip()
+                             if name_field else "")
+                    rows.append({"zone": code,
+                                 "zone_name": label or None,
+                                 "township": township,
+                                 "ordinance": DELAWARE_ORDINANCE,
+                                 "geometry": geom})
+                    kept += 1
+                logger.info("Delaware zoning: %s — %d polygons (%s).",
+                            township, kept, code_field)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Delaware zoning: %s failed (%s).", township, e)
+                failed.append(township)
+
+        if failed:
+            logger.warning(
+                "Delaware zoning: %d of %d services did not answer (%s). "
+                "Parcels in those townships read UNKNOWN rather than taking a "
+                "neighbouring township's use table.",
+                len(failed), len(DELAWARE_ZONING_SERVICES), ", ".join(failed))
+        if not rows:
+            logger.warning("Delaware zoning: no polygons from any service.")
+            return None
+        logger.info("Delaware zoning: %d polygons across %d townships, "
+                    "%d distinct district codes.",
+                    len(rows), len({r["township"] for r in rows}),
+                    len({r["zone"] for r in rows}))
+        return gpd.GeoDataFrame(rows, crs="EPSG:4326")
+
+    def _paged_url(self, url: str, out_fields: str
+                   ) -> Optional[List[Dict[str, Any]]]:
+        """Pages any ArcGIS layer in GeoJSON. Used by the zoning fetch."""
+        features: List[Dict[str, Any]] = []
+        offset = 0
+        try:
+            while True:
+                r = requests.get(url + "/query", params={
+                    "where": "1=1", "outFields": out_fields,
+                    "outSR": "4326", "returnGeometry": "true", "f": "geojson",
+                    "resultRecordCount": self.PAGE_SIZE,
+                    "resultOffset": offset,
+                }, timeout=180)
+                r.raise_for_status()
+                data = r.json()
+                if "error" in data:
+                    return None if not features else features
+                batch = data.get("features", []) or []
+                features.extend(batch)
+                if len(batch) < self.PAGE_SIZE:
+                    break
+                offset += self.PAGE_SIZE
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Delaware zoning query failed (%s).", e)
+            return None if not features else features
+        return features
 
     @staticmethod
     def _acres(props: Dict[str, Any]) -> tuple:

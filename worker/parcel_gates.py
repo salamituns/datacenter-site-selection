@@ -1418,6 +1418,17 @@ def qualify_parcels(
                                   "zoning_grade": "parcel"})
         else:
             zone_code = str(zr["zone"])
+            # A district whose name the source does not carry renders as
+            # "Zoned FR-1", not "Zoned FR-1 (None)" or "(nan)". Delaware's
+            # county-code service publishes no district name at all, and
+            # pandas turns the missing value into a float nan on the way
+            # through the frame, so both spellings of absent reach here.
+            raw_zone_name = zr.get("zone_name")
+            zone_label = (str(raw_zone_name).strip()
+                          if raw_zone_name is not None
+                          and str(raw_zone_name).strip().lower()
+                          not in ("", "nan", "none") else "")
+            named = f" ({zone_label})" if zone_label else ""
             zone_details: Dict[str, Any] = {"zone": zone_code,
                                             "ordinance": str(zr["ordinance"])}
             if township:
@@ -1478,19 +1489,19 @@ def qualify_parcels(
                      })
             elif dc_status == "by_right":
                 gate(pin, "zoning_dc_use", "PASS",
-                     f"Zoned {zone_code} ({zr['zone_name']}){combo} — data centers "
+                     f"Zoned {zone_code}{named}{combo} — data centers "
                      f"are a by-right principal use in this district under the "
                      f"{zr['ordinance']} ordinance (screening mapping).",
                      details=zone_details)
             elif dc_status == "special_exception":
                 gate(pin, "zoning_dc_use", "CONDITIONAL",
-                     f"Zoned {zone_code} ({zr['zone_name']}){combo} — data centers "
+                     f"Zoned {zone_code}{named}{combo} — data centers "
                      f"require a Special Exception under the {zr['ordinance']} "
                      f"ordinance.",
                      details=zone_details)
             elif dc_status == "prohibited":
                 gate(pin, "zoning_dc_use", "FAIL",
-                     f"Zoned {zone_code} ({zr['zone_name']}){combo} — data centers "
+                     f"Zoned {zone_code}{named}{combo} — data centers "
                      f"are not a permitted use in this district under the "
                      f"{zr['ordinance']} ordinance.",
                      details=zone_details)
@@ -1514,7 +1525,7 @@ def qualify_parcels(
                 # context, not part of what is unreviewed here.
                 held = ", ".join(dc_basis.get("unreviewed_overlays") or [])
                 gate(pin, "zoning_dc_use", "UNKNOWN",
-                     f"Zoned {zone_code} ({zr['zone_name']}) with the "
+                     f"Zoned {zone_code}{named} with the "
                      f"{held} overlay — the overlay district's use "
                      f"table has not been reviewed, and the base district's "
                      f"class does not answer for the combination. Use status "
@@ -1522,7 +1533,7 @@ def qualify_parcels(
                      details=zone_details)
             else:
                 gate(pin, "zoning_dc_use", "UNKNOWN",
-                     f"Zoned {zone_code} ({zr['zone_name']}) — district is not in the "
+                     f"Zoned {zone_code}{named} — district is not in the "
                      f"reviewed mapping; use status remains UNKNOWN until the "
                      f"ordinance use table is checked.",
                      details=zone_details)
