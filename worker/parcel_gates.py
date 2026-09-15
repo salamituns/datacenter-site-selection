@@ -1354,7 +1354,52 @@ def qualify_parcels(
                 # The details dict already carried zoning_layer: missing.
                 # This makes the rationale agree with it, so the dossier
                 # says which of the two states it is in.
-                if zoning_gdf is None or len(zoning_gdf) == 0:
+                # An Ohio township MAY adopt zoning (ORC 519); many never
+                # have. Where the county's planning commission records that
+                # a township adopted none, nothing zones that land and the
+                # use is not restricted — that is a decidable answer, not an
+                # absence of one, and leaving it UNKNOWN discards a sourced
+                # fact.
+                #
+                # Scoped exactly as the moratorium gate scopes a township:
+                # only a real, functioning MCD counts (a Virginia election
+                # district is an MCD too), and only outside municipal
+                # limits, because "this township adopted no zoning" says
+                # nothing about a parcel inside a village that adopted its
+                # own. The list names townships, never a whole county — the
+                # zoned and unzoned sit side by side in one county.
+                unzoned = set(
+                    (rules.get("zoning_dc_use", {}).get("params", {})
+                     .get("unzoned_townships") or []))
+                sub = subdiv_of.get(i)
+                sub_name = (str(sub["name"]).strip() if sub else "")
+                is_real_township = (
+                    sub is not None
+                    and sub.get("lsad") in TOWNSHIP_MCD_CLASSES
+                    and sub.get("funcstat") == FUNCTIONING_MCD_FUNCSTAT)
+
+                if unzoned and is_real_township and sub_name in unzoned \
+                        and i not in place_of and places_gdf is not None:
+                    gate(pin, "zoning_dc_use", "PASS",
+                         f"{sub_name} has adopted no zoning resolution, so no "
+                         f"district regulates this parcel and no zoning "
+                         f"approval is required for the use. Ohio township "
+                         f"zoning is permissive under ORC Chapter 519 — a "
+                         f"township may adopt it and this one has not. This is "
+                         f"the absence of a restriction, not a district "
+                         f"permitting the use.",
+                         details={"zoning_layer": "missing",
+                                  "zoning_grade": "unzoned",
+                                  "township": sub_name,
+                                  "statute": "Ohio Revised Code Chapter 519",
+                                  "municipal_limits": ("outside every "
+                                                       "incorporated place "
+                                                       "(TIGER/Line Places)"),
+                                  "basis": ("constraint_rules "
+                                            + str(rules["zoning_dc_use"]
+                                                  .get("rule_version")
+                                                  or "screening"))})
+                elif zoning_gdf is None or len(zoning_gdf) == 0:
                     gate(pin, "zoning_dc_use", "UNKNOWN",
                          "This jurisdiction publishes no zoning layer, so no "
                          "district can be read for any parcel in it. The use "
