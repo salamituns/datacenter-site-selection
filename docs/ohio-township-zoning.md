@@ -167,3 +167,59 @@ directly (a commission that reviews resolutions under ORC 519 often holds
 shapefiles it has not published), or to digitise sixty township maps — which
 should not be undertaken casually, because a parcel assigned the wrong
 district gets a confident wrong verdict, invisibly.
+
+---
+
+# Postscript: the sixteen Delaware resolutions, read
+
+Delaware's geometry exists, so its resolutions are worth reading in a way
+Fairfield's are not. All sixteen were read on 2026-09-15. **36 of 2,760
+parcels became decidable — 1.3%.** The small yield is the finding.
+
+| township | parcels | outcome |
+| --- | --- | --- |
+| **Genoa** | 42 | **decidable** — Art. 5 matrix names Data Center: Conditional in LI, Special in PID, not permitted in the other eight districts. Art. 17 §1732 carries the standards. Effective 2026-05-14. |
+| Harlem | 174 | names the use, **cannot be applied** |
+| Berlin | 105 | NAICS-coded, ambiguous |
+| Radnor + Thompson + Marlboro | 497 | county code, **silent** |
+| Scioto, Brown, Trenton, Porter, Oxford, Kingston, Concord, Liberty, others | ~1,900 | **silent** |
+
+## The three ways a resolution fails to answer
+
+**Silence.** Most simply do not name the use — including the county code that
+Radnor, Thompson and Marlboro share, covering 497 parcels between them. Ohio
+zoning is permissive, so an unlisted use needs a similar-use determination a
+zoning inspector makes case by case. That is not a judgement the engine can
+make from text, and guessing it is the failure this project exists to avoid.
+
+**Overlay-bound.** Harlem *does* name data centres — `Data Center C*` in Table
+35.1, the County Road Overlay's CLR-A/B/C subareas, and separately a Mixed-Use
+Overlay reading "No data centers shall be permitted". Harlem's published layer
+carries AR-1, C-2, FR-1, HCVR-1, PCD, PID, PRCD, PRD and R-2. **No CLR or MU
+codes.** The provisions live in overlays the GIS does not publish, so they have
+nothing to attach to. The geometry problem again, one level down.
+
+**Definitionally ambiguous.** Berlin zones by NAICS and lists **518210 —
+"Computing Infrastructure Providers, Data Processing, Web Hosting, and Related
+Services"** among its office and information uses. That code covers a payroll
+processor and a hyperscale campus alike. Whether Berlin reads a 100 MW campus
+into it is a judgement, not a text — the same shape as Fairfield's "Data
+processing/computer services" proving to be a bookkeeping office listed beside
+barber shops.
+
+## What this says about continuing
+
+Reading resolutions is cheap per document and returns very little, because the
+bottleneck is not access. Ohio townships mostly have not legislated for data
+centres at all, and where they have, the provision often sits in an overlay
+the county does not map.
+
+The counties are legislating now — Genoa's provision is four months old,
+Greenfield's in Fairfield three — so the same resolutions reread in a year will
+say more than they do today. That argues for a periodic recheck rather than a
+deeper push, and the `review_due_months` on these rows is what should drive it.
+
+**The higher-yield question is the one asked of Fairfield's RPC, not of the
+resolutions: which townships have adopted no zoning at all.** It decided 509
+Fairfield parcels from a single sentence. Delaware has none, but Union and
+Franklin have not been asked.
