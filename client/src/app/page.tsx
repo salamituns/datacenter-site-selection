@@ -19,12 +19,11 @@ import {
   fetchLandParcelsByKeys,
   fetchMapFeatures,
   fetchParcelQualification,
-  fetchRegionCounts,
 } from "@/lib/supabase";
 import { computePrimeZones } from "@/lib/primeZones";
 import { compareByEvidenceThenScore, coverageFactor } from "@/lib/evidenceRanking";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
-import { REGIONS, HOME_REGION } from "@/lib/regions";
+import { fetchRegions, HOME_REGION, type Region } from "@/lib/regions";
 import {
   GridParcel,
   LandParcel,
@@ -64,7 +63,7 @@ export default function DashboardPage() {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isLivePostgis, setIsLivePostgis] = useState<boolean>(false);
   // Parcel counts per region — null until probed; drives selector availability.
-  const [regionCounts, setRegionCounts] = useState<Record<string, number> | null>(null);
+  const [regions, setRegions] = useState<Region[] | null>(null);
   // Real infrastructure features (HIFLD lines/substations, USGS wells) drawn on the map.
   const [mapFeatures, setMapFeatures] = useState<MapFeatures>({ lines: [], substations: [], wells: [] });
   // Qualified cadastral parcels (Release 1 pilot) + the open qualification dossier.
@@ -257,9 +256,11 @@ export default function DashboardPage() {
       .catch(() => {});
   }, [selectedLandParcel]);
 
-  // Probe which regions have surveys on mount
+  // Which regions exist, and how much each has, in one query. This used to
+  // iterate a hardcoded list and fire a HEAD request per entry; the list
+  // drifted the moment a county was published without editing it.
   useEffect(() => {
-    fetchRegionCounts(REGIONS.map((r) => r.code)).then(setRegionCounts);
+    fetchRegions().then(setRegions);
   }, []);
 
   // Switching regions invalidates the current selection (it belongs to
@@ -447,7 +448,7 @@ export default function DashboardPage() {
         primeCount={primeCount}
         selectedRegion={selectedRegion}
         onRegionChange={handleRegionChange}
-        regionCounts={regionCounts}
+        regions={regions}
         isLive={isLivePostgis}
         isSyncing={isSyncing}
         onSync={handleSync}
@@ -547,7 +548,7 @@ export default function DashboardPage() {
         onSelectParcel={selectGridCell}
         selectedRegion={selectedRegion}
         onRegionChange={handleRegionChange}
-        regionCounts={regionCounts}
+        regions={regions}
         isLive={isLivePostgis}
         isSyncing={isSyncing}
         onSync={handleSync}

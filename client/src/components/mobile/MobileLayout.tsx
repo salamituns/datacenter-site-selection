@@ -7,7 +7,7 @@ import { ConstraintSliders } from "@/components/ConstraintSliders";
 import { BenchmarkMark } from "@/components/Header";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { AuthControl } from "@/components/AuthControl";
-import { REGIONS, HOME_REGION } from "@/lib/regions";
+import { HOME_REGION, type Region } from "@/lib/regions";
 import { LayerChips } from "./LayerChips";
 import { ParcelCards } from "./ParcelCards";
 
@@ -26,7 +26,7 @@ interface MobileLayoutProps {
   selectedRegion: string;
   onRegionChange: (region: string) => void;
   /** Parcel counts per region code — unsurveyed regions are disabled. */
-  regionCounts?: Record<string, number> | null;
+  regions?: Region[] | null;
   isLive: boolean;
   isSyncing: boolean;
   onSync: () => void;
@@ -63,13 +63,17 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
   onSelectParcel,
   selectedRegion,
   onRegionChange,
-  regionCounts,
+  regions,
   isLive,
   isSyncing,
   onSync,
 }) => {
+  // A region is selectable once surveyed — the home region always is
+  // (it carries the demo dataset fallback).
   const isSelectable = (code: string) =>
-    code === HOME_REGION || (regionCounts?.[code] ?? 0) > 0;
+    code === HOME_REGION ||
+    ((regions ?? []).find((r) => r.code === code)?.cells ?? 0) > 0;
+  const options = regions ?? [];
 
   const [searchTerm, setSearchTerm] = useState("");
   const [sheet, setSheet] = useState<SheetState>("peek");
@@ -188,7 +192,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
             aria-label="Select region"
             className="h-10 appearance-none rounded-[3px] border border-border-strong bg-surface/95 pl-2.5 pr-6 font-mono text-[11px] uppercase tracking-wide text-foreground shadow-plate backdrop-blur transition-colors focus:border-accent-600 focus:outline-none"
           >
-            {REGIONS.map((region) => (
+            {options.map((region) => (
               <option
                 key={region.code}
                 value={region.code}
