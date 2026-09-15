@@ -63,8 +63,15 @@ def published_regions() -> set:
         client = create_client(url, key)
         seen, page, size = set(), 0, 1000
         while True:
+            # order() is not cosmetic: PostgREST's range() pages a plain
+            # SELECT, and Postgres guarantees no row order without an
+            # ORDER BY, so unordered paging can return a row twice and
+            # skip another. Here a skipped row can drop a region from
+            # the "already screened" set and make the runner redo a
+            # county it has done. Measured while auditing the flood
+            # gate: the same two queries disagreed by 69 rows.
             res = client.table("grid_parcels").select("region_key") \
-                .range(page * size, page * size + size - 1).execute()
+                .order("id").range(page * size, page * size + size - 1).execute()
             rows = res.data or []
             seen.update(r["region_key"] for r in rows if r.get("region_key"))
             if len(rows) < size:
