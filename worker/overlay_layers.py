@@ -51,6 +51,8 @@ import pandas as pd
 import numpy as np
 import requests
 from shapely.geometry import shape
+from shapely.ops import unary_union
+from shapely.validation import make_valid
 
 import region_registry
 
@@ -688,6 +690,24 @@ def fetch_padus(
         return None
 
 
+def _polygonal(geom):
+    """
+    The polygonal part of a repaired geometry, or None if there is none.
+
+    make_valid can hand back a GeometryCollection carrying lines and
+    points beside the polygons, and it turns a zero-area polygon into a
+    bare LineString rather than into nothing. A flood zone is an area,
+    and a zero-width line still answers True to `intersects` — so keeping
+    one would let a flood zone with no area fail a parcel. Kent County,
+    Delaware has exactly one such feature: a zone X sliver.
+    """
+    parts = [g for g in getattr(geom, "geoms", [geom])
+             if not g.is_empty and g.geom_type in ("Polygon", "MultiPolygon")]
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else unary_union(parts)
+
+
 def fetch_nfhl_floodzones(
     min_lon: float, min_lat: float, max_lon: float, max_lat: float,
     state_code: str = "VA",
@@ -712,12 +732,9 @@ def fetch_nfhl_floodzones(
         return cached, NFHL_FEDERAL_URL
     session = requests.Session()
     session.headers.update({"User-Agent": BROWSER_UA, "Accept": "application/json"})
-    # The service 500s on queries that page deep over a large envelope
-    # (observed at offsets ≥ 5000 regardless of page size, and
-    # intermittently lower). Rather than paging one big bbox, the bbox is
-    # tiled: each tile pages shallowly, and a tile that still fails is
-    # subdivided further. OBJECTID is fetched so straddling polygons
-    # returned by two tiles are deduplicated.
+    # The bbox is tiled, each tile pages, and a tile that still fails is
+    # subdivided. OBJECTID is fetched so straddling polygons returned by
+    # two tiles are deduplicated.
     features = _nfhl_tiled_query(
         session, min_lon, min_lat, max_lon, max_lat, depth=0)
     if features is None:
@@ -734,8 +751,12 @@ def fetch_nfhl_floodzones(
         except Exception:  # noqa: BLE001
             continue
         if geom.is_empty or not geom.is_valid:
-            geom = geom.buffer(0)
-        if geom.is_empty:
+            # make_valid, not buffer(0), for the same reason the parcel
+            # overlap index uses it: buffer(0) resolves what it can and
+            # silently drops what it cannot, and a flood polygon that
+            # loses a lobe stops failing the parcels under that lobe.
+            geom = _polygonal(make_valid(geom))
+        if geom is None or geom.is_empty:
             continue
         props = f.get("properties", {}) or {}
         oid = props.get("OBJECTID")
@@ -760,6 +781,32 @@ def fetch_nfhl_floodzones(
 
 NFHL_MAX_DEPTH = 3  # a county bbox split 8x8 at most
 
+# NFHL flood polygons are drawn to survey precision — measured at ~173 KB
+# of GeoJSON EACH over Kent County, Delaware — and the service 500s when a
+# response gets too large. That is a size limit, not throttling, and the
+# distinction is what made this look unfixable for so long: the failure is
+# deterministic, so retrying re-asks an impossible question and subdividing
+# re-asks it four times. Kent County failed every attempt, on every run,
+# and every county paid seven failed tile queries for nothing.
+#
+# maxAllowableOffset generalises server-side instead. Measured over Kent's
+# 2,502 features:
+#
+#     offset   page   result
+#     none     100    17.3 MB, 38 s
+#     none     200    500
+#     1e-5     1000   12.2 MB, 31 s      <- this
+#     5e-5     2000    7.0 MB, 27 s
+#
+# 1e-5 degrees is about 1.1 m, which is inside NFHL's own accuracy: DFIRM
+# panels are digitised around 1:12,000, so the flood boundary is not known
+# to better than a few metres in the first place. We discard precision the
+# source never had, and the county goes from no flood layer at all to
+# three pages. Loosening it further buys little and starts to cost real
+# boundary detail on a gate that fails parcels.
+NFHL_MAX_OFFSET_DEG = 1e-5
+NFHL_PAGE_SIZE = 1000
+
 
 def _nfhl_tiled_query(
     session: requests.Session, min_lon: float, min_lat: float,
@@ -770,8 +817,9 @@ def _nfhl_tiled_query(
     features = _paged_query(
         session, NFHL_FEDERAL_URL, bbox,
         out_fields="OBJECTID,FLD_ZONE,ZONE_SUBTY,SFHA_TF",
-        page_size=200, attempts=3, page_pause=1.0,
+        page_size=NFHL_PAGE_SIZE, attempts=3, page_pause=1.0,
         geometry_precision=6,
+        max_allowable_offset=NFHL_MAX_OFFSET_DEG,
     )
     if features is not None:
         return features
@@ -1206,7 +1254,8 @@ def _paged_query(session: requests.Session, url: str, bbox: str,
                  out_fields: str, where: str = "1=1",
                  page_size: int = 1000, attempts: int = 1,
                  page_pause: float = 0.0,
-                 geometry_precision: Optional[int] = None
+                 geometry_precision: Optional[int] = None,
+                 max_allowable_offset: Optional[float] = None
                  ) -> Optional[List[Dict[str, Any]]]:
     """
     Pages an ArcGIS query in GeoJSON. attempts > 1 retries a failed page
@@ -1221,6 +1270,13 @@ def _paged_query(session: requests.Session, url: str, bbox: str,
     serializer 500 on every query returning that feature, deterministically
     — with geometryPrecision=6 the same query returns 200. Without it one
     bad feature concedes the floodway gate for an entire county.
+
+    max_allowable_offset sets the ArcGIS maxAllowableOffset parameter,
+    which generalises geometry ON THE SERVER (Douglas-Peucker) in outSR
+    units — degrees here. It is a different knob from geometry_precision
+    and solves a different failure: precision rounds each coordinate but
+    keeps every vertex, so it cannot shrink a response that is too large
+    because the polygons have too many vertices.
     """
     features: List[Dict[str, Any]] = []
     offset = 0
@@ -1240,6 +1296,8 @@ def _paged_query(session: requests.Session, url: str, bbox: str,
             }
             if geometry_precision is not None:
                 params["geometryPrecision"] = str(geometry_precision)
+            if max_allowable_offset is not None:
+                params["maxAllowableOffset"] = str(max_allowable_offset)
             data = None
             for attempt in range(attempts):
                 resp = session.get(url, params=params, timeout=90)
