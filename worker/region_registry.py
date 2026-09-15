@@ -276,3 +276,147 @@ def county_fips(region_key: str) -> Optional[str]:
     """The 5-digit state+county FIPS, or None. Replaces a hand-typed map."""
     region = resolve(region_key)
     return region.fips if region else None
+
+
+# ---------------------------------------------------------------------------
+# PJM footprint
+#
+# PJM covers thirteen states and DC, but not whole states: Ohio splits between
+# PJM and MISO, and so do Illinois, Indiana, Kentucky and Michigan. Deriving
+# the footprint from state codes would label a MISO county as PJM across a
+# fourteen-state area — the same error that made grid_operator refuse to guess
+# from a state code, at four hundred times the scale.
+#
+# So it is measured. HIFLD's Electric Retail Service Territories layer — the
+# one the pipeline already reads for the serving-utility metric — carries a
+# CNTRL_AREA column naming each territory's balancing authority. 312 of them
+# name PJM, across DC, DE, IL, IN, KY, MD, MI, NC, NJ, NY, OH, PA, VA and WV.
+# Their union, intersected with the Census county geometry, is the footprint.
+#
+# NOT the PLAN_AREA column, which looks like the obvious choice and is wrong:
+# only 16 territories carry PLAN_AREA = 'PJM INTERCONNECTION LLC', across
+# seven states, and Virginia is not among them. Loudoun, Prince William and
+# Fauquier are demonstrably PJM, so a footprint built on PLAN_AREA would have
+# excluded three counties this engine already publishes. The field is simply
+# not populated consistently.
+#
+# NY appears because some territories carry 'PJM, NYIS' — utilities operating
+# in both markets. Most of New York is NYISO, so a low coverage threshold
+# would pull NYISO counties in on a border artefact.
+PJM_TERRITORY_URL = (
+    "https://services6.arcgis.com/BAJNi3EgCdtQ1BCG/arcgis/rest/services/"
+    "Electric_Retail_Service_Territories/FeatureServer/0/query"
+)
+
+# Two thresholds, because "worth screening" and "we know its market" are
+# different claims and this engine does not conflate them.
+#
+#   SCREEN: a county with this much PJM territory has ground where a PJM
+#   interconnection is real, and is worth screening. A site in the PJM part
+#   of a split county is genuinely in PJM.
+#
+#   OPERATOR: only above this does the county get grid_operator = PJM, because
+#   below it the label would be wrong for most of the county's land.
+PJM_SCREEN_MIN_PCT = 10.0
+PJM_OPERATOR_MIN_PCT = 50.0
+
+
+def _pjm_cache() -> Path:
+    return Path(__file__).parent / "cache" / "pjm_footprint.json"
+
+
+def pjm_footprint(refresh: bool = False) -> Dict[str, float]:
+    """
+    {region_key: percent of the county inside PJM territory}, cached.
+
+    Counties are returned with their measured coverage rather than as a flat
+    list, so a caller decides what threshold its claim can carry. Verified on
+    build: the six PJM counties this engine already publishes must come back
+    at 100%, and Taylor (ERCOT) and Morrow (BPA) must be absent. A footprint
+    that fails that check is not published — it would be wrong in a way no
+    later reader could see.
+    """
+    import json
+    cache = _pjm_cache()
+    if cache.exists() and not refresh:
+        return {k: float(v) for k, v in json.loads(cache.read_text()).items()}
+
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+
+    logger.info("PJM footprint: fetching territories (once; cached thereafter)")
+    session = requests.Session()
+    session.headers.update({"User-Agent": "DataCenterPipeline/3.0"})
+    feats: List[Any] = []
+    offset = 0
+    while True:
+        data = session.get(PJM_TERRITORY_URL, params={
+            "where": "CNTRL_AREA LIKE '%PJM%'", "outFields": "NAME,STATE",
+            "outSR": "4326", "returnGeometry": "true", "f": "geojson",
+            "resultRecordCount": 200, "resultOffset": offset,
+        }, timeout=300).json()
+        batch = data.get("features", []) or []
+        feats.extend(batch)
+        if len(batch) < 200:
+            break
+        offset += 200
+
+    geoms = []
+    for f in feats:
+        g = f.get("geometry")
+        if not g:
+            continue
+        try:
+            geom = shape(g)
+        except Exception:  # noqa: BLE001
+            continue
+        if not geom.is_valid:
+            geom = geom.buffer(0)
+        if not geom.is_empty:
+            geoms.append(geom)
+    if not geoms:
+        raise RuntimeError("PJM footprint: no usable territory polygons")
+
+    territory = gpd.GeoSeries(geoms, crs="EPSG:4326").to_crs("EPSG:5070")
+    pjm = unary_union(list(territory))
+
+    counties = _counties().to_crs("EPSG:5070")
+    out: Dict[str, float] = {}
+    for _, r in counties.iterrows():
+        if not r.geometry.intersects(pjm):
+            continue
+        pct = r.geometry.intersection(pjm).area / r.geometry.area * 100.0
+        if pct > 0:
+            out[str(r.region_key)] = round(pct, 1)
+
+    # The check that makes this publishable. These six are PJM on independent
+    # evidence — they run PJM RTEP and queue data today.
+    for key in ("VA-LOUDOUN", "VA-PRINCEWILLIAM", "VA-FAUQUIER",
+                "OH-FRANKLIN", "OH-LICKING", "OH-DELAWARE"):
+        if out.get(key, 0) < 90:
+            raise RuntimeError(
+                f"PJM footprint rejected: {key} is a published PJM county but "
+                f"measured {out.get(key, 0)}% inside the derived territory. "
+                f"The source or the derivation has changed.")
+    for key in ("TX-TAYLOR", "OR-MORROW"):
+        if key in out:
+            raise RuntimeError(
+                f"PJM footprint rejected: {key} is not a PJM county but "
+                f"measured {out[key]}% inside the derived territory.")
+
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(out, indent=0, sort_keys=True))
+    logger.info("PJM footprint: %d counties touch PJM territory; %d at or "
+                "above the %.0f%% screening threshold, %d above the %.0f%% "
+                "operator threshold.",
+                len(out), sum(1 for v in out.values() if v >= PJM_SCREEN_MIN_PCT),
+                PJM_SCREEN_MIN_PCT,
+                sum(1 for v in out.values() if v >= PJM_OPERATOR_MIN_PCT),
+                PJM_OPERATOR_MIN_PCT)
+    return out
+
+
+def pjm_screening_regions() -> List[str]:
+    """Region keys worth screening for PJM, ordered for a reproducible run."""
+    return sorted(k for k, v in pjm_footprint().items()
+                  if v >= PJM_SCREEN_MIN_PCT)
