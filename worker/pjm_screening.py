@@ -15,12 +15,24 @@ copy of a fact the database already holds, and this project has been bitten
 three times by exactly that shape — the hand-typed bboxes, the hand-kept FIPS
 map, the client's hardcoded region list.
 
-BATCHES RUN IN STATE ORDER, and that is not cosmetic. PAD-US, NWI and the
-TIGER clips are cached per STATE, so 88 Ohio counties share one PAD-US
-download and one NWI geodatabase. Running in region_key order groups them for
-free; running in random order would re-download a gigabyte per county and
-would be rate-limited long before it finished. The same reason the pipeline
-workflow sets max-parallel 1.
+BATCHES RUN IN STATE ORDER, which groups a state's counties together for
+whatever reuse the caches can give. Be careful about how much that is: an
+earlier version of this note claimed "88 Ohio counties share one PAD-US
+download and one NWI geodatabase", and that is FALSE. Two things in
+overlay_layers limit it, and both are worth knowing before planning a sweep:
+
+  * The clip caches hold ONE clip per state file. _save_cached_clip unlinks
+    and rewrites, and _load_cached_clip counts a request the cached bbox
+    does not CONTAIN as a miss. So county B reuses county A's clip only if
+    B's bbox sits inside A's, which for two counties side by side it does
+    not. Sequential counties overwrite each other.
+  * The raw state downloads — the NWI geodatabase, the PAD-US state GDB —
+    are fetched into a tempfile directory and discarded. Only the clip
+    survives, and the clip is the part that gets overwritten.
+
+State order is still the right order: it keeps a state's work together, and
+it is what any real caching fix would build on. It is just not, today, the
+reason a sweep is affordable.
 
 These counties have no cadastral adapter, so the parcel tier never runs: they
 publish screening cells with federal-layer measurements attached and no
