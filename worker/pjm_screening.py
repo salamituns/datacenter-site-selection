@@ -129,7 +129,15 @@ def screen(region_key: str, dry_run: bool = False) -> Tuple[bool, str]:
             county_name=region.county,
             grid_operator=region.grid_operator,
             dry_run=dry_run,
-            trigger="pjm-screening",
+            # "backfill", not "pjm-screening": ingestion_runs.trigger
+            # carries a CHECK constraint allowing only manual, scheduled,
+            # backfill and operator, and a value outside it fails the run
+            # row before any work happens. backfill is also the honest
+            # word — this is a bulk automated load of coverage that was
+            # never surveyed. Sweep rows stay identifiable without a
+            # bespoke value: evidence_tier is 'screening' and the region
+            # is not in PARCEL_PILOTS.
+            trigger="backfill",
             # TRUE, despite these counties having no cadastral adapter, and
             # the name misleads. The flag does not mean "run the parcel tier";
             # it gates the whole evidence step:
