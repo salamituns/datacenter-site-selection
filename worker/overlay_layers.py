@@ -41,6 +41,7 @@ import json
 import logging
 import os
 import random
+import shutil
 import tempfile
 import time
 import zipfile
@@ -609,6 +610,117 @@ def _padus_state_url(state_code: str) -> Optional[str]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# State geodatabases: download once, read per county
+# ---------------------------------------------------------------------------
+#
+# NWI and PAD-US both ship one geodatabase per state. Both used to download
+# the archive into a TemporaryDirectory, read it, keep one county's worth
+# and discard the rest — so the next county in the same state downloaded it
+# again. Measured on a three-county Delaware batch: two NWI downloads and
+# two PAD-US downloads for three counties. Across the 552-county PJM
+# footprint that is roughly 400 GB of re-downloading, which is not a slow
+# sweep, it is no sweep.
+#
+# The archive is the expensive part and it does not change between
+# counties, so it is what gets cached. The read then happens per county
+# through a bbox filter, which also bounds memory: reading a whole state
+# and filtering afterwards is what killed a New Jersey batch outright.
+
+
+def _gdb_cache_dir(kind: str, state_code: str) -> Path:
+    return Path(__file__).parent / "cache" / "gdb" / f"{kind}_{state_code.lower()}"
+
+
+def _cached_state_gdb(kind: str, state_code: str, url: str) -> Optional[str]:
+    """
+    Path to an extracted state geodatabase, downloading it once.
+
+    Extraction goes to a temporary sibling that is renamed into place only
+    once it holds a .gdb, so an interrupted download cannot leave a
+    half-extracted directory that later runs would trust and read.
+    """
+    target = _gdb_cache_dir(kind, state_code)
+    existing = sorted(target.glob("*.gdb"))
+    if existing:
+        return str(existing[0])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = target.with_name(target.name + ".partial")
+    if staging.exists():
+        shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / "state.zip"
+            logger.info("%s: downloading the %s geodatabase…",
+                        kind.upper(), state_code.upper())
+            dl = requests.get(url, stream=True, timeout=1800,
+                              headers={"User-Agent": BROWSER_UA})
+            dl.raise_for_status()
+            with open(zip_path, "wb") as out:
+                for chunk in dl.iter_content(chunk_size=1 << 20):
+                    if chunk:
+                        out.write(chunk)
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(staging)
+        if not sorted(staging.glob("*.gdb")):
+            logger.warning("%s: no geodatabase in the %s archive.",
+                           kind.upper(), state_code.upper())
+            shutil.rmtree(staging, ignore_errors=True)
+            return None
+        staging.rename(target)
+        gdb = sorted(target.glob("*.gdb"))[0]
+        logger.info("%s: cached the %s geodatabase at %s",
+                    kind.upper(), state_code.upper(), gdb.name)
+        return str(gdb)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("%s: %s geodatabase fetch failed: %s",
+                       kind.upper(), state_code.upper(), e)
+        shutil.rmtree(staging, ignore_errors=True)
+        return None
+
+
+def _read_gdb_bbox(gdb: str, layer: str, min_lon: float, min_lat: float,
+                   max_lon: float, max_lat: float) -> gpd.GeoDataFrame:
+    """
+    One layer of a geodatabase, read through a bbox filter.
+
+    The bbox is given in EPSG:4326 and transformed into the layer's own
+    CRS, because pyogrio filters in source coordinates — handing it degrees
+    against a projected layer silently matches nothing, which reads as "no
+    features here" rather than as an error.
+    """
+    import pyogrio
+    from pyproj import CRS
+
+    info = pyogrio.read_info(gdb, layer=layer)
+    src_crs = CRS.from_user_input(info["crs"])
+    if src_crs.to_epsg() != 4326:
+        from pyproj import Transformer
+        tf = Transformer.from_crs("EPSG:4326", src_crs, always_xy=True)
+        bx0, by0 = tf.transform(min_lon, min_lat)
+        bx1, by1 = tf.transform(max_lon, max_lat)
+        read_bbox = (min(bx0, bx1), min(by0, by1), max(bx0, bx1), max(by0, by1))
+    else:
+        read_bbox = (min_lon, min_lat, max_lon, max_lat)
+    return gpd.read_file(gdb, layer=layer, bbox=read_bbox)
+
+
+def _padus_layer(layers: List[str]) -> Optional[str]:
+    """
+    The combined-inventory layer of a PAD-US state geodatabase.
+
+    Combined (DOD + tribal + NGP + fee + designation + easement) is the
+    screening-appropriate one: conservation easements are exactly the
+    protected-land risk a Fee-only read would miss. The feature class is
+    named PADUS4_0Comb_DOD_Trib_NGP_Fee_Desig_Ease_State_XX -- "Comb", not
+    "Combined". Marine is offshore and excluded.
+    """
+    preferred = [l for l in layers
+                 if "Comb" in l and "Marine" not in l and "_" in l]
+    return preferred[0] if preferred else None
+
+
 def fetch_padus(
     min_lon: float, min_lat: float, max_lon: float, max_lat: float,
     state_code: str = "VA",
@@ -627,21 +739,6 @@ def fetch_padus(
     returned present and empty, and the gate decides PASS.
     """
     bbox_poly = _bbox_polygon(min_lon, min_lat, max_lon, max_lat)
-    # Cache against the whole STATE, not the county that asked.
-    #
-    # This layer is downloaded per state and read whole into memory, so
-    # clipping to one county throws away data already paid for. With one
-    # clip per state file and a containment test, the next county missed,
-    # downloaded the same state geodatabase again, and overwrote. Measured
-    # on the first Delaware batch: PADUS4_0_State_DE_GDB.zip fetched three
-    # times in one 21-minute run for three adjacent counties.
-    #
-    # Keeping the state means every later county in it is a hit. The frame
-    # returned is wider than the caller's bbox, which is harmless — gates
-    # ask what intersects a parcel, and a protected area in another county
-    # intersects nothing here.
-    cache_bbox = region_registry.state_bbox(state_code)
-    clip_poly = _bbox_polygon(*cache_bbox) if cache_bbox else bbox_poly
     cached = _load_cached_clip(_padus_cache(state_code), bbox_poly)
     if cached is not None:
         logger.info("PAD-US (%s): %d cached protected-area polygons.",
@@ -651,55 +748,38 @@ def fetch_padus(
     if url is None:
         return None
     try:
-        with tempfile.TemporaryDirectory() as tmp:
-            zip_path = Path(tmp) / "padus_state.zip"
-            logger.info("PAD-US: downloading %s geodatabase…",
-                        PADUS_FILE_PATTERN.format(state=state_code.upper()))
-            dl = requests.get(url, stream=True, timeout=1800,
-                              headers={"User-Agent": BROWSER_UA})
-            dl.raise_for_status()
-            with open(zip_path, "wb") as out:
-                for chunk in dl.iter_content(chunk_size=1 << 20):
-                    if chunk:
-                        out.write(chunk)
-            with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(tmp)
-            gdb_dirs = list(Path(tmp).glob("*.gdb"))
-            if not gdb_dirs:
-                logger.warning("PAD-US: no geodatabase in the archive.")
-                return None
-            gdb = str(gdb_dirs[0])
-            import pyogrio
+        gdb = _cached_state_gdb("padus", state_code, url)
+        if gdb is None:
+            return None
+        import pyogrio
 
-            layers = [l[0] for l in pyogrio.list_layers(gdb)]
-            # The combined inventory (DOD + tribal + NGP + fee +
-            # designation + easement) is the screening-appropriate layer —
-            # conservation easements are exactly the protected-land risk
-            # a Fee-only read would miss. The feature class is named
-            # "PADUS4_0Comb_DOD_Trib_NGP_Fee_Desig_Ease_State_XX" ("Comb",
-            # not "Combined"); Marine is offshore and excluded.
-            preferred = [
-                l for l in layers
-                if "Comb" in l and "Marine" not in l and "_" in l
-            ]
-            layer_name = preferred[0] if preferred else layers[0]
-            logger.info("PAD-US: reading layer %r from %s", layer_name, Path(gdb).name)
-            full = gpd.read_file(gdb, layer=layer_name)
-            cols = _pick_columns(
-                full,
-                unit="Unit_Nm", manager="Mang_Name", mgr_type="Mang_Type",
-                gap="GAP_Sts", category="Category",
-            )
-            clip = gpd.GeoDataFrame(cols, geometry="geometry", crs=full.crs)
-            clip = clip.to_crs("EPSG:4326")
-            within = clip[clip.geometry.intersects(clip_poly)]
-            # Persist the clip (with its bbox) for reuse, then return it.
-            # Empty is cached too: "no protected areas in this bbox" is a
-            # decided answer from the correct state's inventory.
-            _save_cached_clip(_padus_cache(state_code), within, clip_poly)
-            logger.info("PAD-US (%s): %d protected-area polygons in bbox (cached).",
-                        state_code.upper(), len(within))
-            return within
+        layer_name = _padus_layer([l[0] for l in pyogrio.list_layers(gdb)])
+        if layer_name is None:
+            logger.warning("PAD-US: no combined-inventory layer in the %s "
+                           "geodatabase.", state_code.upper())
+            return None
+        logger.info("PAD-US: reading layer %r from %s", layer_name, Path(gdb).name)
+        # Read through the bbox rather than reading the state and filtering
+        # afterwards. The old whole-state read is what exhausted memory on a
+        # New Jersey batch, and it was never needed: the county is all this
+        # returns either way.
+        full = _read_gdb_bbox(gdb, layer_name,
+                              min_lon, min_lat, max_lon, max_lat)
+        cols = _pick_columns(
+            full,
+            unit="Unit_Nm", manager="Mang_Name", mgr_type="Mang_Type",
+            gap="GAP_Sts", category="Category",
+        )
+        clip = gpd.GeoDataFrame(cols, geometry="geometry", crs=full.crs)
+        clip = clip.to_crs("EPSG:4326")
+        within = clip[clip.geometry.intersects(bbox_poly)]
+        # Persist the clip (with its bbox) for reuse, then return it.
+        # Empty is cached too: "no protected areas in this bbox" is a
+        # decided answer from the correct state's inventory.
+        _save_cached_clip(_padus_cache(state_code), within, bbox_poly)
+        logger.info("PAD-US (%s): %d protected-area polygons in bbox (cached).",
+                    state_code.upper(), len(within))
+        return within
     except Exception as e:  # noqa: BLE001
         logger.warning("PAD-US fetch failed: %s", e)
         return None
@@ -1004,61 +1084,34 @@ def fetch_nwi_wetlands(
             logger.info("NWI wetlands (cached clip): %d polygons.", len(cached))
             return cached, _nwi_state_url(state_code)
         _nwi_cache(state_code).parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory() as tmp:
-            zip_path = Path(tmp) / f"nwi_{state_code.lower()}.zip"
-            # No size in this message: it used to read "~395 MB" for every
-            # state, which is Virginia's figure and wrong everywhere else.
-            logger.info("NWI: downloading the %s geodatabase…",
-                        state_code.upper())
-            dl = requests.get(_nwi_state_url(state_code), stream=True, timeout=1800,
-                              headers={"User-Agent": BROWSER_UA})
-            dl.raise_for_status()
-            with open(zip_path, "wb") as out:
-                for chunk in dl.iter_content(chunk_size=1 << 20):
-                    if chunk:
-                        out.write(chunk)
-            with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(tmp)
-            gdb_dirs = list(Path(tmp).glob("*.gdb"))
-            if not gdb_dirs:
-                logger.warning("NWI: no geodatabase in the archive.")
-                return None, _nwi_state_url(state_code)
-            gdb = str(gdb_dirs[0])
-            import pyogrio
+        gdb = _cached_state_gdb("nwi", state_code, _nwi_state_url(state_code))
+        if gdb is None:
+            return None, _nwi_state_url(state_code)
+        import pyogrio
 
-            layers = [l[0] for l in pyogrio.list_layers(gdb)]
-            layer_name = _nwi_layer(layers, state_code)
-            if layer_name is None:
-                logger.warning("NWI: no wetlands layer in the %s geodatabase "
-                               "(layers: %s).", state_code.upper(), layers)
-                return None, _nwi_state_url(state_code)
-            logger.info("NWI: reading layer %r from %s", layer_name, Path(gdb).name)
-            info = pyogrio.read_info(gdb, layer=layer_name)
-            from pyproj import CRS
-            src_crs = CRS.from_user_input(info["crs"])
-            if src_crs.to_epsg() != 4326:
-                from pyproj import Transformer
-                tf = Transformer.from_crs("EPSG:4326", src_crs, always_xy=True)
-                bx0, by0 = tf.transform(min_lon, min_lat)
-                bx1, by1 = tf.transform(max_lon, max_lat)
-                read_bbox = (min(bx0, bx1), min(by0, by1), max(bx0, bx1), max(by0, by1))
-            else:
-                read_bbox = (min_lon, min_lat, max_lon, max_lat)
-            full = gpd.read_file(gdb, layer=layer_name, bbox=read_bbox)
-            attr_col = next(
-                (c for c in full.columns if c.upper() == "ATTRIBUTE"), None
-            )
-            clip = full.to_crs("EPSG:4326")
-            if len(clip) == 0:
-                logger.info("NWI: no wetland polygons in bbox.")
-                return None, _nwi_state_url(state_code)
-            out = gpd.GeoDataFrame({
-                "attribute": clip[attr_col] if attr_col else None,
-                "geometry": clip.geometry,
-            }, crs="EPSG:4326")
-            _save_cached_clip(_nwi_cache(state_code), out, bbox_poly)
-            logger.info("NWI wetlands (geodatabase clip): %d polygons (cached).", len(out))
-            return out, _nwi_state_url(state_code)
+        layers = [l[0] for l in pyogrio.list_layers(gdb)]
+        layer_name = _nwi_layer(layers, state_code)
+        if layer_name is None:
+            logger.warning("NWI: no wetlands layer in the %s geodatabase "
+                           "(layers: %s).", state_code.upper(), layers)
+            return None, _nwi_state_url(state_code)
+        logger.info("NWI: reading layer %r from %s", layer_name, Path(gdb).name)
+        full = _read_gdb_bbox(gdb, layer_name,
+                              min_lon, min_lat, max_lon, max_lat)
+        attr_col = next(
+            (c for c in full.columns if c.upper() == "ATTRIBUTE"), None
+        )
+        clip = full.to_crs("EPSG:4326")
+        if len(clip) == 0:
+            logger.info("NWI: no wetland polygons in bbox.")
+            return None, _nwi_state_url(state_code)
+        out = gpd.GeoDataFrame({
+            "attribute": clip[attr_col] if attr_col else None,
+            "geometry": clip.geometry,
+        }, crs="EPSG:4326")
+        _save_cached_clip(_nwi_cache(state_code), out, bbox_poly)
+        logger.info("NWI wetlands (geodatabase clip): %d polygons (cached).", len(out))
+        return out, _nwi_state_url(state_code)
     except Exception as e:  # noqa: BLE001
         logger.warning("NWI wetlands fetch failed: %s", e)
         return None, _nwi_state_url(state_code)

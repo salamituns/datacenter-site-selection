@@ -257,32 +257,6 @@ def resolve(region_key: str) -> Optional[Region]:
     )
 
 
-def state_bbox(state_code: str) -> Optional[Tuple[float, float, float, float]]:
-    """
-    One bbox covering every county in a state, or None for an unknown code.
-
-    For layers that are downloaded per STATE and then clipped. Clipping such
-    a layer to one county throws away data already paid for, and the clip
-    cache holds one bbox per state — so the next county misses, downloads
-    the same state again, and overwrites. Caching against the state bbox
-    instead makes every county in that state a hit.
-
-    Padded twice as far as a county bbox, deliberately. A county on the
-    state's edge gets the same pad from the same geometry, so a single pad
-    puts the two boundaries on exactly the same line and containment then
-    rests on a rounding tie. Delaware shows it: Sussex is the southernmost
-    county and its padded min_lat equals the state's to the digit. The
-    extra margin costs nothing and removes the tie.
-    """
-    df = _counties()
-    sel = df[df.STUSPS == (state_code or "").upper()]
-    if len(sel) == 0:
-        return None
-    pad = BBOX_PAD_DEG * 2
-    min_lon, min_lat, max_lon, max_lat = sel.total_bounds
-    return (round(min_lon - pad, 4), round(min_lat - pad, 4),
-            round(max_lon + pad, 4), round(max_lat + pad, 4))
-
 def all_regions(states: Optional[list] = None) -> Iterator[Region]:
     """
     Every county, or every county in the given state codes. The national
