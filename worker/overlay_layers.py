@@ -905,6 +905,40 @@ def fetch_utility_territories(
     return gdf
 
 
+def _nwi_layer(layers: List[str], state_code: str) -> Optional[str]:
+    """
+    The wetlands feature layer in a state NWI geodatabase.
+
+    Named exactly, because the near-miss here is silent and expensive. The
+    old rule took the first layer containing "wetland" that was not
+    "metadata" or "project", and Virginia's geodatabase happens to list
+    VA_Wetlands before anything else that matches, so it worked. Delaware
+    and New Jersey also ship {ST}_Wetlands_Historic_Map_Info -- an index of
+    historic map SHEETS, not wetlands -- and it matched the same rule. GDB
+    layer order is not alphabetical and not guaranteed, so which one won
+    was arbitrary per state.
+
+    It read as success: a layer was found, polygons were returned, the gate
+    decided. Atlantic County, New Jersey came back with ONE wetland polygon
+    and Kent County, Delaware with five, in states that are a fifth to a
+    quarter wetland. Nothing errored. The wetlands gate simply passed
+    parcels that are marsh.
+
+    So: the exact name first, a strict suffix next, and nothing at all
+    rather than a guess. Returning None leaves the layer absent and the
+    gate UNKNOWN, which is the honest answer and the one this project
+    prefers to a confident wrong one.
+    """
+    exact = f"{state_code}_wetlands".lower()
+    for layer in layers:
+        if layer.lower() == exact:
+            return layer
+    suffixed = [l for l in layers if l.lower().endswith("_wetlands")]
+    if len(suffixed) == 1:
+        return suffixed[0]
+    return None
+
+
 def fetch_nwi_wetlands(
     min_lon: float, min_lat: float, max_lon: float, max_lat: float,
     state_code: str = "VA",
@@ -972,7 +1006,9 @@ def fetch_nwi_wetlands(
         _nwi_cache(state_code).parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as tmp:
             zip_path = Path(tmp) / f"nwi_{state_code.lower()}.zip"
-            logger.info("NWI: downloading %s geodatabase (~395 MB)…",
+            # No size in this message: it used to read "~395 MB" for every
+            # state, which is Virginia's figure and wrong everywhere else.
+            logger.info("NWI: downloading the %s geodatabase…",
                         state_code.upper())
             dl = requests.get(_nwi_state_url(state_code), stream=True, timeout=1800,
                               headers={"User-Agent": BROWSER_UA})
@@ -991,15 +1027,11 @@ def fetch_nwi_wetlands(
             import pyogrio
 
             layers = [l[0] for l in pyogrio.list_layers(gdb)]
-            # The state GDB ships boundary + metadata layers alongside the
-            # wetland features (e.g. 'Virginia', 'VA_Wetlands',
-            # 'VA_Wetlands_Project_Metadata') — pick the feature layer.
-            preferred = [
-                l for l in layers
-                if "wetland" in l.lower() and "metadata" not in l.lower()
-                and "project" not in l.lower()
-            ]
-            layer_name = preferred[0] if preferred else layers[0]
+            layer_name = _nwi_layer(layers, state_code)
+            if layer_name is None:
+                logger.warning("NWI: no wetlands layer in the %s geodatabase "
+                               "(layers: %s).", state_code.upper(), layers)
+                return None, _nwi_state_url(state_code)
             logger.info("NWI: reading layer %r from %s", layer_name, Path(gdb).name)
             info = pyogrio.read_info(gdb, layer=layer_name)
             from pyproj import CRS
