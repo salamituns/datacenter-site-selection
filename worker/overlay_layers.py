@@ -627,6 +627,21 @@ def fetch_padus(
     returned present and empty, and the gate decides PASS.
     """
     bbox_poly = _bbox_polygon(min_lon, min_lat, max_lon, max_lat)
+    # Cache against the whole STATE, not the county that asked.
+    #
+    # This layer is downloaded per state and read whole into memory, so
+    # clipping to one county throws away data already paid for. With one
+    # clip per state file and a containment test, the next county missed,
+    # downloaded the same state geodatabase again, and overwrote. Measured
+    # on the first Delaware batch: PADUS4_0_State_DE_GDB.zip fetched three
+    # times in one 21-minute run for three adjacent counties.
+    #
+    # Keeping the state means every later county in it is a hit. The frame
+    # returned is wider than the caller's bbox, which is harmless — gates
+    # ask what intersects a parcel, and a protected area in another county
+    # intersects nothing here.
+    cache_bbox = region_registry.state_bbox(state_code)
+    clip_poly = _bbox_polygon(*cache_bbox) if cache_bbox else bbox_poly
     cached = _load_cached_clip(_padus_cache(state_code), bbox_poly)
     if cached is not None:
         logger.info("PAD-US (%s): %d cached protected-area polygons.",
@@ -677,11 +692,11 @@ def fetch_padus(
             )
             clip = gpd.GeoDataFrame(cols, geometry="geometry", crs=full.crs)
             clip = clip.to_crs("EPSG:4326")
-            within = clip[clip.geometry.intersects(bbox_poly)]
+            within = clip[clip.geometry.intersects(clip_poly)]
             # Persist the clip (with its bbox) for reuse, then return it.
             # Empty is cached too: "no protected areas in this bbox" is a
             # decided answer from the correct state's inventory.
-            _save_cached_clip(_padus_cache(state_code), within, bbox_poly)
+            _save_cached_clip(_padus_cache(state_code), within, clip_poly)
             logger.info("PAD-US (%s): %d protected-area polygons in bbox (cached).",
                         state_code.upper(), len(within))
             return within
