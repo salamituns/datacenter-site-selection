@@ -38,6 +38,15 @@ These counties have no cadastral adapter, so the parcel tier never runs: they
 publish screening cells with federal-layer measurements attached and no
 verdicts, which is what the national tier was built to do. Lexicographic
 tiering keeps them below every qualified parcel whatever their score.
+
+HONEST DEGRADATION MUST BE RECOVERABLE, not just survivable. A county that
+publishes with a layer unreachable degrades to UNKNOWN rather than guessing —
+and since the coverage guard landed, the run records which layers answered in
+stats.layers and promote refuses to replace decided evidence with a thinner
+generation. --incomplete is the other half: it selects counties whose live
+run recorded a missing layer, so a degraded publish is re-run once the layer
+is reachable instead of sitting as UNKNOWN forever. The list is derived from
+the published runs, not a retry file — same rule as progress itself.
 """
 
 import argparse
@@ -45,7 +54,7 @@ import logging
 import os
 import sys
 import time
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import region_registry
 from pipeline import run_pipeline
@@ -96,14 +105,91 @@ def published_regions() -> set:
         return set()
 
 
+def _recorded_missing_layers(stats: Optional[Dict[str, Any]]) -> bool:
+    """
+    True when a run's stats.layers marks any layer missing.
+
+    A run from before the map existed (no layers key) is not incomplete —
+    it predates the record, and treating it as degraded would put every
+    legacy county on the recovery list forever. The coverage guard handles
+    such runs at promote time; recovery only re-runs what was recorded.
+    """
+    layers = (stats or {}).get("layers") or {}
+    return any(v == "missing" for v in layers.values())
+
+
+def incomplete_regions() -> set:
+    """
+    Region keys whose live succeeded run recorded a missing layer.
+
+    Read from ingestion_runs.stats.layers — the map the worker writes
+    before promote and the coverage guard compares. A county that
+    published UNKNOWN because PAD-US was unreachable one afternoon stays
+    on this list until a run with the layer back promotes over it.
+    Returns an empty set when nothing can be read, which reads as "nothing
+    to recover" — the safe direction, because recovery only ever re-runs
+    and never destroys.
+    """
+    url = os.getenv("SUPABASE_URL")
+    key = (os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+           or os.getenv("SUPABASE_ANON_KEY"))
+    if not url or not key:
+        logger.warning("No client for ingestion_runs — cannot tell which "
+                       "counties published with a missing layer.")
+        return set()
+    try:
+        from supabase import create_client
+        client = create_client(url, key)
+        incomplete, seen, page, size = set(), set(), 0, 1000
+        while True:
+            # Ordered paging, same reason as published_regions: Postgres
+            # guarantees no row order without an ORDER BY, and a row
+            # returned twice or skipped here would silently drop a county
+            # from recovery. Promote supersedes, so at most one succeeded
+            # run per region should exist — but if that ever drifts, the
+            # finished_at ordering keeps "latest" well-defined.
+            res = (client.table("ingestion_runs")
+                   .select("region_code, stats")
+                   .eq("status", "succeeded")
+                   .order("finished_at", desc=True)
+                   .order("id")
+                   .range(page * size, page * size + size - 1).execute())
+            rows = res.data or []
+            for r in rows:
+                region = r.get("region_code")
+                if not region or region in seen:
+                    continue
+                seen.add(region)
+                if _recorded_missing_layers(r.get("stats")):
+                    incomplete.add(region)
+            if len(rows) < size:
+                break
+            page += 1
+        return incomplete
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Could not read incomplete regions (%s); treating "
+                       "none as degraded.", e)
+        return set()
+
+
 def next_batch(limit: int, state: Optional[str] = None,
-               redo: bool = False) -> List[str]:
-    """The next `limit` PJM counties to screen, in state order."""
+               redo: bool = False, incomplete: bool = False) -> List[str]:
+    """
+    The next `limit` PJM counties to screen, in state order.
+
+    incomplete=True replaces the criterion rather than widening it: the
+    batch is counties whose live run recorded a missing layer, not
+    counties with no cells. A county with a full layer set never appears,
+    whatever --redo says — recovery is for the degraded, not the bored.
+    """
     regions = region_registry.pjm_screening_regions()
     if state:
         want = state.upper()
         regions = [r for r in regions if r.split("-", 1)[0] == want]
-    if not redo:
+    if incomplete:
+        degraded = incomplete_regions()
+        regions = [r for r in regions if r in degraded]
+    elif not redo:
         done = published_regions()
         regions = [r for r in regions if r not in done]
     return regions[:limit]
@@ -170,6 +256,11 @@ def main() -> int:
                         help="restrict to one state code, e.g. OH")
     parser.add_argument("--redo", action="store_true",
                         help="include counties already screened")
+    parser.add_argument("--incomplete", action="store_true",
+                        help="re-run counties whose live run recorded a "
+                             "missing layer in stats.layers (recovery pass "
+                             "after a degraded publish), instead of "
+                             "unscreened counties")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--list", action="store_true",
                         help="show the batch and exit without running it")
@@ -181,11 +272,16 @@ def main() -> int:
 
     total = len(region_registry.pjm_screening_regions())
     done = len(published_regions() & set(region_registry.pjm_screening_regions()))
-    batch = next_batch(args.limit, args.state, args.redo)
+    batch = next_batch(args.limit, args.state, args.redo, args.incomplete)
 
     logger.info("PJM footprint: %d counties at or above the %.0f%% screening "
                 "threshold; %d already screened, %d remaining.",
                 total, region_registry.PJM_SCREEN_MIN_PCT, done, total - done)
+    if args.incomplete:
+        degraded = len(incomplete_regions()
+                       & set(region_registry.pjm_screening_regions()))
+        logger.info("Recovery pass: %d of %d footprint counties published "
+                    "with a layer missing.", degraded, total)
     if not batch:
         logger.info("Nothing to do.")
         return 0

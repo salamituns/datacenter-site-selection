@@ -588,21 +588,75 @@ def fetch_subdivisions(
         return None
 
 
+def _padus_urls_cache() -> Path:
+    """
+    The JSON of resolved PAD-US state download URLs, kept beside the
+    geodatabase cache it exists to keep warm (worker/cache/gdb/).
+    """
+    return Path(__file__).parent / "cache" / "gdb" / "padus_urls.json"
+
+
+def _load_cached_padus_urls() -> Dict[str, str]:
+    try:
+        with open(_padus_urls_cache(), encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_cached_padus_url(state_code: str, url: str) -> None:
+    """
+    One state's resolved URL, written atomically (temp sibling + rename) so
+    an interrupted write cannot leave a half-file later runs would trust.
+    """
+    urls = _load_cached_padus_urls()
+    urls[state_code.upper()] = url
+    target = _padus_urls_cache()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = target.with_name(target.name + ".tmp")
+    with open(staging, "w", encoding="utf-8") as fh:
+        json.dump(urls, fh, indent=2, sort_keys=True)
+    staging.rename(target)
+
+
 def _padus_state_url(state_code: str) -> Optional[str]:
     """
-    Resolves the PAD-US 4.0 geodatabase download URL for a state from the
-    ScienceBase release manifest. Returns None when the manifest is
-    unreachable or the state's file is absent — the gate stays UNKNOWN
-    rather than guessing.
+    Resolves the PAD-US 4.0 geodatabase download URL for a state.
+
+    The ScienceBase release manifest is consulted at most once per state,
+    ever: a resolved URL is persisted to the JSON cache beside the
+    geodatabase cache, because PAD-US 4.0's download URLs are stable for
+    the life of the release and the manifest itself has started answering
+    datacenter IPs with a Cloudflare 403. Re-asking it per county (the old
+    behaviour — the URL was resolved on every clip-cache miss, even when
+    the geodatabase was already cached) bought nothing and now costs an
+    outage per state.
+
+    The failure path is deliberately unchanged: a state whose URL was
+    never resolved, whose manifest read fails, or whose file is absent
+    returns None, and the gate stays UNKNOWN rather than guessing. Nothing
+    here attempts to defeat the bot check — a workaround is the kind of
+    thing that gets an IP range blocked for the humans too.
     """
+    state = state_code.upper()
+    cached = _load_cached_padus_urls().get(state)
+    if cached:
+        return cached
     try:
         r = requests.get(PADUS_MANIFEST_URL, timeout=60,
                          headers={"User-Agent": BROWSER_UA, "Accept": "application/json"})
         r.raise_for_status()
-        wanted = PADUS_FILE_PATTERN.format(state=state_code.upper())
+        wanted = PADUS_FILE_PATTERN.format(state=state)
         for f in r.json().get("files", []):
             if f.get("name") == wanted:
-                return f.get("url")
+                url = f.get("url")
+                if url:
+                    _save_cached_padus_url(state, url)
+                    logger.info("PAD-US: resolved the %s geodatabase URL "
+                                "from the release manifest — cached for "
+                                "the life of the release.", state)
+                return url
         logger.warning("PAD-US: %r not in the ScienceBase release manifest.", wanted)
         return None
     except Exception as e:  # noqa: BLE001

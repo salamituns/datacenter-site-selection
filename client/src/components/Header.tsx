@@ -1,8 +1,9 @@
 import React from "react";
-import { RefreshCw, ChevronDown } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
 import { AuthControl } from "./AuthControl";
-import { HOME_REGION, type Region } from "@/lib/regions";
+import { RegionSelect } from "./RegionSelect";
+import type { Region } from "@/lib/regions";
 
 interface HeaderProps {
   totalParcels: number;
@@ -48,14 +49,6 @@ export const Header: React.FC<HeaderProps> = ({
   isSyncing,
   onSync,
 }) => {
-  // A region is selectable once surveyed — the home region always is
-  // (it carries the demo dataset fallback).
-  // A region is selectable once surveyed — the home region always is
-  // (it carries the demo dataset fallback).
-  const isSelectable = (code: string) =>
-    code === HOME_REGION ||
-    ((regions ?? []).find((r) => r.code === code)?.cells ?? 0) > 0;
-  const options = regions ?? [];
   return (
     <header className="hidden h-16 shrink-0 items-center justify-between gap-3 border-b border-border-strong bg-background px-3 lg:flex sm:px-4">
       {/* Masthead */}
@@ -83,22 +76,14 @@ export const Header: React.FC<HeaderProps> = ({
           </span>
         </div>
 
-        {/* Region selector */}
-        <div className="relative hidden sm:block">
-          <select
-            value={selectedRegion}
-            onChange={(e) => onRegionChange(e.target.value)}
-            aria-label="Select region"
-            className="h-8 appearance-none rounded-[2px] border border-border-strong bg-surface pl-2 pr-6 font-mono text-[10px] uppercase tracking-wide text-foreground transition-colors hover:border-foreground/60 focus:border-accent-600 focus:outline-none sm:pl-2.5 sm:pr-7 sm:text-[11px]"
-          >
-            {options.map((region) => (
-              <option key={region.code} value={region.code} disabled={!isSelectable(region.code)}>
-                {region.label}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted" />
-        </div>
+        {/* Region selector — surveyed counties by default, screening
+            behind search (see RegionSelect). */}
+        <RegionSelect
+          regions={regions}
+          selectedRegion={selectedRegion}
+          onRegionChange={onRegionChange}
+          variant="desktop"
+        />
 
         {/* Data source + sync */}
         <div className="hidden items-center gap-1.5 rounded-[2px] border border-border-strong bg-surface px-2.5 py-1.5 sm:flex">

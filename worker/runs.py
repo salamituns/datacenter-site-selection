@@ -55,11 +55,47 @@ class IngestionRun:
         logger.info("Ingestion run %s started (%s)", run_key, self.run_id)
         return self.run_id
 
-    def promote(self) -> Dict[str, Any]:
-        """Atomically publishes the complete staged run."""
+    def record_layers(self, layers: Dict[str, str]) -> None:
+        """
+        Records the {layer: present|missing} availability map on the run.
+
+        promote_ingestion_run refuses to publish a run that would drop a
+        layer the live generation had — the Taylor County incident, where a
+        PAD-US outage turned 91 decided protected-land verdicts into 4,356
+        UNKNOWNs overnight — and it reads the map from ingestion_runs.stats,
+        so the map has to be on the row before the swap, not merged into it
+        afterwards. Read-modify-write is safe here: nothing else writes this
+        row between start() and promote(). A failure to record raises rather
+        than degrading quietly, because a run with no map is exactly the
+        blind spot the guard exists to close.
+        """
+        if not self.run_id:
+            raise RuntimeError("record_layers() called before start()")
+        res = self.client.table("ingestion_runs").select("stats") \
+            .eq("id", self.run_id).single().execute()
+        stats = dict((res.data or {}).get("stats") or {})
+        stats["layers"] = layers
+        self.client.table("ingestion_runs").update({"stats": stats}) \
+            .eq("id", self.run_id).execute()
+        logger.info("Run %s layer availability recorded: %s",
+                    self.run_id, layers)
+
+    def promote(self, allow_coverage_regression: bool = False) -> Dict[str, Any]:
+        """
+        Atomically publishes the complete staged run.
+
+        allow_coverage_regression is the operator override for the
+        database's coverage guard, not a routine flag: True publishes a run
+        that would drop a layer the live generation had, which is a
+        deliberate, recorded decision rather than something a scheduled
+        sweep should ever pass.
+        """
         if not self.run_id:
             raise RuntimeError("promote() called before start()")
-        res = self.client.rpc("promote_ingestion_run", {"p_run_id": self.run_id}).execute()
+        res = self.client.rpc("promote_ingestion_run", {
+            "p_run_id": self.run_id,
+            "p_allow_coverage_regression": allow_coverage_regression,
+        }).execute()
         counts = res.data
         logger.info("Run %s promoted atomically: %s", self.run_id, counts)
         return counts

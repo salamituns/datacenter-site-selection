@@ -1,0 +1,118 @@
+name: PJM Screening Sweep
+
+on:
+  workflow_dispatch:
+    inputs:
+      state:
+        description: 'Two-letter state code to sweep (e.g. OH, IL, VA). Empty = the whole footprint in state order.'
+        required: false
+        default: ''
+      limit:
+        description: 'Counties to screen this run (default 10; a full state may exceed the job timeout, so sweep in batches)'
+        required: false
+        default: '10'
+      dry_run:
+        description: 'Dry run mode (do not push to Supabase)'
+        type: boolean
+        default: false
+
+jobs:
+  screen:
+    name: Screen ${{ github.event.inputs.state || 'PJM footprint' }}
+    runs-on: ubuntu-latest
+    # One sweep at a time per state: two concurrent runs of the same state
+    # would race the promote guard and double the request pressure on
+    # 3DEP, PAD-US and NWI from one IP range, and this repo has been
+    # rate-limited by two of them already. Different states may overlap —
+    # they touch different county data and publish different regions.
+    concurrency:
+      group: pjm-screening-${{ github.event.inputs.state || 'all' }}
+      cancel-in-progress: false
+    # ~5 minutes a county, 88 counties in the biggest state: a full state
+    # is ~7 hours and GitHub caps a job at 6. The limit input is how a
+    # state is swept in batches; this cap exists so one hung download
+    # cannot burn the whole cap before anything notices.
+    timeout-minutes: 350
+
+    env:
+      # One source of truth for whether this run publishes, same pattern as
+      # data_pipeline.yml: the --dry-run flag and the credential gate below
+      # both derive from it, so they cannot disagree.
+      PUBLISHING: ${{ github.event.inputs.dry_run != 'true' }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install System Geospatial Libraries (GDAL / GEOS / PROJ)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libgeos-dev libproj-dev
+
+      - name: Install Python Dependencies
+        run: |
+          cd worker
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # Warm both caches the runner reads before it picks a batch: the
+      # Census county extract (region identity, same as data_pipeline.yml)
+      # and the PJM footprint itself. Selection then runs against local
+      # files instead of downloading a shapefile mid-decision — and a
+      # warm-up failure fails the job before any county is touched, not
+      # forty counties in.
+      - name: Warm the Census and PJM footprint caches
+        run: |
+          cd worker
+          python -c "import region_registry; region_registry._counties(); region_registry.pjm_screening_regions()"
+
+      # Same rule as data_pipeline.yml: the gate logic, the JSON guards and
+      # the overlay geometry are decidable offline, and a run that would
+      # compute wrong measurements should fail in seconds, not after an
+      # hour of downloads.
+      - name: Worker unit tests
+        run: |
+          cd worker
+          python -m pytest -q
+
+      # No actions/cache for the geospatial archives. The state NWI and
+      # PAD-US geodatabases run to hundreds of MB each and ~400 GB across
+      # the footprint — far past the 10 GB cache limit, and saving them
+      # would spend more runner time than re-downloading. The per-state
+      # geodatabase cache in worker/cache/gdb gives the reuse that matters
+      # (one download per state per run) without any cache service.
+
+      - name: Run screening batch
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # Withheld from a dry run, same rule as data_pipeline.yml: a dry
+          # run never opens a write client, so it never needs the key that
+          # can write to production.
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.PUBLISHING == 'true' && secrets.SUPABASE_SERVICE_ROLE_KEY || '' }}
+          # Reads constraint_rules and grid_parcels progress with the
+          # publishable key already shipped in the browser bundle.
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          cd worker
+
+          # Defaults to a dry run: if PUBLISHING is ever unset or malformed,
+          # the run declines to publish rather than publishing by accident.
+          DRY_RUN="--dry-run"
+          if [ "$PUBLISHING" = "true" ]; then DRY_RUN=""; fi
+
+          STATE_ARGS=""
+          if [ -n "${{ github.event.inputs.state }}" ]; then
+            STATE_ARGS="--state ${{ github.event.inputs.state }}"
+          fi
+
+          echo "Running screening batch (publishing: $PUBLISHING)…"
+          # Exits non-zero only when every county in the batch failed —
+          # the runner's own signal that the problem is systemic (a bad
+          # key, an outage) rather than one county's cadastre.
+          python pjm_screening.py $STATE_ARGS --limit "${{ github.event.inputs.limit || '10' }}" $DRY_RUN

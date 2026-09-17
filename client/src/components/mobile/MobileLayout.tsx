@@ -1,13 +1,14 @@
 "use client";
 
 import React, { useRef, useState } from "react";
-import { ChevronDown, ChevronUp, RefreshCw, Search, SlidersHorizontal, X } from "lucide-react";
+import { ChevronUp, RefreshCw, Search, SlidersHorizontal, X } from "lucide-react";
 import { GridParcel, LayerVisibility, WeightFactors } from "@/types/parcel";
 import { ConstraintSliders } from "@/components/ConstraintSliders";
 import { BenchmarkMark } from "@/components/Header";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { AuthControl } from "@/components/AuthControl";
-import { HOME_REGION, type Region } from "@/lib/regions";
+import { RegionSelect } from "@/components/RegionSelect";
+import type { Region } from "@/lib/regions";
 import { LayerChips } from "./LayerChips";
 import { ParcelCards } from "./ParcelCards";
 
@@ -68,13 +69,6 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
   isSyncing,
   onSync,
 }) => {
-  // A region is selectable once surveyed — the home region always is
-  // (it carries the demo dataset fallback).
-  const isSelectable = (code: string) =>
-    code === HOME_REGION ||
-    ((regions ?? []).find((r) => r.code === code)?.cells ?? 0) > 0;
-  const options = regions ?? [];
-
   const [searchTerm, setSearchTerm] = useState("");
   const [sheet, setSheet] = useState<SheetState>("peek");
   const [weightsOpen, setWeightsOpen] = useState(false);
@@ -184,26 +178,14 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
             className="h-10 w-full rounded-[3px] border border-border-strong bg-surface/95 py-0 pl-9 pr-3 font-mono text-[11px] text-foreground shadow-plate backdrop-blur placeholder:text-muted focus:border-accent-600 focus:outline-none"
           />
         </div>
-        {/* Region pill — cycles surveyed regions */}
-        <div className="relative shrink-0">
-          <select
-            value={selectedRegion}
-            onChange={(e) => onRegionChange(e.target.value)}
-            aria-label="Select region"
-            className="h-10 appearance-none rounded-[3px] border border-border-strong bg-surface/95 pl-2.5 pr-6 font-mono text-[11px] uppercase tracking-wide text-foreground shadow-plate backdrop-blur transition-colors focus:border-accent-600 focus:outline-none"
-          >
-            {options.map((region) => (
-              <option
-                key={region.code}
-                value={region.code}
-                disabled={!isSelectable(region.code)}
-              >
-                {region.short}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted" />
-        </div>
+        {/* Region pill — surveyed regions by default, screening behind
+            search (same rule as the desktop header). */}
+        <RegionSelect
+          regions={regions}
+          selectedRegion={selectedRegion}
+          onRegionChange={onRegionChange}
+          variant="compact"
+        />
         <button
           onClick={onSync}
           disabled={isSyncing}

@@ -18,6 +18,7 @@ def test_ingestion_run_exposes_every_staging_method():
     required = {
         # lifecycle
         "start", "promote", "fail", "snapshot", "rule_id", "load_rules",
+        "record_layers",
         # curated power evidence
         "fetch_power_parcel_evidence",
         # staged writes — the publish path calls each of these

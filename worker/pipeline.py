@@ -325,6 +325,24 @@ def _well_records(wells_df: pd.DataFrame, state_code: str,
     return records
 
 
+def _layer_availability(stats: Dict[str, Any]) -> Dict[str, str]:
+    """
+    qualify_parcels' `*_layer` stats keys as the {layer: present|missing}
+    map both tiers record on the run.
+
+    The keys are already categorical — a layer is present or it is not,
+    never "mostly there" — which is exactly why availability, not gate
+    counts, is what the promote guard compares between generations: gate
+    counts are not comparable across a rule change or a new evidence
+    layer, and a difference there is a correction, not a regression.
+    `water_layer_edited` does not end in `_layer` and is excluded, which
+    is correct: it describes how the water layer was read, not whether it
+    answered.
+    """
+    return {k[: -len("_layer")]: v for k, v in stats.items()
+            if k.endswith("_layer")}
+
+
 def run_pipeline(
     region_key: str = "VA-LOUDOUN",
     min_lon: float = -77.85,
@@ -337,6 +355,7 @@ def run_pipeline(
     output_geojson: Optional[str] = None,
     trigger: str = "manual",
     qualify_parcels_flag: bool = True,
+    allow_coverage_regression: bool = False,
 ) -> Tuple[gpd.GeoDataFrame, Dict[int, Dict[str, Any]]]:
     """
     Executes the screening pipeline (+ parcel qualification where the
@@ -534,6 +553,13 @@ def run_pipeline(
 
         # ── Loudoun parcel qualification (pilot) ───────────────────────
         parcel_stats: Dict[str, Any] = {}
+        # Layer availability for this run, in the {layer: present|missing}
+        # shape both tiers share. Recorded onto the run before promote so
+        # the database can refuse a publish that would silently drop a
+        # layer the live generation had — the shape of the Taylor County
+        # incident, where a PAD-US outage replaced 91 decided protected-land
+        # verdicts with 4,356 UNKNOWNs and promoted anyway.
+        layers: Dict[str, str] = {}
         # How much of the region's parcel survey resolved. Stays 0.0 where
         # there is no parcel tier — which is why it is read alongside
         # evidence_tier and never instead of it: a region with no parcels
@@ -951,6 +977,7 @@ def run_pipeline(
                 run.stage_land_parcels(parcel_records)
                 run.stage_parcel_metrics(metric_rows)
                 run.stage_parcel_gates(gate_rows)
+            layers = _layer_availability(parcel_stats)
 
         elif qualify_parcels_flag:
             # No cadastre in this county, so the federal layers are measured
@@ -961,7 +988,7 @@ def run_pipeline(
             # screening, so these cells rank below every diligenced parcel.
             logger.info("Step 6: federal-layer metrics for %s (no cadastre)…",
                         region_key)
-            clustered_gdf["federal_metrics"] = national_metrics.measure(
+            clustered_gdf["federal_metrics"], layers = national_metrics.measure(
                 clustered_gdf, min_lon, min_lat, max_lon, max_lat, state_code)
 
         # ── Evidence tier and coverage weighting ───────────────────────
@@ -1027,11 +1054,17 @@ def run_pipeline(
                     _well_records(wells_df, state_code, region_key))
 
             # ── Atomic publication ─────────────────────────────────────
+            # The coverage guard reads the layer map from the run row, so
+            # it is recorded before the swap, never merged into it.
+            run.record_layers(layers)
+
             logger.info("Promoting run atomically…")
-            counts = run.promote()
+            counts = run.promote(
+                allow_coverage_regression=allow_coverage_regression)
             logger.info("PUBLISHED: %s", counts)
         else:
-            logger.info("Dry-run mode — nothing staged or published.")
+            logger.info("Dry-run mode — nothing staged or published. "
+                        "Layer availability: %s", layers or "not measured")
 
     except Exception as exc:  # noqa: BLE001
         if run is not None:
@@ -1054,6 +1087,10 @@ if __name__ == "__main__":
     parser.add_argument("--geojson", default=None, help="Output GeoJSON filepath")
     parser.add_argument("--no-parcels", action="store_true",
                         help="Skip cadastral parcel qualification (screening cells only)")
+    parser.add_argument("--allow-coverage-regression", action="store_true",
+                        help="Publish even if a layer the live generation had "
+                             "is missing this run. Deliberate operator "
+                             "override of the promote guard — never routine.")
 
     args = parser.parse_args()
     region_key = args.region.upper()
@@ -1098,6 +1135,7 @@ if __name__ == "__main__":
             dry_run=args.dry_run, output_geojson=args.geojson,
             trigger="scheduled" if os.getenv("CI") else "manual",
             qualify_parcels_flag=not args.no_parcels,
+            allow_coverage_regression=args.allow_coverage_regression,
         )
     except SystemExit:
         raise

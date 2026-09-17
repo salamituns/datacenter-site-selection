@@ -598,3 +598,132 @@ official state-geodatabase fallback carried the wetlands gate (21,702
 polygons) — the fallback exists for exactly this, and the first download
 attempt died at 84 MB before a retry completed it.
 
+---
+
+## Sweep readiness — shipped 2026-09-17
+
+Five changes the 552-county sweep needs before it starts, all landed as
+one release. The motivating incident: Taylor County was republished to fix
+a wetlands bug, PAD-US was unreachable that afternoon, and the pipeline
+degraded honestly — layers missing, protected-land verdicts UNKNOWN — and
+promoted anyway, replacing 91 decided verdicts with 4,356 UNKNOWNs. Honest
+degradation that cannot be *undone* is only half a design; this is the
+other half.
+
+### 1 — promote refuses a coverage regression
+
+Every run now records `stats.layers` — `{layer: "present"|"missing"}` — on
+its `ingestion_runs` row before promote. Both tiers, one shape: the parcel
+tier takes it from `qualify_parcels`' existing `*_layer` stats keys, the
+screening tier from `national_metrics.measure`, which now returns the map
+alongside the cell measurements and uses the parcel tier's layer names
+(`wetlands`, `slope` — not `nwi`, `3dep`) so a county that gains a
+cadastral adapter never reads as losing its screening layers to a rename.
+
+`promote_ingestion_run(p_run_id, p_allow_coverage_regression DEFAULT
+false)` (migration `release28_promote_coverage_guard`) compares the map
+against the region's live succeeded generation **before the first DELETE**:
+a layer that was present and is now missing fails the publish, naming the
+lost layers. Verified live against fabricated fixtures (region `ZZ-GUARD`,
+created and deleted around the test): the blocked swap leaves the live row
+untouched and the run `running`; the override promotes; a first publish
+proceeds; adding a layer proceeds; a mapless run against a mapped
+generation is refused as missing everything. A legacy generation with no
+map is not comparable, so the first publish after this change always
+proceeds — which is what lets the map start landing. `--allow-coverage-
+regression` on `pipeline.py` is the operator override, never passed by any
+scheduled path.
+
+Deliberately narrow: layer **availability** is compared, never gate counts
+— counts are not comparable across a rule change, and a difference there
+is a correction, not a regression. Carrying the previous generation's
+evidence forward was rejected too: it would make the published map a mix of
+two runs' answers with no record of which was which.
+
+**Known blind spot, accepted:** a legacy live generation (no map) cannot
+protect itself, so a republish of, say, OH-LICKING while PAD-US is
+unreachable would degrade its protected-land evidence *and record the map
+as if that were normal*. That is exactly why the parcel-region recovery
+republishes (Licking, Delaware's three, Taylor) stay **blocked until
+ScienceBase answers** — see the PAD-US note below — and why the sweep's
+first guarded generation matters more than any single republish.
+
+### 2 — `pjm_screening.py --incomplete`
+
+Recovery, derived from published data like progress itself: selects
+counties whose live succeeded run has any layer marked missing in
+`stats.layers`, instead of counties with no cells. No retry file to drift
+or forget; `--list` shows the batch; `--redo` is ignored in this mode —
+recovery is for the degraded, not the bored. A run from before the map
+existed is *not* incomplete (it predates the record); the coverage guard,
+not recovery, handles those at promote time. Reads with whatever key is
+available, ordered paging, at most one succeeded run per region so "the
+live one" is well-defined.
+
+### 3 — `.github/workflows/pjm_screening.yml`
+
+`workflow_dispatch` per state (`state`, `limit`, `dry_run`), mirroring
+`data_pipeline.yml`'s conventions: one `PUBLISHING` env both sides derive
+from, the service key withheld on a dry run, the anon key always present,
+worker unit tests before any network fetch, Census **and PJM footprint**
+caches warmed before batch selection, and a per-state concurrency group
+(the same state never races itself; different states may overlap).
+Deliberately **no `actions/cache` for the geospatial archives**: the state
+geodatabases run to hundreds of MB each and ~400 GB across the footprint,
+far past the cache service's limits — the on-disk per-state geodatabase
+cache in `worker/cache/gdb` already gives the reuse that matters, one
+download per state per run. The runner exits non-zero only when every
+county in the batch failed, which is its systemic-problem signal; one
+county's outage just leaves it for the next batch.
+
+### 4 — PAD-US URLs resolved once per state, ever
+
+The ScienceBase release manifest now answers datacenter IPs with a
+Cloudflare 403. PAD-US 4.0's download URLs are stable for the life of the
+release, so `_padus_state_url` consults a JSON cache beside the geodatabase
+cache (`worker/cache/gdb/padus_urls.json`) and persists every URL it
+resolves; the manifest is never re-asked for a state it has answered. The
+failure path is unchanged and nothing attempts to defeat the bot check — a
+workaround is the kind of thing that gets an IP range blocked for humans
+too. A state whose URL was never resolved and whose manifest read fails
+still reads as a missing layer, the gate stays UNKNOWN, and the coverage
+guard keeps that from silently replacing decided evidence. **Re-check
+ScienceBase reachability before the sweep** (backlog): the sweep's
+screening counties degrade honestly without PAD-US, but every degraded
+publish lands on the `--incomplete` list for recovery the moment it exists.
+
+### 5 — surveyed vs screened in the region selector
+
+After the sweep the region list stops being a list: `filterRegions`
+(`client/src/lib/regions.ts`) owns one rule shared by both surfaces —
+surveyed counties (`active_parcels > 0`) by default, in region-key order;
+everything else behind the selector's search box, surveyed matches ranked
+first; screening-only entries badged `screening` so a measurement never
+masquerades as a survey. The native `<select>` in both the desktop header
+and the mobile pill became one `RegionSelect` component (search,
+keyboard/arrows, outside-press close, the home region never stranded) — a
+552-option dropdown buries the ten counties that were actually diligenced,
+which was the same defect as the old hand-kept region list wearing a
+bigger hat.
+
+### Verified live
+
+Morrow OR (screening tier) republished as run
+`OR-MORROW-20260917T010420Z-b665`: 748 cells, `stats.layers` landed as
+`{wetlands, nfhl, roads, slope: present, padus: missing}` — the manifest
+read failed from this network exactly as designed, the run published
+(first guarded generation, nothing to compare against), and the map is
+live. Two notes worth keeping:
+
+- The promote RPC's HTTP read timed out client-side while the server
+  completed it; `fail()` had already marked the run `failed`, and the
+  promote's own final `UPDATE` overwrote that to `succeeded`. The end
+  state is accurate (it did publish), but the client saw an exception and
+  the log said PIPELINE FAILED for a run that went live. A longer
+  client timeout on the promote RPC is the obvious fix if it recurs.
+- NWI's REST service 500'd for the Morrow bbox and the state-geodatabase
+  fallback carried the wetlands gate — the second time that fallback has
+  saved a real run, which is the argument for keeping it despite the
+  download cost.
+
+

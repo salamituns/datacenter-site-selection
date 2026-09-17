@@ -16,7 +16,7 @@ own and are not covered.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import geopandas as gpd
 
@@ -32,13 +32,21 @@ PLANAR_CRS = "EPSG:5070"
 
 def measure(cells_gdf: gpd.GeoDataFrame,
             min_lon: float, min_lat: float, max_lon: float, max_lat: float,
-            state_code: str) -> List[Dict[str, Any]]:
+            state_code: str) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """
-    One dict of federal measurements per cell, in the order given.
+    One dict of federal measurements per cell, in the order given, plus the
+    {layer: "present"|"missing"} availability map for the layers it tried.
 
     Every layer degrades independently: a layer that fails to fetch leaves its
     keys absent rather than zero, so "no wetland here" and "nobody looked" stay
-    different facts.
+    different facts — and the availability map records which is which, so the
+    run's stats can say a layer was missing rather than implying it agreed.
+
+    The map uses the parcel tier's layer names (wetlands, slope — not nwi,
+    3dep) so a region's stats.layers means the same thing whichever tier
+    produced it. promote_ingestion_run compares maps across generations, and
+    a county that gains a cadastral adapter must not read as losing its
+    screening layers to a rename.
     """
     planar = cells_gdf.to_crs(PLANAR_CRS)
     areas = planar.geometry.area
@@ -103,10 +111,18 @@ def measure(cells_gdf: gpd.GeoDataFrame,
                 m["slope_median_pct"] = round(s[1], 2) if s[1] is not None else None
         out.append(m)
 
+    # Known-but-missing is a recorded fact, not an absence: the map carries
+    # every layer this tier knows about, marked by whether it answered.
+    layers = {name: ("present" if fetched is not None else "missing")
+              for name, fetched in
+              (("wetlands", wetlands), ("nfhl", nfhl), ("padus", padus),
+               ("roads", roads), ("slope", slopes))}
+
+    present = [n for n, s in layers.items() if s == "present"]
+    missing = [n for n, s in layers.items() if s == "missing"]
     logger.info(
-        "National metrics: %d cells measured | layers: %s",
+        "National metrics: %d cells measured | layers present: %s | missing: %s",
         len(out),
-        ", ".join(n for n, g in (("nwi", wetlands), ("nfhl", nfhl),
-                                 ("padus", padus), ("roads", roads),
-                                 ("3dep", slopes)) if g is not None) or "none")
-    return out
+        ", ".join(present) or "none",
+        ", ".join(missing) or "none")
+    return out, layers
