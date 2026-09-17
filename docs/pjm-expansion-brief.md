@@ -726,4 +726,65 @@ live. Two notes worth keeping:
   saved a real run, which is the argument for keeping it despite the
   download cost.
 
+### The backfill — maps for the generations that predate them
+
+Migration `release29_backfill_legacy_layer_maps` derived `stats.layers`
+for the twelve live generations that predate release28, from the evidence
+each run itself left — never from what today's network would answer.
+Parcel-tier maps came from the run's own `source_snapshots` rows (the
+provenance layer was recording availability all along: a fetch that
+answered carries a record_count, one that failed carries NULL and an
+"unavailable" note; only the names needed mapping —
+`county_subdivisions`→subdivisions, `utility_territories`→utility,
+`rtep_upgrades`→rtep, `pjm_queue`→queue, `water_service_areas`→water).
+`restrictions`, a database read with no snapshot row, was derived from the
+moratorium gates' distinctive unavailable-rationale literal. Screening-tier
+maps came from the cells' `federal_metrics` keys, since `measure()` writes
+a layer's key whenever it answered. Layers with no evidence either way are
+omitted, not guessed.
+
+Every known truth reproduced: Taylor `padus: missing` (the incident) plus
+the three ERCOT-structural misses; the Delaware three fully present (they
+published before the ScienceBase challenge); Licking's water present; the
+curated applications record present only where it is actually curated
+(Loudoun, Prince William). The guard protects 13 of 13 live generations
+now, not 1 of 13.
+
+### The loop closed, on real counties
+
+Recovery pass, 2026-09-17, both degraded regions restored through
+`--incomplete --state`:
+
+- **OR-MORROW, 6.9 minutes.** All five layers present, `padus: missing` →
+  `present`; all 748 cells now carry `protected_pct` (and all nonzero — a
+  county of refuges and tribal lands), where the degraded generation
+  carried none.
+- **TX-TAYLOR, 15.9 minutes.** `protected_land` decided again on every
+  active parcel: 4,317 PASS + 39 FAIL, from 4,356 UNKNOWN. PAD-US resolved
+  through the direct file route and the TX geodatabase is cached for the
+  state.
+
+Morrow's first guarded run had taken ~3 hours, and the question was
+whether that was the real per-county cost. It was the cold start: the OR
+NWI geodatabase and the OR PAD-US geodatabase, each downloaded once and
+now cached. The restore — warm NWI, warm slopes, one new PAD-US archive —
+ran in minutes. Hours is a cold-cache western-county property, not a
+per-county property.
+
+### The recovery list is a fact, not a queue
+
+After the restores, `--incomplete` still lists seven regions — and every
+one of them is a **structural** absence, not a degraded one: ERCOT has no
+RTEP or queue artifacts (Taylor), no water source is wired for Taylor, and
+no legislative-applications record has been curated for the Ohio counties
+or Fauquier. Re-running them would publish identical state and put them
+straight back on the list. The list says "these published with a layer
+missing" — which is true, and stays true, and is exactly why it is scoped
+by the operator with `--state` rather than treated as work to drain. A
+future refinement, if the list's noise ever costs more than its honesty:
+record why a layer is missing (outage vs. absent-by-structure) beside the
+mark, and let recovery select only the outage kind. Not done now — the
+sweep's screening counties carry only the five federal layers, so their
+recovery list stays clean without it.
+
 
