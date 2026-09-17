@@ -787,4 +787,22 @@ mark, and let recovery select only the outage kind. Not done now — the
 sweep's screening counties carry only the five federal layers, so their
 recovery list stays clean without it.
 
+### One state from CI, and the three things only CI could tell us
+
+West Virginia, six counties, dispatched through the new workflow
+(run 35280073014; job 18m25s including ~7 minutes of setup). All three
+confirmations held:
+
+- **Archives download once per job.** County one downloaded the WV NWI
+  geodatabase (7 s) and the WV PAD-US geodatabase (direct file route,
+  resolved once, cached once); counties two through six read the cached
+  geodatabases and never downloaded again.
+- **The guard does not false-positive on first publishes.** All six
+  promoted, all six carrying a full five-layer map in stats.layers.
+- **Per-county cost holds.** Six counties in 16.4 minutes of batch time —
+  ~2.7 min each with the one-time downloads amortized in, ~2.5 at steady
+  state. At that rate the 552-county sweep is ~23 hours of Actions
+  compute, dispatched in batches: nowhere near the 45-hour estimate that
+  assumed nothing was cached between counties.
+
 
