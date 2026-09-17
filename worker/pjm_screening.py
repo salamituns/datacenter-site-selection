@@ -182,14 +182,24 @@ def next_batch(limit: int, state: Optional[str] = None,
     counties with no cells. A county with a full layer set never appears,
     whatever --redo says — recovery is for the degraded, not the bored.
     """
-    regions = region_registry.pjm_screening_regions()
+    if incomplete:
+        # Recovery is scoped to what we PUBLISHED, not to the sweep.
+        #
+        # This used to start from the footprint and intersect the degraded
+        # set, which quietly made the footprint a precondition for being
+        # recoverable. The only degraded region in the database was
+        # OR-MORROW, which sits outside PJM — so the tool reported
+        # "Nothing to do" while the one county that needed recovery was
+        # unreachable by it. A county does not stop deserving its
+        # protected-land evidence because it fell outside a screening
+        # threshold.
+        regions = sorted(incomplete_regions())
+    else:
+        regions = region_registry.pjm_screening_regions()
     if state:
         want = state.upper()
         regions = [r for r in regions if r.split("-", 1)[0] == want]
-    if incomplete:
-        degraded = incomplete_regions()
-        regions = [r for r in regions if r in degraded]
-    elif not redo:
+    if not incomplete and not redo:
         done = published_regions()
         regions = [r for r in regions if r not in done]
     return regions[:limit]
@@ -278,10 +288,10 @@ def main() -> int:
                 "threshold; %d already screened, %d remaining.",
                 total, region_registry.PJM_SCREEN_MIN_PCT, done, total - done)
     if args.incomplete:
-        degraded = len(incomplete_regions()
-                       & set(region_registry.pjm_screening_regions()))
-        logger.info("Recovery pass: %d of %d footprint counties published "
-                    "with a layer missing.", degraded, total)
+        degraded = sorted(incomplete_regions())
+        logger.info("Recovery pass: %d published region(s) recorded a missing "
+                    "layer%s", len(degraded),
+                    (": " + ", ".join(degraded)) if degraded else ".")
     if not batch:
         logger.info("Nothing to do.")
         return 0

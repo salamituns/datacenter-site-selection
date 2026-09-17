@@ -83,3 +83,45 @@ def test_state_filter_applies_to_recovery_too(monkeypatch):
     monkeypatch.setattr(ps, "incomplete_regions", lambda: degraded)
     batch = ps.next_batch(500, state="IL", incomplete=True)
     assert batch and all(k.startswith("IL-") for k in batch)
+
+
+# ---------------------------------------------------------------------------
+# Recovery is scoped to what was published, not to the sweep
+# ---------------------------------------------------------------------------
+#
+# next_batch used to start from the footprint and intersect the degraded set,
+# which made "is in the PJM footprint" a silent precondition for being
+# recoverable. It went unnoticed because the test above draws its degraded
+# fixture FROM the footprint, so the intersection it should have caught could
+# not fail. Meanwhile the only degraded region in the live database was
+# OR-MORROW, outside PJM: incomplete_regions() named it and the runner
+# answered "Nothing to do".
+
+
+def test_a_degraded_region_outside_the_footprint_is_still_recovered(monkeypatch):
+    outside = "OR-MORROW"
+    assert outside not in set(rr.pjm_screening_regions()), (
+        "fixture must sit outside the footprint or this test proves nothing")
+    monkeypatch.setattr(ps, "incomplete_regions", lambda: {outside})
+    monkeypatch.setattr(ps, "published_regions", lambda: set())
+
+    assert ps.next_batch(10, incomplete=True) == [outside]
+
+
+def test_recovery_still_honours_a_state_filter(monkeypatch):
+    monkeypatch.setattr(ps, "incomplete_regions", lambda: {"OR-MORROW"})
+    monkeypatch.setattr(ps, "published_regions", lambda: set())
+
+    assert ps.next_batch(10, state="OR", incomplete=True) == ["OR-MORROW"]
+    assert ps.next_batch(10, state="VA", incomplete=True) == []
+
+
+def test_an_ordinary_batch_stays_inside_the_footprint(monkeypatch):
+    # Widening recovery must not widen the sweep: a region outside the
+    # footprint has no business in a normal screening batch.
+    monkeypatch.setattr(ps, "incomplete_regions", lambda: {"OR-MORROW"})
+    monkeypatch.setattr(ps, "published_regions", lambda: set())
+
+    batch = ps.next_batch(50)
+    assert "OR-MORROW" not in batch
+    assert set(batch) <= set(rr.pjm_screening_regions())
