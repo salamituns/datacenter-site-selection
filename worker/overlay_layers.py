@@ -160,6 +160,15 @@ PADUS_MANIFEST_URL = (
     "?format=json&fields=files,title"
 )
 PADUS_FILE_PATTERN = "PADUS4_0_State_{state}_GDB.zip"
+# ScienceBase serves a file by name from the release item, which is a plain
+# public download and needs no metadata lookup at all. This is the primary
+# route because the CATALOG API -- and only the catalog API -- now answers
+# with a Cloudflare challenge, while this endpoint returns 200. Both halves
+# were already known constants: the release item and the filename pattern.
+PADUS_FILE_URL = (
+    f"https://www.sciencebase.gov/catalog/file/get/{PADUS_RELEASE_ITEM}"
+    "?name={name}"
+)
 
 
 def _padus_cache(state_code: str) -> Path:
@@ -643,6 +652,24 @@ def _padus_state_url(state_code: str) -> Optional[str]:
     cached = _load_cached_padus_urls().get(state)
     if cached:
         return cached
+    # Ask for the file by name first. Verified across all sixteen states we
+    # survey or screen: 200 and application/zip, 16 MB (WV) to 121 MB (PA).
+    # A HEAD keeps the check cheap and avoids pulling a hundred megabytes
+    # just to find out whether a URL is good.
+    direct = PADUS_FILE_URL.format(name=PADUS_FILE_PATTERN.format(state=state))
+    try:
+        head = requests.head(direct, timeout=60, allow_redirects=True,
+                             headers={"User-Agent": BROWSER_UA})
+        if head.ok and "zip" in head.headers.get("Content-Type", ""):
+            _save_cached_padus_url(state, direct)
+            logger.info("PAD-US: %s geodatabase addressed directly by name "
+                        "— cached for the life of the release.", state)
+            return direct
+        logger.info("PAD-US: the direct %s file URL answered %s; falling back "
+                    "to the release manifest.", state, head.status_code)
+    except Exception as e:  # noqa: BLE001
+        logger.info("PAD-US: direct %s file URL unreachable (%s); falling back "
+                    "to the release manifest.", state, e)
     try:
         r = requests.get(PADUS_MANIFEST_URL, timeout=60,
                          headers={"User-Agent": BROWSER_UA, "Accept": "application/json"})
