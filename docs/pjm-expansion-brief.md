@@ -805,4 +805,37 @@ confirmations held:
   compute, dispatched in batches: nowhere near the 45-hour estimate that
   assumed nothing was cached between counties.
 
+### The sweep, state by state
+
+Dispatched 2026-09-18 in ascending remaining-count order, one state per
+Actions job, each state verified in the database before the next was
+dispatched: DC (1 county, 8m20s), TN (3, 9m15s), MI (6, 14m42s), NJ (21,
+1h09m, 4,577 cells), IN (22, 29m11s, 3,168 cells), MD (24, one batch plus
+a one-county retry after the Baltimore City fix below). Every published
+county carried a full five-layer map in stats.layers — the sweep added
+nothing to the recovery list, which is the point of dispatching one state
+at a time between upstream health checks.
+
+### Two identities for one region, until Baltimore City
+
+Maryland's batch surfaced a bug the PJM footprint had been lucky to
+avoid: grid cells carried `US-<state>-<first four letters of the county
+name>-10KM-…` ids, a second derivation of the region's identity that
+nobody had audited, while the region's real identity — region_key, with
+its CITY suffix for independent cities and its fail-the-build uniqueness
+check — sat one file away. Baltimore the county published first; Baltimore
+City's promote then hit the grid_id unique constraint (`US-MD-BALT-10KM-0006
+already exists`) and failed atomically, nothing published. Virginia, with
+six county/city pairs sharing names, would have hit this thirty-eight
+times.
+
+The fix is one sentence: the grid prefix now derives from the region_key
+slug (the identity that is already collision-checked) instead of
+truncating the county name — `US-MD-BALTIMORECITY-10KM-…` — with the old
+truncated form kept only for hand-run invocations that pass no slug
+(240f90b). Already-published counties keep their old ids; promote swaps by
+region, not by id, so a republished county's old ids go with its old rows.
+Baltimore City republished through the fixed code the same day: 42 cells,
+full five-layer map, Maryland 24 of 24.
+
 
