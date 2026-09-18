@@ -44,10 +44,20 @@ class GridParser:
         max_lon: float,
         max_lat: float,
         state_code: str = "VA",
-        county_name: str = "Regional"
+        county_name: str = "Regional",
+        county_slug: Optional[str] = None
     ) -> gpd.GeoDataFrame:
         """
         Constructs a regular tessellation of 10-square-kilometer grid cells across the bounding box.
+
+        `county_slug` is the region's identity half of its region_key (the
+        STATE-SLUG form region_registry.slug builds, which appends CITY to
+        independent cities and fails the build on any collision). grid_id
+        must be unique across every published cell, and the county name alone
+        does not give that: "Baltimore" county and "Baltimore City" both
+        truncate to BALT, and Virginia has six name-sharing county/city
+        pairs. When the slug is not supplied the old first-4-letters form is
+        kept for backwards compatibility with hand-run invocations.
         """
         # Step size for ~10 km² area: sqrt(10,000,000 m²) = ~3162.28 meters
         side_len_deg_lat = 3162.28 / 111320.0
@@ -67,7 +77,8 @@ class GridParser:
                 cell_poly = box(lon, lat, lon + side_len_deg_lon, lat + side_len_deg_lat)
                 grid_cells.append(cell_poly)
                 centroids.append(cell_poly.centroid)
-                grid_ids.append(f"US-{state_code}-{county_name.upper()[:4]}-10KM-{cell_index:04d}")
+                slug = county_slug if county_slug else county_name.upper()[:4]
+                grid_ids.append(f"US-{state_code}-{slug}-10KM-{cell_index:04d}")
                 cell_index += 1
 
         gdf = gpd.GeoDataFrame({

@@ -412,7 +412,8 @@ def run_pipeline(
         logger.info("Step 1: Generating 10 km² screening grid…")
         grid_gdf = grid_parser.generate_10km_grid(
             min_lon=min_lon, min_lat=min_lat, max_lon=max_lon, max_lat=max_lat,
-            state_code=state_code, county_name=county_name
+            state_code=state_code, county_name=county_name,
+            county_slug=region_key.split("-", 1)[1]
         )
 
         # ── HIFLD power grid ───────────────────────────────────────────
