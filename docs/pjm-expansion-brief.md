@@ -811,10 +811,21 @@ Dispatched 2026-09-18 in ascending remaining-count order, one state per
 Actions job, each state verified in the database before the next was
 dispatched: DC (1 county, 8m20s), TN (3, 9m15s), MI (6, 14m42s), NJ (21,
 1h09m, 4,577 cells), IN (22, 29m11s, 3,168 cells), MD (24, one batch plus
-a one-county retry after the Baltimore City fix below). Every published
-county carried a full five-layer map in stats.layers — the sweep added
-nothing to the recovery list, which is the point of dispatching one state
-at a time between upstream health checks.
+a one-county retry after the Baltimore City fix below), NC (24), IL (25),
+WV (49), PA (67), KY (83, under two hours), OH (83), VA (127, in two
+batches). Every published county carried a full five-layer map in
+stats.layers — the sweep added nothing to the recovery list, which is the
+point of dispatching one state at a time between upstream health checks.
+
+**Done: all 552 counties of the footprint are published.** The final
+`--incomplete` pass lists only the seven structural absences it has always
+listed (the five Ohio pilot counties, Taylor, Fauquier) — no screening
+county is degraded, so the recovery list the sweep started with is exactly
+the list it ended with. Two incidents on the way, both closed in-flight:
+the Baltimore City grid-id collision (next section) and one transient NFHL
+outage that published IL-GRUNDY without its flood layer for 40 minutes
+before `--incomplete --state IL` republished it complete in 2.7 minutes —
+the recovery loop's first unscheduled use, on schedule.
 
 ### Two identities for one region, until Baltimore City
 
