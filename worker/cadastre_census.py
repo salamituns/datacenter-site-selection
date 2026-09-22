@@ -213,8 +213,68 @@ def choose_layers(service_json: Dict[str, Any]
     return chosen[:MAX_LAYERS_PER_SERVICE]
 
 
+# How many layers to describe individually when a root does not say which
+# are polygons. MapServer roots list id and name only — geometryType is a
+# layer-level fact — and services can carry dozens of layers, so the
+# probe is capped and prefers names that say parcel/tax/cadastre.
+MAX_LAYER_PROBES = 12
+
+
+def _polygon_layers(session: _ThrottledSession, service_url: str,
+                    svc: Optional[Dict[str, Any]]
+                    ) -> Tuple[List[Dict[str, Any]], bool]:
+    """
+    Polygon layers of a service, asking the layers themselves when the
+    root does not say. Returns (layers, root_answered): a service whose
+    root answered but has no polygons is a different fact from one whose
+    root did not answer at all, and both are recorded rather than
+    dropped.
+
+    A URL that ends in a layer id (MD iMap's statewide item points at
+    .../MapServer/0, not at the service root) answers with a layer
+    document — geometryType at the top, no layers array — and that is
+    one polygon layer, not zero.
+    """
+    if svc is None:
+        return [], False
+    if "layers" not in svc and svc.get("geometryType"):
+        tail = service_url.rstrip("/").rsplit("/", 1)[-1]
+        layer_id = int(tail) if tail.isdigit() else 0
+        return [{"id": layer_id, "name": svc.get("name"),
+                 "geometryType": svc["geometryType"],
+                 "url": service_url, "detail": svc}], True
+    chosen = choose_layers(svc)
+    if chosen:
+        return chosen, True
+    root_layers = svc.get("layers") or []
+    named_first = sorted(
+        root_layers,
+        key=lambda l: 0 if any(k in (l.get("name") or "").lower()
+                               for k in ("parcel", "tax", "cadastre")) else 1)
+    found: List[Dict[str, Any]] = []
+    for layer in named_first[:MAX_LAYER_PROBES]:
+        detail = layer_detail(session, service_url, layer) or {}
+        if detail.get("geometryType") == "esriGeometryPolygon":
+            found.append({"id": layer["id"], "name": layer.get("name"),
+                          "geometryType": "esriGeometryPolygon",
+                          "detail": detail})
+            if len(found) >= MAX_LAYERS_PER_SERVICE:
+                break
+    return found, True
+
+
+def _layer_query_url(service_url: str, layer: Dict[str, Any]) -> str:
+    """A layer's query endpoint. A layer carried in from a URL that
+    points at it directly (.../MapServer/0) already ends where the id
+    would be appended, so it brings its own URL."""
+    if layer.get("url"):
+        return layer["url"].rstrip("/") + "/query"
+    return f"{service_url.rstrip('/')}/{layer['id']}/query"
+
+
 def count_in_bbox(session: _ThrottledSession, service_url: str,
-                  layer_id: int, bbox: Tuple[float, float, float, float]
+                  layer: Dict[str, Any],
+                  bbox: Tuple[float, float, float, float]
                   ) -> Optional[int]:
     """
     Feature count intersecting the region bbox, or None if the layer will
@@ -222,11 +282,14 @@ def count_in_bbox(session: _ThrottledSession, service_url: str,
     """
     envelope = ("{},{},{},{}".format(*bbox))
     data = session.get_json(
-        f"{service_url.rstrip('/')}/{layer_id}/query",
+        _layer_query_url(service_url, layer),
         params={
             "where": "1=1",
+            # the full spec name, not the esriEnvelope short form: strict
+            # services (OGRIP's Ohio statewide among them) 400 on the
+            # short form, and a 400 is not an outage, it is a wrong query
+            "geometryType": "esriGeometryEnvelope",
             "geometry": envelope,
-            "geometryType": "esriEnvelope",
             "inSR": "4326",
             "spatialRel": "esriSpatialRelIntersects",
             "returnCountOnly": "true",
@@ -238,9 +301,14 @@ def count_in_bbox(session: _ThrottledSession, service_url: str,
 
 
 def layer_detail(session: _ThrottledSession, service_url: str,
-                 layer_id: int) -> Optional[Dict[str, Any]]:
-    """The layer's own description: geometry, paging limit, SR."""
-    return session.get_json(f"{service_url.rstrip('/')}/{layer_id}",
+                 layer: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The layer's own description: geometry, paging limit, SR. A layer
+    probed or carried in during polygon selection already has it."""
+    if layer.get("detail"):
+        return layer["detail"]
+    if layer.get("url"):
+        return session.get_json(layer["url"], params={"f": "json"})
+    return session.get_json(f"{service_url.rstrip('/')}/{layer['id']}",
                             params={"f": "json"})
 
 
@@ -319,16 +387,16 @@ def census_region(session: _ThrottledSession, region_key: str, county: str,
                              item, service_url, -1,
                              notes="service root did not answer"))
             continue
-        chosen = choose_layers(svc)
+        chosen, _ = _polygon_layers(session, service_url, svc)
         if not chosen:
             rows.append(_row(region_key, state, county, "county_search",
                              item.get("title") or "", item.get("owner") or "",
                              item, service_url, -1,
-                             notes="no polygon layer in service"))
+                             notes="no polygon layer found in service"))
             continue
         for layer in chosen:
-            detail = layer_detail(session, service_url, layer["id"]) or {}
-            count = count_in_bbox(session, service_url, layer["id"], bbox)
+            detail = layer_detail(session, service_url, layer) or {}
+            count = count_in_bbox(session, service_url, layer, bbox)
             if count is None:
                 rows.append(_row(region_key, state, county, "county_search",
                                  item.get("title") or "",
@@ -356,10 +424,26 @@ def census_region(session: _ThrottledSession, region_key: str, county: str,
         if not service_url:
             continue
         svc = session.get_json(service_url, params={"f": "json"})
-        chosen = choose_layers(svc or {})
+        if svc is None:
+            # A statewide service that will not answer is still a fact
+            # about the county's data supply — recorded, never dropped
+            rows.append(_row(region_key, state, county, "state_program",
+                             item.get("title") or "", item.get("owner") or "",
+                             item, service_url, -1,
+                             evidence="candidate",
+                             notes="statewide service root did not answer"))
+            continue
+        chosen, _ = _polygon_layers(session, service_url, svc)
+        if not chosen:
+            rows.append(_row(region_key, state, county, "state_program",
+                             item.get("title") or "", item.get("owner") or "",
+                             item, service_url, -1,
+                             evidence="candidate",
+                             notes="statewide service has no polygon layer"))
+            continue
         for layer in chosen:
-            detail = layer_detail(session, service_url, layer["id"]) or {}
-            count = count_in_bbox(session, service_url, layer["id"], bbox)
+            detail = layer_detail(session, service_url, layer) or {}
+            count = count_in_bbox(session, service_url, layer, bbox)
             rows.append(_row(region_key, state, county, "state_program",
                              item.get("title") or "", item.get("owner") or "",
                              item, service_url, layer["id"],
