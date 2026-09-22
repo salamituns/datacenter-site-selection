@@ -615,10 +615,20 @@ def main() -> int:
                     i, len(batch), region_key, region.county,
                     verified, candidates)
         if client is not None:
-            for row in rows:
-                (client.table("cadastre_sources")
-                 .upsert(row, on_conflict="region_key,service_url,layer_id")
-                 .execute())
+            # A census region is expensive to recompute and cheap to
+            # re-record; a blip on the write path must fail the region,
+            # never the run — 240 regions of verified work died to a
+            # single ConnectTimeout here on the first full pass.
+            try:
+                for row in rows:
+                    (client.table("cadastre_sources")
+                     .upsert(row, on_conflict="region_key,service_url,layer_id")
+                     .execute())
+            except Exception as exc:
+                logger.warning("[%d/%d] %s persistence failed: %s",
+                               i, len(batch), region_key, exc)
+                failures += 1
+                continue
     logger.info("Census done: %d region(s), %d failed", len(batch), failures)
     return 1 if failures else 0
 
