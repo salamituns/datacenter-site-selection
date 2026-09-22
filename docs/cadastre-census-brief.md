@@ -106,3 +106,40 @@ crash loses nothing. `--redo` re-censuses, `--dry-run` verifies without
 writing. Writes go through the service role to `cadastre_sources`
 (release30 migration); RLS mirrors `parcel_decisions` — authenticated
 reads, no anon rows, no write policies of any kind.
+
+## Results (full run, 2026-09-22)
+
+544 regions censused, 0 failed. **277 of 544 (51%) have at least one
+verified public parcel source** — data on the table for a five-question
+probe, today. 100 more are candidate-only, and 167 carry only the
+sentinel: nothing in the ArcGIS Online index. Per state:
+
+| State | Regions | Verified | Read |
+|---|---|---|---|
+| IN | 22 | **22** | IndianaMap carries every county |
+| MD | 24 | **24** | mdimapdatacatalog carries every county |
+| NJ | 21 | **21** | NJ OGIS MOD-IV carries every county |
+| OH | 83 | 74 | OGRIP carries 74; 9 counties score only as candidates |
+| NC | 24 | 24 | OneMap plus county CAMA services |
+| DE | 3 | 3 | FirstMap per-county services |
+| TN | 3 | 3 | TNMap |
+| VA | 127 | 77 | 77 via county services; VGIN gdb is a candidate on all |
+| PA | 67 | 15 | PASDA county layers where published; 14 nothing in index |
+| IL | 25 | 7 | Self-hosted blind spot bites hardest here among the searched states |
+| MI | 6 | 2 | |
+| KY | 83 | 2 | 80 nothing in the index — the blind-spot state |
+| WV | 55 | 3 | 52 nothing in the index |
+
+The "Verified" column counts regions, not source rows (one region can
+verify several services; Ohio has 157 verified rows). The none_found
+states are exactly the predicted ones — no statewide program and
+county GIS that self-hosts. The counts say the same thing from the
+other side: the largest verified county sources are IL-Cook (1.42M),
+PA-Montgomery (1.05M), MD-Baltimore (674K), PA-Allegheny (587K),
+OH-Cuyahoga (565K), NJ-Bergen (536K) — every one a state program or a
+publishing county.
+
+What the census buys: the screening tier is no longer undifferentiated
+leads. `v_cadastre_queue` ranks all 544 by what is actually there, and
+the second pass (county web maps → self-hosted service URLs) has a
+named target list: KY 80, WV 52, IL 16, PA 14, MI 4, DC 1.
