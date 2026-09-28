@@ -143,3 +143,90 @@ What the census buys: the screening tier is no longer undifferentiated
 leads. `v_cadastre_queue` ranks all 544 by what is actually there, and
 the second pass (county web maps → self-hosted service URLs) has a
 named target list: KY 80, WV 52, IL 16, PA 14, MI 4, DC 1.
+
+## The second pass — web maps, and two statewide services nobody had indexed
+
+Run 2026-09-28 over the 267 regions the first pass left unverified
+(`cadastre_census.py --web-maps`, release31).
+
+**Method.** ArcGIS Online's index holds a county's *web maps* even when
+the county's server is self-hosted, and a web map is a JSON document
+listing the layer URLs it draws. The pass searches up to 40 web maps per
+county, walks their operational layers (group layers included), and
+keeps a layer only when it is
+
+- **self-hosted** — any host but `*.arcgis.com`. Hosted services were the
+  first pass's whole search space; what web maps add there is re-uploads.
+  Probing Licking showed exactly that: its hits were student coursework
+  copies (`services8.arcgis.com`, `*_virginiatech` owners), while
+  Loudoun's maps led straight to `logis.loudoun.gov`.
+- **a parcel layer** — "parcel", "taxmap" or "cadastre" in the title or
+  the URL path, and not a PLSS survey grid, district, label or point
+  layer (`is_parcel_layer`). BLM's PLSS service, in the `Cadastral`
+  folder, was the false positive the probe actually hit.
+
+Each surviving URL is verified by the first pass's rule — polygon layer,
+bbox count answers — and recorded as `discovered_via = 'web_map'`. The
+publisher recorded is the URL's **host**, not the map's author: a
+student's map pointing at a county server still found the county's
+server. Every second-passed region gets a web-map sentinel
+(`(none: web maps)`) when its maps found nothing, so re-runs skip it and
+the claim stays exact: *no indexed web map references a self-hosted
+parcel layer*.
+
+**Self-hosted statewide programs.** Probing for the pass found two
+statewide services outside the index, now queried directly:
+
+| State | Service | Note |
+|---|---|---|
+| WV | WV GIS Technical Center `Planning_Cadastre/WV_Parcels` | compiled from county assessors + WV Property Tax Division |
+| PA | PA DEP `Parcels/PA_Parcels` | self-described **partial** dataset: a count proves presence, not county-complete coverage |
+
+Kentucky's state server (`kygisserver.ky.gov`) hosts one county PVA
+service (Webster), not a program.
+
+**A security fix on the way.** `v_cadastre_queue` had been created without
+`security_invoker`, so it ran as `postgres`, bypassed `cadastre_sources`'
+RLS, and Supabase's default privileges had granted `anon` every privilege
+on it — the census was anonymously readable over REST. release31b sets
+`security_invoker = true` and leaves `authenticated` with SELECT only;
+anon now gets 401 on the view and no rows from the table (verified live).
+
+### Results (full run, 2026-09-28)
+
+267 regions second-passed, 0 failed. **115 gained a verified source with
+1,000+ parcels in the bbox** (a count of 0, or a few hundred at a county
+edge, is recorded but not counted as a gain here):
+
+| State | Gap before | Gained | How |
+|---|---|---|---|
+| WV | 52 | **52** | WVGISTC statewide (50), county/state layers in web maps (Jefferson's own `gisarcweb.jeffersoncountywv.org`, plus Grant, Hardy, Logan on WVGISTC) |
+| PA | 52 | **49** | PA DEP partial statewide (49); McKean's own server via web maps |
+| VA | 50 | 9 | Bedford, Harrisonburg, James City, Staunton on their own servers; five on a neighbour's (below) |
+| KY | 81 | 4 | Kenton (LINK-GIS), Scott (Georgetown-Scott planning); Campbell and Pendleton on Kenton's server |
+| OH | 9 | 1 | Richland (`maps.richlandcountyoh.us`) |
+| IL | 18 | 0 | Boone and Kane servers found but refused counts — recorded as candidates |
+| MI | 4 | 0 | |
+| DC | 1 | 0 | DC calls parcels "owner polygons"/"lots"; the filter's vocabulary misses it |
+
+**Seven gains are probably a neighbour's service**, found because the
+check is a bbox and bboxes overlap: KY-CAMPBELL and KY-PENDLETON (Kenton's
+LINK-GIS), VA-ISLEOFWIGHT and VA-SOUTHAMPTON (HRSD, a regional utility —
+134,500 in Isle of Wight's bbox is several counties' worth),
+VA-WILLIAMSBURGCITY (James City's server, plausibly a joint service), and
+VA-MANASSASCITY / VA-MANASSASPARKCITY (Prince William's server). They are
+recorded, as the rule says, but a deep probe must confirm the layer
+covers the county itself before relying on it. Counting only the
+county-own and statewide sources, the pass closed **~108 of 267**.
+
+What is left — ~152 regions, KY 77 the bulk — is what the index cannot
+reach by any route: counties whose assessors publish through vendor
+viewers (qPublic, Schneider Beacon, PVA sites) rather than ArcGIS.
+Finding those would mean scraping vendor sites, which is a different
+project with different terms of use; the census stops here.
+
+**Known limit of the check, for both passes:** bbox counts include
+neighbouring counties at the edges. A county-polygon count (the Census
+TIGER outline the region registry already caches) would remove the
+ambiguity above, and is the natural next refinement if the queue ever
+decides which county gets probed next.

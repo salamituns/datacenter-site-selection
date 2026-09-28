@@ -50,6 +50,7 @@ import logging
 import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import requests
 
@@ -475,6 +476,215 @@ def census_region(session: _ThrottledSession, region_key: str, county: str,
     return rows
 
 
+# ── the second pass: web maps → self-hosted services ─────────────────────
+#
+# The first pass could not see a county that runs its own ArcGIS Server
+# without registering it in ArcGIS Online. The index does hold that
+# county's web maps, and a web map is a JSON document listing the layer
+# URLs it draws — so the county's own maps point at its own server.
+
+WEB_MAP_SENTINEL_URL = "(none: web maps)"
+MAX_WEB_MAPS_PER_REGION = 40
+
+# Self-hosted statewide parcel services, found while probing for the
+# second pass (2026-09-28) and invisible to the first because neither is
+# registered in ArcGIS Online. Direct layer URLs: there is nothing to
+# search for. (layer URL, title, owner, note)
+SELF_HOSTED_STATE_PROGRAMS: Dict[str, Tuple[str, str, str, str]] = {
+    "WV": ("https://services.wvgis.wvu.edu/arcgis/rest/services/"
+           "Planning_Cadastre/WV_Parcels/MapServer/0",
+           "WVParcels", "WVGISTC",
+           "WV GIS Technical Center statewide parcels, compiled from county "
+           "assessors and the WV Property Tax Division; self-hosted, not in "
+           "the ArcGIS Online index"),
+    "PA": ("https://gis.dep.pa.gov/depgisprd/rest/services/"
+           "Parcels/PA_Parcels/MapServer/0",
+           "PA Parcels", "PA DEP",
+           "PA DEP statewide parcel layer, self-described as a PARTIAL "
+           "dataset: a count here proves presence in the bbox, not "
+           "county-complete coverage"),
+}
+
+
+def is_self_hosted(url: str) -> bool:
+    """A URL on a county's or state's own server, not ArcGIS Online's
+    hosting. Hosted services were the first pass's whole search space;
+    what a web map adds there is re-uploads, not publishers."""
+    host = urlparse(url).netloc.lower().split(":")[0]
+    if not host:
+        return False
+    return not (host.endswith("arcgis.com") or host.endswith("arcgisonline.com"))
+
+
+def is_parcel_layer(title: str, url: str) -> bool:
+    """
+    Whether a web-map layer is worth a bbox count as a parcel source.
+
+    Web maps carry everything a county draws — roads, zoning, flood
+    zones, school districts — and the URL path is often more honest than
+    the title a map author typed. A False here costs a missed county; a
+    True costs a count query, and the count still has to prove polygons
+    in the bbox before anything is recorded as verified.
+    """
+    text = f"{title} {urlparse(url).path}".lower()
+    # "parcel" is the one word a boundary layer reliably carries, in the
+    # title or the service path; "tax" alone names districts as often as
+    # parcels, so it counts only as "taxmap"/"tax map".
+    if not any(k in text for k in ("parcel", "taxmap", "tax map", "cadastre")):
+        return False
+    # survey grids and district boundaries share the vocabulary but are
+    # not ownership: PLSS (BLM's "Cadastral" folder), and anything drawn
+    # as a district or a point/label layer of parcels
+    return not any(k in text for k in ("plss", "survey system", "district",
+                                       "label", "annotation", "point"))
+
+
+def _walk_layers(layers: Optional[List[Dict[str, Any]]]):
+    """Operational layers nest (group layers); walk the whole tree."""
+    for layer in layers or []:
+        yield layer
+        yield from _walk_layers(layer.get("layers"))
+
+
+def web_map_layer_urls(web_map: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """(title, url) of every self-hosted parcel layer one web map draws,
+    in the map's own order."""
+    found: List[Tuple[str, str]] = []
+    for layer in _walk_layers(web_map.get("operationalLayers")):
+        url = (layer.get("url") or "").strip()
+        title = layer.get("title") or ""
+        if url and is_self_hosted(url) and is_parcel_layer(title, url):
+            found.append((title, url))
+    return found
+
+
+def _normalise_layer_url(url: str) -> str:
+    """One spelling per layer: logis.loudoun.gov/GIS/... and /gis/... are
+    the same layer, drawn by different maps with different case."""
+    parts = urlparse(url.rstrip("/"))
+    return f"{parts.scheme}://{parts.netloc.lower()}{parts.path}"
+
+
+def discover_web_map_urls(session: _ThrottledSession, county: str,
+                          state_name: str
+                          ) -> List[Tuple[str, str, Dict[str, Any]]]:
+    """
+    Self-hosted parcel layer URLs referenced by the county's web maps:
+    (title, url, the web-map item that referenced it). Deduplicated by
+    normalised URL — twenty maps drawing the county's parcel layer are
+    one source, credited to the first map that drew it.
+    """
+    data = session.get_json(AGOL_SEARCH_URL, params={
+        "q": f'"{county}" "{state_name}" type:"Web Map"',
+        "num": MAX_WEB_MAPS_PER_REGION, "f": "json"})
+    seen: Dict[str, Tuple[str, str, Dict[str, Any]]] = {}
+    for item in (data or {}).get("results") or []:
+        web_map = session.get_json(
+            f"https://www.arcgis.com/sharing/rest/content/items/"
+            f"{item['id']}/data", params={"f": "json"})
+        if not isinstance(web_map, dict):
+            continue
+        for title, url in web_map_layer_urls(web_map):
+            key = _normalise_layer_url(url)
+            if key not in seen:
+                seen[key] = (title, key, item)
+    return list(seen.values())[:MAX_CANDIDATES_PER_REGION]
+
+
+def _verify_url(session: _ThrottledSession, region_key: str, state: str,
+                county: str, via: str, title: str, owner: str,
+                item: Optional[Dict[str, Any]], url: str,
+                bbox: Tuple[float, float, float, float],
+                note: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The first pass's verification rule, for a URL rather than a search
+    hit: polygon layers, a bbox count, and a recorded row either way."""
+    svc = session.get_json(url, params={"f": "json"})
+    if svc is None:
+        return [_row(region_key, state, county, via, title, owner, item, url,
+                     -1, notes="service did not answer")]
+    chosen, _ = _polygon_layers(session, url, svc)
+    if not chosen:
+        return [_row(region_key, state, county, via, title, owner, item, url,
+                     -1, notes="no polygon layer at this URL")]
+    rows = []
+    for layer in chosen:
+        detail = layer_detail(session, url, layer) or {}
+        count = count_in_bbox(session, url, layer, bbox)
+        rows.append(_row(
+            region_key, state, county, via, title, owner, item, url,
+            layer["id"],
+            geometry_type=detail.get("geometryType") or layer.get("geometryType"),
+            record_count=count,
+            max_record_count=detail.get("maxRecordCount"),
+            evidence="verified" if count is not None else "candidate",
+            notes=(note if count else
+                   "layer did not answer a bbox count" if count is None else
+                   "verified service, zero features intersect the region bbox")))
+    return rows
+
+
+def census_region_web_maps(session: _ThrottledSession, region_key: str,
+                           county: str, state: str,
+                           bbox: Tuple[float, float, float, float]
+                           ) -> List[Dict[str, Any]]:
+    """
+    The second pass for one region: self-hosted statewide program first
+    (one query, no search), then the county's web maps. Always returns at
+    least one row — the web-map sentinel when nothing was found — so the
+    region reads as second-passed and a re-run skips it.
+    """
+    state_name = STATE_NAMES.get(state, state)
+    rows: List[Dict[str, Any]] = []
+
+    if state in SELF_HOSTED_STATE_PROGRAMS:
+        url, title, owner, note = SELF_HOSTED_STATE_PROGRAMS[state]
+        rows += _verify_url(session, region_key, state, county,
+                            "state_program", title, owner, None, url, bbox,
+                            note=note)
+
+    for title, url, item in discover_web_map_urls(session, county, state_name):
+        rows += _verify_url(
+            session, region_key, state, county, "web_map",
+            title or urlparse(url).netloc,
+            # the publisher is the host, not the map's author: a student's
+            # web map pointing at logis.loudoun.gov found Loudoun's server
+            urlparse(url).netloc.lower(), item, url, bbox,
+            note=f"referenced by web map {item.get('id')} "
+                 f"({item.get('owner')})")
+
+    # The sentinel answers for the web-map search alone: a statewide
+    # program verifying here says nothing about the county's own maps,
+    # and without a web_map row the region would never read as passed.
+    if not any(r["discovered_via"] == "web_map" for r in rows):
+        rows.append(_row(region_key, state, county, "web_map",
+                         "(no self-hosted parcel layer in the county's web maps)",
+                         "(search)", None, WEB_MAP_SENTINEL_URL,
+                         SENTINEL_LAYER_ID, evidence="none_found",
+                         notes=f"searched up to {MAX_WEB_MAPS_PER_REGION} "
+                               "indexed web maps; a county that publishes "
+                               "no web map to ArcGIS Online stays unseen"))
+    return rows
+
+
+def _web_map_targets(client: Any) -> Tuple[set, set]:
+    """(regions with a verified source, regions already second-passed).
+    The second pass runs on regions in neither set."""
+    verified, passed, page, size = set(), set(), 0, 1000
+    while True:
+        res = (client.table("cadastre_sources")
+               .select("region_key,evidence_class,discovered_via")
+               .order("id").range(page * size, page * size + size - 1)
+               .execute())
+        for r in res.data:
+            if r["evidence_class"] == "verified":
+                verified.add(r["region_key"])
+            if r["discovered_via"] == "web_map":
+                passed.add(r["region_key"])
+        if len(res.data) < size:
+            return verified, passed
+        page += 1
+
+
 def _client() -> Any:
     """Service-role client, the same rule as the pipeline's: anon cannot
     write, by design, and the census writes operational rows."""
@@ -540,7 +750,13 @@ def main() -> int:
                         help="search and verify, write nothing")
     parser.add_argument("--list", action="store_true",
                         help="list censused/remaining counts and exit")
+    parser.add_argument("--web-maps", action="store_true",
+                        help="second pass: regions with no verified source, "
+                             "searched through their web maps and the "
+                             "self-hosted statewide programs")
     args = parser.parse_args()
+    if args.web_maps:
+        return _main_web_maps(args)
 
     from pipeline import PARCEL_PILOTS
 
@@ -630,6 +846,74 @@ def main() -> int:
                 failures += 1
                 continue
     logger.info("Census done: %d region(s), %d failed", len(batch), failures)
+    return 1 if failures else 0
+
+
+def _persist(client: Any, rows: List[Dict[str, Any]]) -> None:
+    for row in rows:
+        (client.table("cadastre_sources")
+         .upsert(row, on_conflict="region_key,service_url,layer_id")
+         .execute())
+
+
+def _main_web_maps(args: argparse.Namespace) -> int:
+    """The second pass. Targets come from the table, like the first pass's
+    progress: first-passed, still unverified, not yet web-map-passed."""
+    from pipeline import PARCEL_PILOTS
+
+    regions = [r for r in region_registry.pjm_screening_regions()
+               if r not in PARCEL_PILOTS]
+    if args.state:
+        regions = [r for r in regions
+                   if r.startswith(args.state.upper() + "-")]
+    client = _client()  # the targets are read from the table, dry run too
+    first_passed = _censused_regions(client)
+    verified, passed = _web_map_targets(client)
+    targets = [r for r in regions if r in first_passed
+               and r not in verified and (args.redo or r not in passed)]
+    if args.list:
+        print(f"second pass remaining: {len(targets)}")
+        for r in targets[:20]:
+            print(" ", r)
+        return 0
+
+    session = _ThrottledSession()
+    batch = targets[:args.limit]
+    logger.info("Web-map pass: %d region(s)%s", len(batch),
+                " (dry run)" if args.dry_run else "")
+    failures = 0
+    for i, region_key in enumerate(batch, 1):
+        region = region_registry.resolve(region_key)
+        if region is None:
+            logger.warning("[%d/%d] %s did not resolve — skipped",
+                           i, len(batch), region_key)
+            failures += 1
+            continue
+        state = region_key.split("-", 1)[0]
+        try:
+            rows = census_region_web_maps(session, region_key, region.county,
+                                          state, region.bbox)
+        except Exception as exc:
+            logger.warning("[%d/%d] %s web-map pass failed: %s",
+                           i, len(batch), region_key, exc)
+            failures += 1
+            continue
+        for r in rows:
+            if r["evidence_class"] != "none_found":
+                logger.info("    %s %s %s", r["evidence_class"],
+                            r.get("record_count"), r["service_url"])
+        logger.info("[%d/%d] %s (%s): %d verified",
+                    i, len(batch), region_key, region.county,
+                    sum(r["evidence_class"] == "verified" for r in rows))
+        if not args.dry_run:
+            try:
+                _persist(client, rows)
+            except Exception as exc:  # fail the region, never the run
+                logger.warning("[%d/%d] %s persistence failed: %s",
+                               i, len(batch), region_key, exc)
+                failures += 1
+    logger.info("Web-map pass done: %d region(s), %d failed",
+                len(batch), failures)
     return 1 if failures else 0
 
 

@@ -81,3 +81,96 @@ def test_sentinel_row_is_distinct_per_region():
                                evidence="none_found")
     assert row["evidence_class"] == "none_found"
     assert row["service_url"] == "(none)" and row["layer_id"] == -1
+
+
+# ── the second pass: web maps → self-hosted services ─────────────────────
+#
+# Cases below are layers seen in real web maps on 2026-09-28, while the
+# technique was being probed against Loudoun, Licking, Fayette KY and WV.
+
+def test_self_hosted_is_anything_but_agol_hosting():
+    assert cadastre_census.is_self_hosted(
+        "https://logis.loudoun.gov/gis/rest/services/COL/LandRecords/MapServer/5")
+    assert cadastre_census.is_self_hosted(
+        "https://maps.lexingtonky.gov/lfucggis/rest/services/parcels/MapServer/0")
+    # a student's re-upload of Licking's parcels — the first pass's
+    # territory, and not the county's own publication
+    assert not cadastre_census.is_self_hosted(
+        "https://services8.arcgis.com/EtYD1cRq8Hkljjf7/arcgis/rest/services/"
+        "Licking_County_WFL1/FeatureServer/4")
+    assert not cadastre_census.is_self_hosted(
+        "https://tiles.arcgis.com/tiles/abc/arcgis/rest/services/x/MapServer")
+    assert not cadastre_census.is_self_hosted("")
+
+
+def test_parcel_layers_by_title_or_path():
+    yes = cadastre_census.is_parcel_layer
+    assert yes("Parcel Boundaries",
+               "https://logis.loudoun.gov/gis/rest/services/COL/LandRecords/MapServer/5")
+    # the title says nothing, the path does
+    assert yes("parcels - Parcel",
+               "https://maps.lexingtonky.gov/lfucggis/rest/services/parcels/MapServer/0")
+    assert yes("Layer 3",
+               "https://gis.example.gov/arcgis/rest/services/TaxParcels/MapServer/0")
+
+
+def test_not_parcel_layers():
+    no = lambda t, u: not cadastre_census.is_parcel_layer(t, u)
+    # the false positive the probe hit: a survey grid, not ownership
+    assert no("BLM Public Land Survey System (PLSS)",
+              "https://gis.blm.gov/arcgis/rest/services/Cadastral/"
+              "BLM_Natl_PLSS_CadNSDI/MapServer")
+    assert no("Zoning Districts",
+              "https://gis.example.gov/arcgis/rest/services/Zoning/MapServer/2")
+    assert no("Tax Districts",
+              "https://gis.example.gov/arcgis/rest/services/Boundaries/MapServer/1")
+
+
+def test_web_map_layers_walk_groups_and_skip_hosted():
+    web_map = {"operationalLayers": [
+        {"title": "Roads", "url": "https://gis.example.gov/rest/services/Roads/MapServer/0"},
+        {"title": "Land Records", "layerType": "GroupLayer", "layers": [
+            {"title": "Parcels",
+             "url": "https://gis.example.gov/rest/services/LandRecords/MapServer/5"},
+        ]},
+        {"title": "Parcels (copy)",
+         "url": "https://services8.arcgis.com/x/arcgis/rest/services/P/FeatureServer/0"},
+    ]}
+    assert cadastre_census.web_map_layer_urls(web_map) == [
+        ("Parcels", "https://gis.example.gov/rest/services/LandRecords/MapServer/5")]
+
+
+def test_normalised_url_merges_case_variants():
+    n = cadastre_census._normalise_layer_url
+    assert (n("https://LOGIS.loudoun.gov/gis/rest/services/COL/LandRecords/MapServer/5/")
+            == n("https://logis.loudoun.gov/gis/rest/services/COL/LandRecords/MapServer/5"))
+
+
+class _FakeSession:
+    """Answers the second pass's requests from a dict of URL → JSON."""
+
+    def __init__(self, answers):
+        self.answers = answers
+
+    def get_json(self, url, params=None):
+        return self.answers.get(url)
+
+
+def test_web_map_sentinel_even_when_state_program_verifies(monkeypatch):
+    # WV's statewide layer verifies, the county's web maps find nothing:
+    # the region still needs its web_map row, or every re-run redoes it
+    wv_url = cadastre_census.SELF_HOSTED_STATE_PROGRAMS["WV"][0]
+    session = _FakeSession({
+        wv_url: {"name": "WVParcels", "geometryType": "esriGeometryPolygon",
+                 "maxRecordCount": 2000},
+        wv_url + "/query": {"count": 77667},
+        cadastre_census.AGOL_SEARCH_URL: {"results": []},
+    })
+    rows = cadastre_census.census_region_web_maps(
+        session, "WV-BERKELEY", "Berkeley County", "WV",
+        (-78.23, 39.28, -77.82, 39.60))
+    by_via = {r["discovered_via"]: r for r in rows}
+    assert by_via["state_program"]["evidence_class"] == "verified"
+    assert by_via["state_program"]["record_count"] == 77667
+    assert by_via["web_map"]["evidence_class"] == "none_found"
+    assert by_via["web_map"]["service_url"] == cadastre_census.WEB_MAP_SENTINEL_URL
