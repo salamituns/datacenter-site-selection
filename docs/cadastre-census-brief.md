@@ -247,20 +247,39 @@ Staunton boundary layer (1) both read 1.000. `best_outline_coverage` in
 the bbox (release32b) — coverage says the layer reaches all of the
 county, the count says it is divided like parcels.
 
-**Net:** 114 of 267 regions gained a verified, parcel-sized source in the
-second pass (115 − Williamsburg; Kenton kept, on its right layer). Every
-web-map gain is now outline-confirmed at 0.75 or better. The statewide
-programs (WV 50, PA 49) are not yet measured; PA DEP's "partial" label
-makes it the obvious next run (`--outline --via state_program --state PA`).
+### The statewide programs, measured (2026-09-29)
 
-What is left — 153 regions, KY 77 the bulk — is what the index cannot
+Spillover is worse for a statewide layer than a county one: a county
+server reaches into its few neighbours' boxes, a statewide layer into
+every uncovered county bordering a covered one.
+
+**WV — WVGISTC holds.** 49 of 50 rows cover their county at 0.833–1.000;
+WV-TUCKER reads 0.708, below the line but plainly its own county's
+layer. The remaining three (Grant, Hardy, Logan) were already confirmed
+on their web-map rows. All 52 West Virginia regions are real sources.
+
+**PA — DEP's "partial" is partial.** 35 counties covered (0.750–1.000),
+PA-SOMERSET partly (0.333), and **14 not at all** (0.000–0.042): Armstrong,
+Beaver, Bradford, Butler, Cameron, Carbon, Fayette, Luzerne, McKean,
+Mercer, Monroe, Montour, Warren, Washington. Their bbox counts were all
+neighbours' parcels — PA-WASHINGTON's 385,520 is Allegheny's and
+Westmoreland's, and it covers 0.000 of Washington. McKean survives on its
+own server (0.958); the other twelve that had passed the 1,000 floor were
+false gains.
+
+**Net, second pass:** **102 of 267** regions gained a source that covers
+the county itself — WV 52, PA 37 (Somerset partial), VA 8, KY 4, OH 1 —
+down from the 115 the bbox count claimed. Every one is outline-measured.
+
+What is left — 165 regions, KY 77 the bulk — is what the index cannot
 reach by any route: counties whose assessors publish through vendor
 viewers (qPublic, Schneider Beacon, PVA sites) rather than ArcGIS.
 Finding those would mean scraping vendor sites, which is a different
 project with different terms of use; the census stops here.
 
-**Known limit of the check, for both passes:** bbox counts include
-neighbouring counties at the edges. A county-polygon count (the Census
-TIGER outline the region registry already caches) would remove the
-ambiguity above, and is the natural next refinement if the queue ever
-decides which county gets probed next.
+**Known limit, for the first pass:** its 277 verified regions are still
+bbox-verified only. The second pass showed how far that can mislead —
+twelve of PA DEP's 49 were a neighbour's parcels — so the first pass's
+statewide programs (IN, MD, NJ, OH, NC, TN) deserve the same
+`--outline --via state_program` run before the queue is trusted to pick
+the next county to probe.
