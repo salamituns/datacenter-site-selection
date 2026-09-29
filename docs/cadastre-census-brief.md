@@ -209,17 +209,51 @@ edge, is recorded but not counted as a gain here):
 | MI | 4 | 0 | |
 | DC | 1 | 0 | DC calls parcels "owner polygons"/"lots"; the filter's vocabulary misses it |
 
-**Seven gains are probably a neighbour's service**, found because the
-check is a bbox and bboxes overlap: KY-CAMPBELL and KY-PENDLETON (Kenton's
-LINK-GIS), VA-ISLEOFWIGHT and VA-SOUTHAMPTON (HRSD, a regional utility —
-134,500 in Isle of Wight's bbox is several counties' worth),
-VA-WILLIAMSBURGCITY (James City's server, plausibly a joint service), and
-VA-MANASSASCITY / VA-MANASSASPARKCITY (Prince William's server). They are
-recorded, as the rule says, but a deep probe must confirm the layer
-covers the county itself before relying on it. Counting only the
-county-own and statewide sources, the pass closed **~108 of 267**.
+**Seven gains looked like a neighbour's service**, because the check is a
+bbox and adjacent bboxes overlap. The outline-coverage check (below)
+settled them the same day, and mostly the other way: six are real.
 
-What is left — ~152 regions, KY 77 the bulk — is what the index cannot
+### Outline coverage — settling the bbox ambiguity (release32)
+
+`cadastre_census.py --outline` asks each verified layer, at 24 points on a
+grid inside the county's own Census outline (inset 800 m past the 1:20m
+generalisation), whether a parcel is there. `outline_coverage` is the
+share that hit. A county's own layer covers most of its land — the misses
+are roads and water; controls measured 0.75 (Harrisonburg, a city) to
+1.00. A neighbour's layer covers almost none.
+
+| Region | Layer | Coverage | Verdict |
+|---|---|---|---|
+| KY-CAMPBELL | LINK-GIS `Parcels_CC` (38,039) | 1.000 | covered — LINK-GIS is regional |
+| KY-PENDLETON | LINK-GIS `Parcels_PC` (9,049) | 0.958 | covered |
+| VA-ISLEOFWIGHT | HRSD regional parcels (134,500) | 0.958 | covered |
+| VA-SOUTHAMPTON | HRSD regional parcels (24,593) | 1.000 | covered |
+| VA-MANASSASCITY | Prince William (18,287) | 1.000 | covered |
+| VA-MANASSASPARKCITY | Prince William (5,935) | 1.000 | covered |
+| VA-WILLIAMSBURGCITY | James City (6,354) | 0.000 | **neighbour — not a source** |
+
+It also caught a false gain the bbox rule had passed: **KY-KENTON's**
+recorded rows were LINK-GIS's *subdivisions* service (coverage 0.000) —
+the 4-candidate cap had filled before Kenton's parcel layer was reached.
+LINK-GIS publishes one layer per county on one service (`Parcels_CC`,
+`Parcels_KC_PVA`, `Parcels_PC`); `Parcels_KC_PVA` covers Kenton at 0.917
+with 64,580 parcels and is now recorded, noted as found through its
+neighbours' web maps.
+
+**Coverage needs the count beside it.** A layer of a few big polygons
+covers a county completely: WV-HARDY's tax districts (17 features) and a
+Staunton boundary layer (1) both read 1.000. `best_outline_coverage` in
+`v_cadastre_queue` therefore reads only layers with 1,000+ features in
+the bbox (release32b) — coverage says the layer reaches all of the
+county, the count says it is divided like parcels.
+
+**Net:** 114 of 267 regions gained a verified, parcel-sized source in the
+second pass (115 − Williamsburg; Kenton kept, on its right layer). Every
+web-map gain is now outline-confirmed at 0.75 or better. The statewide
+programs (WV 50, PA 49) are not yet measured; PA DEP's "partial" label
+makes it the obvious next run (`--outline --via state_program --state PA`).
+
+What is left — 153 regions, KY 77 the bulk — is what the index cannot
 reach by any route: counties whose assessors publish through vendor
 viewers (qPublic, Schneider Beacon, PVA sites) rather than ArcGIS.
 Finding those would mean scraping vendor sites, which is a different

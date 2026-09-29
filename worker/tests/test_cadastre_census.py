@@ -174,3 +174,44 @@ def test_web_map_sentinel_even_when_state_program_verifies(monkeypatch):
     assert by_via["state_program"]["record_count"] == 77667
     assert by_via["web_map"]["evidence_class"] == "none_found"
     assert by_via["web_map"]["service_url"] == cadastre_census.WEB_MAP_SENTINEL_URL
+
+
+# ── outline coverage ──────────────────────────────────────────────────────
+
+def test_coverage_points_fall_inside_the_inset_outline():
+    import geopandas as gpd
+    from shapely.geometry import Point, box
+    county = box(-78.2, 39.3, -77.8, 39.6)
+    pts = cadastre_census.coverage_points(county)
+    assert len(pts) == cadastre_census.COVERAGE_POINTS
+    inner = (gpd.GeoSeries([county], crs="EPSG:4326").to_crs("EPSG:5070")
+             .iloc[0].buffer(-cadastre_census.COVERAGE_INSET_M))
+    projected = gpd.GeoSeries([Point(p) for p in pts],
+                              crs="EPSG:4326").to_crs("EPSG:5070")
+    assert all(inner.contains(p) for p in projected)
+    # deterministic: a re-check asks the same points
+    assert pts == cadastre_census.coverage_points(county)
+
+
+def test_coverage_is_share_of_answered_points():
+    class S:
+        def __init__(self, answers):
+            self.answers = iter(answers)
+
+        def get_json(self, url, params=None):
+            return next(self.answers)
+    pts = [(0.0, 0.0)] * 4
+    hit, miss = {"count": 3}, {"count": 0}
+    assert cadastre_census.outline_coverage(S([hit, hit, hit, miss]), "u", pts) == (0.75, 4)
+    # one refusal among four: measured on the three that answered
+    assert cadastre_census.outline_coverage(S([hit, None, miss, miss]), "u", pts) == (0.333, 3)
+    # most refused: not measured, never a zero
+    assert cadastre_census.outline_coverage(S([hit, None, None, None]), "u", pts) == (None, 1)
+
+
+def test_row_query_url_handles_root_and_layer_urls():
+    q = cadastre_census._row_query_url
+    assert q({"service_url": "https://g.gov/rest/services/P/MapServer/0",
+              "layer_id": 0}) == "https://g.gov/rest/services/P/MapServer/0/query"
+    assert q({"service_url": "https://g.gov/rest/services/P/MapServer",
+              "layer_id": 2}) == "https://g.gov/rest/services/P/MapServer/2/query"

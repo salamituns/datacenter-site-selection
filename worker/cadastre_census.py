@@ -49,6 +49,7 @@ import argparse
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -685,9 +686,156 @@ def _web_map_targets(client: Any) -> Tuple[set, set]:
         page += 1
 
 
+# ── outline coverage: does a verified layer cover THIS county? ───────────
+#
+# A bbox count cannot tell a county's own layer from a neighbour's layer
+# reaching into the box — bboxes of adjacent counties overlap. Coverage
+# asks the layer at points spread across the county's own outline whether
+# a parcel is there. A county's own layer hits most of them (the misses
+# are roads and water); a neighbour's hits the few near the shared edge.
+
+COVERAGE_POINTS = 24
+# Points keep this far inside the outline, so the 1:20m generalisation of
+# the boundary cannot put a point in the neighbouring county.
+COVERAGE_INSET_M = 800
+
+
+def coverage_points(outline, n: int = COVERAGE_POINTS
+                    ) -> List[Tuple[float, float]]:
+    """
+    Up to n (lon, lat) points on a regular grid inside the inset outline,
+    deterministic so a re-check asks the same points. The grid densifies
+    until it holds n points, then n are taken evenly from it.
+    """
+    import geopandas as gpd
+    from shapely.geometry import Point
+
+    projected = gpd.GeoSeries([outline], crs="EPSG:4326").to_crs("EPSG:5070")
+    inner = projected.iloc[0].buffer(-COVERAGE_INSET_M)
+    if inner.is_empty:  # a county narrower than the inset: use it whole
+        inner = projected.iloc[0]
+    minx, miny, maxx, maxy = inner.bounds
+    inside: List[Any] = []
+    for side in range(6, 60, 2):
+        dx, dy = (maxx - minx) / side, (maxy - miny) / side
+        inside = [Point(minx + (i + 0.5) * dx, miny + (j + 0.5) * dy)
+                  for j in range(side) for i in range(side)]
+        inside = [p for p in inside if inner.contains(p)]
+        if len(inside) >= n:
+            break
+    step = max(1, len(inside) / n)
+    picked = [inside[int(k * step)] for k in range(min(n, len(inside)))]
+    lonlat = gpd.GeoSeries(picked, crs="EPSG:5070").to_crs("EPSG:4326")
+    return [(round(p.x, 6), round(p.y, 6)) for p in lonlat]
+
+
+def parcel_at(session: _ThrottledSession, query_url: str,
+              lon: float, lat: float) -> Optional[bool]:
+    """Whether the layer has a parcel under one point; None if it will
+    not answer."""
+    data = session.get_json(query_url, params={
+        "where": "1=1",
+        "geometryType": "esriGeometryPoint",
+        "geometry": f"{lon},{lat}",
+        "inSR": "4326",
+        "spatialRel": "esriSpatialRelIntersects",
+        "returnCountOnly": "true",
+        "f": "json",
+    })
+    if data is None or "count" not in data:
+        return None
+    return int(data["count"]) > 0
+
+
+def outline_coverage(session: _ThrottledSession, query_url: str,
+                     points: List[Tuple[float, float]]
+                     ) -> Tuple[Optional[float], int]:
+    """(share of answered points that hit a parcel, points answered).
+    Coverage is None when fewer than half the points answered — a layer
+    that refuses most questions has not been measured."""
+    answers = [parcel_at(session, query_url, lon, lat) for lon, lat in points]
+    answered = [a for a in answers if a is not None]
+    if len(answered) < max(1, len(points) // 2):
+        return None, len(answered)
+    return round(sum(answered) / len(answered), 3), len(answered)
+
+
+def _row_query_url(row: Dict[str, Any]) -> str:
+    """The query endpoint of a recorded row: a URL that already ends in
+    its layer id is used as-is, a service root gets the id appended."""
+    url = row["service_url"].rstrip("/")
+    tail = url.rsplit("/", 1)[-1]
+    if tail.isdigit() and int(tail) == row["layer_id"]:
+        return url + "/query"
+    return f"{url}/{row['layer_id']}/query"
+
+
+def _main_outline(args: argparse.Namespace) -> int:
+    """Measure outline coverage for verified rows that have a count and no
+    coverage yet (--redo re-measures). --via narrows to one discovery
+    path, --state to one state."""
+    import region_registry as rr
+
+    client = _client()
+    rows, page, size = [], 0, 1000
+    while True:
+        q = (client.table("cadastre_sources")
+             .select("id,region_key,service_url,layer_id,record_count,"
+                     "discovered_via,outline_coverage")
+             .eq("evidence_class", "verified").gt("record_count", 0))
+        if args.via:
+            q = q.eq("discovered_via", args.via)
+        if args.state:
+            q = q.eq("state_code", args.state.upper())
+        res = q.order("id").range(page * size, page * size + size - 1).execute()
+        rows += res.data
+        if len(res.data) < size:
+            break
+        page += 1
+    if not args.redo:
+        rows = [r for r in rows if r["outline_coverage"] is None]
+    rows = rows[:args.limit]
+    logger.info("Outline coverage: %d row(s)%s", len(rows),
+                " (dry run)" if args.dry_run else "")
+
+    session = _ThrottledSession()
+    points_by_region: Dict[str, List[Tuple[float, float]]] = {}
+    failures = 0
+    for i, row in enumerate(rows, 1):
+        key = row["region_key"]
+        if key not in points_by_region:
+            outline = rr.county_geometry(key)
+            points_by_region[key] = coverage_points(outline) if outline else []
+        points = points_by_region[key]
+        if not points:
+            logger.warning("[%d/%d] %s has no outline — skipped", i, len(rows), key)
+            failures += 1
+            continue
+        cov, answered = outline_coverage(session, _row_query_url(row), points)
+        logger.info("[%d/%d] %s %s  coverage=%s (%d/%d answered)  %s",
+                    i, len(rows), key, row["discovered_via"], cov, answered,
+                    len(points), row["service_url"])
+        if args.dry_run:
+            continue
+        try:
+            (client.table("cadastre_sources")
+             .update({"outline_coverage": cov, "outline_points": answered,
+                      "outline_checked_at":
+                          datetime.now(timezone.utc).isoformat()})
+             .eq("id", row["id"]).execute())
+        except Exception as exc:  # fail the row, never the run
+            logger.warning("[%d/%d] %s persistence failed: %s", i, len(rows), key, exc)
+            failures += 1
+    logger.info("Outline coverage done: %d row(s), %d failed", len(rows), failures)
+    return 1 if failures else 0
+
+
 def _client() -> Any:
     """Service-role client, the same rule as the pipeline's: anon cannot
     write, by design, and the census writes operational rows."""
+    # the census paths that never import pipeline must still see .env
+    from dotenv import load_dotenv
+    load_dotenv()
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
@@ -754,7 +902,15 @@ def main() -> int:
                         help="second pass: regions with no verified source, "
                              "searched through their web maps and the "
                              "self-hosted statewide programs")
+    parser.add_argument("--outline", action="store_true",
+                        help="measure verified rows' coverage of the county's "
+                             "own outline (settles bbox-neighbour matches)")
+    parser.add_argument("--via", default=None,
+                        choices=["county_search", "state_program", "web_map"],
+                        help="with --outline: one discovery path only")
     args = parser.parse_args()
+    if args.outline:
+        return _main_outline(args)
     if args.web_maps:
         return _main_web_maps(args)
 

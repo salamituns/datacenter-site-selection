@@ -257,6 +257,19 @@ def resolve(region_key: str) -> Optional[Region]:
     )
 
 
+def county_geometry(region_key: str):
+    """
+    The county's own outline (EPSG:4326, 1:20m generalised), or None.
+
+    The bbox is what surveys and counts read; the outline answers the
+    question a bbox cannot — whether something covers this county or
+    only its neighbour's corner of the box.
+    """
+    df = _counties()
+    row = df[df.region_key == (region_key or "").upper()]
+    return None if len(row) == 0 else row.iloc[0].geometry
+
+
 def all_regions(states: Optional[list] = None) -> Iterator[Region]:
     """
     Every county, or every county in the given state codes. The national
