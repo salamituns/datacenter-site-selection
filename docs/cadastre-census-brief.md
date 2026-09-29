@@ -277,9 +277,37 @@ viewers (qPublic, Schneider Beacon, PVA sites) rather than ArcGIS.
 Finding those would mean scraping vendor sites, which is a different
 project with different terms of use; the census stops here.
 
-**Known limit, for the first pass:** its 277 verified regions are still
-bbox-verified only. The second pass showed how far that can mislead —
-twelve of PA DEP's 49 were a neighbour's parcels — so the first pass's
-statewide programs (IN, MD, NJ, OH, NC, TN) deserve the same
-`--outline --via state_program` run before the queue is trusted to pick
-the next county to probe.
+### The first pass's statewide programs, measured (2026-09-29)
+
+PA DEP showed a bbox count can credit a county with its neighbours'
+parcels, so the six programs behind most of the first pass's 277 got
+the same run: 162 rows, 0 failed.
+
+| State | Regions | ≥ 0.75 | 0.25–0.75 | < 0.25 |
+|---|---|---|---|---|
+| OH | 68 | 68 | 0 | 0 |
+| MD | 24 | 24 | 0 | 0 |
+| IN | 22 | 22 | 0 | 0 |
+| TN | 3 | 3 | 0 | 0 |
+| NJ | 21 | 19 | 2 | 0 |
+| NC | 24 | 18 | 6 | 0 |
+
+**No false gains.** Every one of these programs is complete statewide, so
+unlike PA DEP there was no uncovered county beside a covered one to
+spill into. The eight below 0.75 read as water, not missing data (not
+checked point by point): NC's six are the sound counties — Dare 0.292,
+Currituck 0.500, Hyde 0.583, Perquimans 0.583, Tyrrell 0.625, Pamlico
+0.667, around Albemarle and Pamlico Sounds and the Outer Banks — and
+NJ-OCEAN (0.708) holds Barnegat Bay. Sample points land in water inside
+the outline, where no parcel is. NJ-UNION (0.667) is dense urban land
+with a county service of its own besides.
+
+The lesson for the measure: **coverage undercounts water counties.**
+Excluding water from the sample (the Census TIGER area-water layer,
+subtracted from the outline before the grid is laid) would fix it; until
+then a coastal county below 0.75 is a question, not a verdict.
+
+The first pass's per-county services (`county_search`) are still
+bbox-verified only — a county's own service rarely claims a neighbour,
+but the Kenton case shows a recorded row can be the wrong layer of the
+right server.
