@@ -215,3 +215,54 @@ def test_row_query_url_handles_root_and_layer_urls():
               "layer_id": 0}) == "https://g.gov/rest/services/P/MapServer/0/query"
     assert q({"service_url": "https://g.gov/rest/services/P/MapServer",
               "layer_id": 2}) == "https://g.gov/rest/services/P/MapServer/2/query"
+
+
+def test_coverage_points_avoid_water():
+    # a county whose east half is a sound: no point may land in it
+    import geopandas as gpd
+    from shapely.geometry import Point, box
+    county = box(-76.2, 35.5, -75.6, 36.0)
+    sound = (gpd.GeoSeries([box(-75.9, 35.4, -75.5, 36.1)], crs="EPSG:4326")
+             .to_crs("EPSG:5070").iloc[0])
+    pts = cadastre_census.coverage_points(county, water=sound)
+    assert len(pts) == cadastre_census.COVERAGE_POINTS
+    projected = gpd.GeoSeries([Point(p) for p in pts],
+                              crs="EPSG:4326").to_crs("EPSG:5070")
+    margin = sound.buffer(cadastre_census.WATER_MARGIN_M)
+    assert not any(margin.contains(p) for p in projected)
+    # without water the grid does reach the sound half
+    dry_blind = gpd.GeoSeries(
+        [Point(p) for p in cadastre_census.coverage_points(county)],
+        crs="EPSG:4326").to_crs("EPSG:5070")
+    assert any(sound.contains(p) for p in dry_blind)
+
+
+def test_all_water_county_keeps_its_outline():
+    import geopandas as gpd
+    from shapely.geometry import box
+    county = box(-76.2, 35.5, -75.6, 36.0)
+    everything = (gpd.GeoSeries([box(-77, 35, -75, 37)], crs="EPSG:4326")
+                  .to_crs("EPSG:5070").iloc[0])
+    assert len(cadastre_census.coverage_points(county, water=everything)) \
+        == cadastre_census.COVERAGE_POINTS
+
+
+def test_service_error_in_a_200_is_no_answer(monkeypatch):
+    # ArcGIS Server's "service not found" arrives as HTTP 200
+    class Resp:
+        status_code = 200
+
+        def __init__(self, body):
+            self._body = body
+
+        def json(self):
+            return self._body
+    monkeypatch.setattr(cadastre_census, "REQUEST_PAUSE", 0)
+    s = cadastre_census._ThrottledSession()
+    missing = {"error": {"code": 404,
+                         "message": "Service parcels/MapServer not found "}}
+    monkeypatch.setattr(s._session, "get", lambda *a, **k: Resp(missing))
+    assert s.get_json("https://g.gov/rest/services/parcels/MapServer") is None
+    ok = {"layers": [], "error_count": 0}
+    monkeypatch.setattr(s._session, "get", lambda *a, **k: Resp(ok))
+    assert s.get_json("https://g.gov/rest/services/x/MapServer") == ok

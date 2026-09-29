@@ -145,7 +145,16 @@ class _ThrottledSession:
                 resp = self._session.get(url, params=params,
                                          timeout=REQUEST_TIMEOUT)
                 if resp.status_code == 200:
-                    return resp.json()
+                    body = resp.json()
+                    # ArcGIS Server reports a missing service as HTTP 200
+                    # with {"error": {...}} as the whole body: Lexington's
+                    # renamed parcel service read as "no polygon layer"
+                    # instead of "did not answer" until this check.
+                    if isinstance(body, dict) and set(body) == {"error"}:
+                        logger.debug("service error on %s: %s", url,
+                                     body["error"])
+                        return None
+                    return body
                 logger.debug("HTTP %s on %s (attempt %d)",
                              resp.status_code, url, attempt)
                 if resp.status_code < 500 and resp.status_code != 429:
@@ -698,14 +707,72 @@ COVERAGE_POINTS = 24
 # Points keep this far inside the outline, so the 1:20m generalisation of
 # the boundary cannot put a point in the neighbouring county.
 COVERAGE_INSET_M = 800
+# Water is subtracted from the outline before the grid is laid: a point in
+# Pamlico Sound has no parcel under it, and read as a miss it made the NC
+# sound counties look partly covered (Dare 0.292) when the layer was whole.
+# The margin keeps points off the shoreline, where the county's parcel
+# edge and the Census water edge are drawn by different hands.
+WATER_MARGIN_M = 100
+# Which measurement a row holds. Rows measured another way are re-measured
+# by the next --outline run, so the column never mixes two methods.
+OUTLINE_METHOD = "grid24-inset800m-water-excluded"
+
+# The county's TIGER/Line area-water shapefile, on the host the road-access
+# fallback already uses (overlay_layers.TIGERLINE_ROADS_URL): never blocked,
+# one download per county, cached.
+TIGERLINE_AREAWATER_URL = (
+    "https://www2.census.gov/geo/tiger/TIGER2024/AREAWATER/"
+    "tl_2024_{fips}_areawater.zip"
+)
 
 
-def coverage_points(outline, n: int = COVERAGE_POINTS
+def county_water(region_key: str):
+    """
+    The county's area water, dissolved, in EPSG:5070; an empty geometry
+    for a county with none. Raises when the file cannot be had — the
+    caller fails the row rather than measure it without water removed.
+    """
+    import tempfile
+    import zipfile
+    from pathlib import Path
+
+    import geopandas as gpd
+    from shapely.geometry import GeometryCollection
+
+    import region_registry as rr
+
+    fips = rr.county_fips(region_key)
+    if not fips:
+        raise ValueError(f"{region_key}: no county FIPS")
+    cache = Path(__file__).parent / "cache" / "areawater" / f"{fips}.gpkg"
+    if cache.exists():
+        water = gpd.read_file(cache)
+    else:
+        url = TIGERLINE_AREAWATER_URL.format(fips=fips)
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / "water.zip"
+            resp = requests.get(url, timeout=300,
+                                headers={"User-Agent": _ThrottledSession.UA})
+            resp.raise_for_status()
+            zip_path.write_bytes(resp.content)
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(tmp)
+            shp = next(Path(tmp).glob("*.shp"))
+            water = gpd.read_file(str(shp))[["geometry"]].to_crs("EPSG:5070")
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        water.to_file(cache, driver="GPKG")
+    if water.empty:
+        return GeometryCollection()
+    return water.to_crs("EPSG:5070").geometry.union_all()
+
+
+def coverage_points(outline, n: int = COVERAGE_POINTS, water=None
                     ) -> List[Tuple[float, float]]:
     """
     Up to n (lon, lat) points on a regular grid inside the inset outline,
-    deterministic so a re-check asks the same points. The grid densifies
-    until it holds n points, then n are taken evenly from it.
+    less any water (EPSG:5070) — deterministic so a re-check asks the same
+    points. The grid densifies until it holds n points, then n are taken
+    evenly from it.
     """
     import geopandas as gpd
     from shapely.geometry import Point
@@ -714,6 +781,12 @@ def coverage_points(outline, n: int = COVERAGE_POINTS
     inner = projected.iloc[0].buffer(-COVERAGE_INSET_M)
     if inner.is_empty:  # a county narrower than the inset: use it whole
         inner = projected.iloc[0]
+    if water is not None and not water.is_empty:
+        dry = inner.difference(water.buffer(WATER_MARGIN_M))
+        # a county that is nearly all water keeps its outline rather than
+        # measure nothing; the method column still says water was removed
+        if not dry.is_empty:
+            inner = dry
     minx, miny, maxx, maxy = inner.bounds
     inside: List[Any] = []
     for side in range(6, 60, 2):
@@ -771,9 +844,10 @@ def _row_query_url(row: Dict[str, Any]) -> str:
 
 
 def _main_outline(args: argparse.Namespace) -> int:
-    """Measure outline coverage for verified rows that have a count and no
-    coverage yet (--redo re-measures). --via narrows to one discovery
-    path, --state to one state."""
+    """Measure outline coverage for verified rows that have a count and
+    are unmeasured or measured by an older OUTLINE_METHOD (--redo
+    re-measures everything). --via narrows to one discovery path,
+    --state to one state."""
     import region_registry as rr
 
     client = _client()
@@ -781,7 +855,7 @@ def _main_outline(args: argparse.Namespace) -> int:
     while True:
         q = (client.table("cadastre_sources")
              .select("id,region_key,service_url,layer_id,record_count,"
-                     "discovered_via,outline_coverage")
+                     "discovered_via,outline_coverage,outline_method")
              .eq("evidence_class", "verified").gt("record_count", 0))
         if args.via:
             q = q.eq("discovered_via", args.via)
@@ -793,7 +867,8 @@ def _main_outline(args: argparse.Namespace) -> int:
             break
         page += 1
     if not args.redo:
-        rows = [r for r in rows if r["outline_coverage"] is None]
+        # unmeasured rows, and rows measured by an older method
+        rows = [r for r in rows if r.get("outline_method") != OUTLINE_METHOD]
     rows = rows[:args.limit]
     logger.info("Outline coverage: %d row(s)%s", len(rows),
                 " (dry run)" if args.dry_run else "")
@@ -805,10 +880,20 @@ def _main_outline(args: argparse.Namespace) -> int:
         key = row["region_key"]
         if key not in points_by_region:
             outline = rr.county_geometry(key)
-            points_by_region[key] = coverage_points(outline) if outline else []
+            try:
+                water = county_water(key) if outline is not None else None
+                points_by_region[key] = (coverage_points(outline, water=water)
+                                         if outline is not None else [])
+            except Exception as exc:
+                # never measure without the water removed: a row measured
+                # the old way would sit in the column as though it weren't
+                logger.warning("[%d/%d] %s area water unavailable (%s) — skipped",
+                               i, len(rows), key, exc)
+                points_by_region[key] = []
         points = points_by_region[key]
         if not points:
-            logger.warning("[%d/%d] %s has no outline — skipped", i, len(rows), key)
+            logger.warning("[%d/%d] %s has no sample points — skipped",
+                           i, len(rows), key)
             failures += 1
             continue
         cov, answered = outline_coverage(session, _row_query_url(row), points)
@@ -820,6 +905,7 @@ def _main_outline(args: argparse.Namespace) -> int:
         try:
             (client.table("cadastre_sources")
              .update({"outline_coverage": cov, "outline_points": answered,
+                      "outline_method": OUTLINE_METHOD,
                       "outline_checked_at":
                           datetime.now(timezone.utc).isoformat()})
              .eq("id", row["id"]).execute())

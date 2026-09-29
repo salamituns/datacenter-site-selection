@@ -311,3 +311,65 @@ The first pass's per-county services (`county_search`) are still
 bbox-verified only — a county's own service rarely claims a neighbour,
 but the Kenton case shows a recorded row can be the wrong layer of the
 right server.
+
+## Water excluded, every row re-measured (release33, 2026-09-29)
+
+The sound counties' low coverage was water, as suspected. The worker now
+subtracts each county's TIGER/Line area water (buffered 100 m) from the
+inset outline before laying the grid; `outline_method` records which
+measurement a row holds, and `--outline` re-measures any row not on the
+current method, so the column never mixes two. Before → after, same
+layers: NC-DARE 0.292 → 0.958, CURRITUCK 0.500 → 1.000, HYDE 0.583 →
+1.000, PERQUIMANS 0.583 → 1.000, TYRRELL 0.625 → 1.000, PAMLICO 0.667 →
+1.000, NJ-OCEAN 0.708 → 0.958. NJ-UNION, inland, stayed at 0.667 — its
+misses are road, not water, which is the control that says the fix
+removes water and nothing else.
+
+The run re-measured all 620 verified rows, including the first pass's
+per-county services, which had never been outline-checked.
+
+### What that turned up in the first pass
+
+**Four per-county services cover none of their county**, beside a fifth
+now fixed: MI-CASS, VA-CHESAPEAKECITY, VA-HENRY (0.000) and PA-ERIE
+(0.042). KY-FAYETTE was the fifth: its recorded row was a hosted
+`CDParcels` subset (2,225 features, 0.000). Lexington's own layer is
+`property/MapServer/1` — 114,373 parcels, 0.917 — now recorded. Its web
+maps still point at `parcels/MapServer`, which the server no longer
+publishes, and that surfaced a bug: ArcGIS Server reports a missing
+service as HTTP 200 with an `{"error": …}` body, which the census read
+as an answer ("no polygon layer") rather than as no answer. `get_json`
+now treats an error-only body as no answer.
+
+**Sixty regions the first pass called verified have no parcel-sized
+layer at all** — every verified row counts under 1,000 features in the
+bbox, most of them 0 or 1. They are search hits on layers that carry
+"parcel" in the name without being a county's parcels: a single
+preserved-farm parcel, a pipeline-easement layer, a 1-feature extract.
+51 are in Virginia, where the VGIN statewide file remains a candidate on
+every region; the others are OH-PIKE, OH-ROSS, OH-WARREN, OH-WASHINGTON,
+KY-GREEN, PA-LAWRENCE, PA-MERCER, PA-PHILADELPHIA and PA-PIKE.
+
+### The census, measured
+
+| | Regions of 544 |
+|---|---|
+| A layer covering ≥ 0.75 of the county (water excluded) | **317** (58%) |
+| Partly covered, 0.25–0.75 | 7 — NJ-UNION, IL-DUPAGE, WV-TUCKER, VA-CHARLOTTESVILLECITY, PA-SOMERSET, VA-KINGWILLIAM, VA-MATHEWS |
+| Verified layer, but it covers < 0.25 of the county | 17 |
+| Verified rows, none parcel-sized | 60 |
+| No verified source | 143 |
+
+**This replaces the earlier headline.** "277 of 544 have proven public
+parcel data" (first pass) and "~379" after the second pass were bbox
+counts: they credited counties with their neighbours' parcels, with
+single-parcel layers, and with layers of the wrong thing. Measured
+against the county itself, the figure is 317. Two verified rows remain
+unmeasured because their services answered fewer than half the points
+(PA-BUCKS preserved parcels, VA-HANOVER pipeline parcels — neither a
+county parcel layer).
+
+Still open, cheaply: the 17 zero-coverage and 60 non-parcel regions are
+exactly the queue for a targeted look at each county's own server —
+Fayette and Kenton both turned out to have a good layer the census had
+recorded wrongly, not no layer.
