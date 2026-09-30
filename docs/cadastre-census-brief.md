@@ -626,3 +626,28 @@ Illinois 10, Michigan 5, Pennsylvania 4, DC 1, Virginia 1.
 The other 397 candidate URLs across the census have not been re-verified
 yet (`cadastre_census.py --reverify`); Ohio suggests some of them are
 stale in the same way.
+
+### The census-wide re-verify (2026-09-30)
+
+`--reverify` over every candidate with a live URL (442): 80 verified, but
+**no region gained coverage** — the total stays 442 of 544. The 80 were
+stale twins: the first pass had recorded "service did not answer" at
+layer −1 beside a row that verified the same service at a real layer,
+and all 69 regions they belong to were already covered (IL-DUPAGE
+excepted, partial at 0.708). `--reverify` now skips a candidate whose URL
+already has a verified row for the same region; the twins themselves are
+kept as the first pass's record of that day.
+
+What remains unverified is real, as of today — 361 URLs:
+
+| Reason | URLs |
+|---|---|
+| service did not answer | 317 |
+| no polygon layer at the URL | 38 |
+| layer did not answer a bbox count | 6 |
+
+"Did not answer" is one bucket for several causes the Illinois run
+showed apart by hand — a login wall ("Token Required", which ArcGIS
+returns as HTTP 200), a refused connection, a TLS failure, a name that
+no longer resolves. The census does not yet record which; distinguishing
+them would say which are worth asking again and which never will be.

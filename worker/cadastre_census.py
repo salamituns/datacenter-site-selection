@@ -1523,6 +1523,27 @@ def _main_reverify(args: argparse.Namespace) -> int:
     pairs: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for r in rows:
         pairs.setdefault((r["region_key"], r["service_url"]), r)
+    # A candidate beside a verified row for the same URL is a stale twin:
+    # the first pass recorded "did not answer" at layer -1 and, on
+    # another day or another layer, verified the same service. 80 such
+    # pairs on 2026-09-30; re-asking them changes nothing, so skip them.
+    verified_urls, page = set(), 0
+    while True:
+        q = (client.table("cadastre_sources").select("region_key,service_url")
+             .eq("evidence_class", "verified"))
+        if args.state:
+            q = q.eq("state_code", args.state.upper())
+        res = q.order("id").range(page * size, page * size + size - 1).execute()
+        verified_urls |= {(v["region_key"], v["service_url"]) for v in res.data}
+        if len(res.data) < size:
+            break
+        page += 1
+    twins = [k for k in pairs if k in verified_urls]
+    for k in twins:
+        del pairs[k]
+    if twins:
+        logger.info("Re-verify: skipping %d candidate(s) whose URL is already "
+                    "verified for the same region", len(twins))
     work = list(pairs.values())
     if args.list:
         print(f"candidate URLs to re-verify: {len(work)}")
