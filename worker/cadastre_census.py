@@ -51,6 +51,7 @@ import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
@@ -833,9 +834,17 @@ OUTLINE_METHOD = "grid24-inset800m-water-excluded"
 # fallback already uses (overlay_layers.TIGERLINE_ROADS_URL): never blocked,
 # one download per county, cached.
 TIGERLINE_AREAWATER_URL = (
-    "https://www2.census.gov/geo/tiger/TIGER2024/AREAWATER/"
-    "tl_2024_{fips}_areawater.zip"
+    "https://www2.census.gov/geo/tiger/TIGER{year}/AREAWATER/"
+    "tl_{year}_{fips}_areawater.zip"
 )
+# Current vintage first, then the one before it. The Census WAF has
+# refused a single file outright — Gloucester County, VA's 2024 water
+# ("Request Rejected", while its neighbours and its own 2023 file download
+# normally). The prior year's official file is the fallback, as the county
+# shapefile is for roads: a different public file, not a way round the
+# refusal, and a county's bays and rivers do not move in a year.
+AREAWATER_VINTAGES = (2024, 2023)
+AREAWATER_CACHE_DIR = Path(__file__).parent / "cache" / "areawater"
 
 
 def county_water(region_key: str):
@@ -856,21 +865,36 @@ def county_water(region_key: str):
     fips = rr.county_fips(region_key)
     if not fips:
         raise ValueError(f"{region_key}: no county FIPS")
-    cache = Path(__file__).parent / "cache" / "areawater" / f"{fips}.gpkg"
+    cache = AREAWATER_CACHE_DIR / f"{fips}.gpkg"
     if cache.exists():
         water = gpd.read_file(cache)
     else:
-        url = TIGERLINE_AREAWATER_URL.format(fips=fips)
-        with tempfile.TemporaryDirectory() as tmp:
-            zip_path = Path(tmp) / "water.zip"
+        water, refused = None, []
+        for year in AREAWATER_VINTAGES:
+            url = TIGERLINE_AREAWATER_URL.format(year=year, fips=fips)
             resp = requests.get(url, timeout=300,
                                 headers={"User-Agent": _ThrottledSession.UA})
-            resp.raise_for_status()
-            zip_path.write_bytes(resp.content)
-            with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(tmp)
-            shp = next(Path(tmp).glob("*.shp"))
-            water = gpd.read_file(str(shp))[["geometry"]].to_crs("EPSG:5070")
+            # a refusal arrives as HTTP 200 with an HTML page, not a zip
+            if (resp.status_code != 200
+                    or not resp.content.startswith(b"PK")):
+                refused.append(f"{year}: HTTP {resp.status_code}, "
+                               f"{resp.headers.get('content-type')}")
+                continue
+            with tempfile.TemporaryDirectory() as tmp:
+                zip_path = Path(tmp) / "water.zip"
+                zip_path.write_bytes(resp.content)
+                with zipfile.ZipFile(zip_path) as zf:
+                    zf.extractall(tmp)
+                shp = next(Path(tmp).glob("*.shp"))
+                water = (gpd.read_file(str(shp))[["geometry"]]
+                         .to_crs("EPSG:5070"))
+            if refused:
+                logger.info("%s area water: %s refused (%s); using the "
+                            "TIGER %d file", region_key,
+                            AREAWATER_VINTAGES[0], "; ".join(refused), year)
+            break
+        if water is None:
+            raise ValueError(f"no area-water file answered ({'; '.join(refused)})")
         cache.parent.mkdir(parents=True, exist_ok=True)
         water.to_file(cache, driver="GPKG")
     if water.empty:

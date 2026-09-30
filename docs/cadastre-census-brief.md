@@ -426,8 +426,10 @@ searches found no public layer of the county's own.
 VA-CHARLOTTESVILLECITY 0.667, WV-TUCKER 0.667, VA-ALLEGHANY 0.625,
 PA-SOMERSET 0.333. The urban ones read as road surface, not missing data.
 
-**Unmeasured: VA-GLOUCESTER.** Its VGIN row verified, but the Census host
-answered its area-water file with a "Request Rejected" page though the
-file is listed — the WAF behaviour the README records for TIGERweb. The
-worker fails the row rather than measure it with water in; the next
-`--outline` run retries it.
+**VA-GLOUCESTER, measured on retry: 1.000.** The Census host answered its
+2024 area-water file with a "Request Rejected" page — while its
+neighbours and its own 2023 file downloaded normally, so the refusal was
+the file's, not this machine's. `county_water` now falls back to the
+prior TIGER vintage when the current one is refused, as the county
+shapefile is the fallback for roads: a different official file, not a
+way round the refusal. That makes **409 of 544 regions (75%)** covered.

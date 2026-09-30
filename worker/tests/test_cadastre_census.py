@@ -302,3 +302,42 @@ def test_directory_crawl_finds_renamed_parcel_service():
 def test_directory_crawl_needs_an_arcgis_server():
     assert cadastre_census.crawl_host_directory(
         _FakeSession({}), "https://example.gov/parcels.json") == []
+
+
+def test_area_water_falls_back_to_prior_vintage(monkeypatch, tmp_path):
+    # Gloucester, VA: the 2024 file answers with the WAF's HTML page, the
+    # 2023 file with a zip — the prior vintage must be used, not skipped
+    import io
+    import zipfile
+    import geopandas as gpd
+    from shapely.geometry import box
+    shp_dir = tmp_path / "shp"
+    shp_dir.mkdir()
+    gpd.GeoDataFrame(geometry=[box(-76.5, 37.3, -76.4, 37.4)],
+                     crs="EPSG:4269").to_file(shp_dir / "w.shp")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for f in shp_dir.iterdir():
+            zf.write(f, f.name)
+
+    class Resp:
+        def __init__(self, content, ctype):
+            self.status_code, self.content = 200, content
+            self.headers = {"content-type": ctype}
+    asked = []
+
+    def fake_get(url, **kw):
+        asked.append(url)
+        if "2024" in url:
+            return Resp(b"<html><title>Request Rejected</title></html>",
+                        "text/html")
+        return Resp(buf.getvalue(), "application/zip")
+    monkeypatch.setattr(cadastre_census.requests, "get", fake_get)
+    monkeypatch.setattr(cadastre_census, "AREAWATER_CACHE_DIR",
+                        tmp_path / "cache")
+    import region_registry
+    monkeypatch.setattr(region_registry, "county_fips", lambda key: "99999")
+    water = cadastre_census.county_water("VA-TESTCOUNTY")
+    assert not water.is_empty
+    assert [u.split("/")[5] for u in asked] == ["TIGER2024", "TIGER2023"]
+    assert (tmp_path / "cache" / "99999.gpkg").exists()
