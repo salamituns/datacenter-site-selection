@@ -152,7 +152,7 @@ class _FakeSession:
     def __init__(self, answers):
         self.answers = answers
 
-    def get_json(self, url, params=None):
+    def get_json(self, url, params=None, **kw):
         return self.answers.get(url)
 
 
@@ -198,7 +198,7 @@ def test_coverage_is_share_of_answered_points():
         def __init__(self, answers):
             self.answers = iter(answers)
 
-        def get_json(self, url, params=None):
+        def get_json(self, url, params=None, **kw):
             return next(self.answers)
     pts = [(0.0, 0.0)] * 4
     hit, miss = {"count": 3}, {"count": 0}
@@ -451,3 +451,11 @@ def test_catalog_keeps_county_and_city_apart():
     assert [i["id"] for _, _, i in
             cadastre_census.catalog_urls(session, "Richmond", "VA")] == ["county"]
     cadastre_census._CATALOG_CACHE.clear()
+
+
+def test_every_row_stamps_its_own_check_time():
+    # an upsert must refresh checked_at; the column default only fires
+    # on insert, and re-verified rows kept their first-pass date
+    row = cadastre_census._row("OH-WOOD", "OH", "Wood", "state_program",
+                               "t", "o", None, "https://x.gov/rest/services/P/MapServer", 0)
+    assert "checked_at" in row and row["checked_at"].startswith("20")

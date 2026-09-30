@@ -66,6 +66,11 @@ AGOL_SEARCH_URL = "https://www.arcgis.com/sharing/rest/search"
 SERVICE_TYPES = {"Feature Service", "Map Service"}
 REQUEST_PAUSE = 0.4        # seconds between HTTP calls, every host
 REQUEST_TIMEOUT = 45
+# A bbox count on a statewide layer is the slowest question the census
+# asks: OGRIP took over 45 s to count Montgomery County's 322,000 parcels
+# (2026-09-30), and two of Ohio's largest counties sat as candidates on
+# nothing but that timeout.
+COUNT_TIMEOUT = 180
 MAX_CANDIDATES_PER_REGION = 4
 MAX_LAYERS_PER_SERVICE = 2
 
@@ -136,7 +141,8 @@ class _ThrottledSession:
         self._session.headers["User-Agent"] = self.UA
         self._last = 0.0
 
-    def get_json(self, url: str, params: Optional[Dict[str, Any]] = None
+    def get_json(self, url: str, params: Optional[Dict[str, Any]] = None,
+                 timeout: float = REQUEST_TIMEOUT,
                  ) -> Optional[Dict[str, Any]]:
         for attempt in (1, 2):
             pause = REQUEST_PAUSE - (time.monotonic() - self._last)
@@ -145,7 +151,7 @@ class _ThrottledSession:
             self._last = time.monotonic()
             try:
                 resp = self._session.get(url, params=params,
-                                         timeout=REQUEST_TIMEOUT)
+                                         timeout=timeout)
                 if resp.status_code == 200:
                     body = resp.json()
                     # ArcGIS Server reports a missing service as HTTP 200
@@ -330,7 +336,7 @@ def count_in_bbox(session: _ThrottledSession, service_url: str,
             "spatialRel": "esriSpatialRelIntersects",
             "returnCountOnly": "true",
             "f": "json",
-        })
+        }, timeout=COUNT_TIMEOUT)
     if data is None or "count" not in data:
         return None
     return int(data["count"])
@@ -367,6 +373,10 @@ def _row(region_key: str, state: str, county: str, via: str,
         "layer_id": layer_id,
         "evidence_class": evidence,
         "notes": notes,
+        # set on every write, not left to the column default: the default
+        # fires on insert only, so an upsert that re-verified a row kept
+        # the first pass's date and claimed a week-old check
+        "checked_at": datetime.now(timezone.utc).isoformat(),
     }
     if item:
         row["item_id"] = item.get("id")
@@ -1317,11 +1327,16 @@ def main() -> int:
     parser.add_argument("--include-unsourced", action="store_true",
                         help="with --targeted: also regions with no verified "
                              "row at all")
+    parser.add_argument("--reverify", action="store_true",
+                        help="re-check every candidate row that has a live URL, "
+                             "with every fix made since it was recorded")
     parser.add_argument("--targeted", action="store_true",
                         help="regions with no verified layer covering 0.75 "
                              "of the county: statewide program, web maps with "
                              "the cap raised, and known servers' directories")
     args = parser.parse_args()
+    if args.reverify:
+        return _main_reverify(args)
     if args.targeted:
         return _main_targeted(args)
     if args.outline:
@@ -1476,6 +1491,82 @@ def _state_host_pool(session: _ThrottledSession, state: str,
         if root:
             roots.setdefault(root.lower(), root)
     return sorted(roots.values())
+
+
+def _main_reverify(args: argparse.Namespace) -> int:
+    """
+    Re-check candidate rows. A candidate is "found but could not be
+    verified that day", and some of those days predate the fixes that
+    would have verified them: OGRIP's statewide layer refused the short
+    envelope name until ccd0252, and all ten Ohio regions it carries at
+    1.000 sat as candidates because nothing asked again. Each (region,
+    URL) is verified afresh by today's rule and upserted in place; what
+    now verifies is outline-measured. Rows still unverifiable stay
+    candidates, with today's reason.
+    """
+    client = _client()
+    rows, page, size = [], 0, 1000
+    while True:
+        q = (client.table("cadastre_sources")
+             .select("region_key,state_code,county_name,discovered_via,"
+                     "title,owner,service_url,notes")
+             .eq("evidence_class", "candidate").like("service_url", "http%"))
+        if args.state:
+            q = q.eq("state_code", args.state.upper())
+        if args.via:
+            q = q.eq("discovered_via", args.via)
+        res = q.order("id").range(page * size, page * size + size - 1).execute()
+        rows += res.data
+        if len(res.data) < size:
+            break
+        page += 1
+    pairs: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for r in rows:
+        pairs.setdefault((r["region_key"], r["service_url"]), r)
+    work = list(pairs.values())
+    if args.list:
+        print(f"candidate URLs to re-verify: {len(work)}")
+        return 0
+    work = work[:args.limit]
+    logger.info("Re-verify: %d candidate URL(s)%s", len(work),
+                " (dry run)" if args.dry_run else "")
+
+    session = _ThrottledSession()
+    failures, now_verified = 0, 0
+    for i, r in enumerate(work, 1):
+        region = region_registry.resolve(r["region_key"])
+        if region is None:
+            failures += 1
+            continue
+        try:
+            fresh = _verify_url(session, r["region_key"], r["state_code"],
+                                r["county_name"], r["discovered_via"],
+                                r["title"], r["owner"], None, r["service_url"],
+                                region.bbox, note=r["notes"])
+        except Exception as exc:
+            logger.warning("[%d/%d] %s re-verify failed: %s",
+                           i, len(work), r["region_key"], exc)
+            failures += 1
+            continue
+        got = [f for f in fresh if f["evidence_class"] == "verified"]
+        now_verified += bool(got)
+        logger.info("[%d/%d] %s %s: %s", i, len(work), r["region_key"],
+                    r["discovered_via"],
+                    ", ".join(f"verified {f.get('record_count')}" for f in got)
+                    or fresh[0].get("notes") or "candidate")
+        if not args.dry_run:
+            try:
+                _persist(client, fresh)
+            except Exception as exc:  # fail the row, never the run
+                logger.warning("[%d/%d] %s persistence failed: %s",
+                               i, len(work), r["region_key"], exc)
+                failures += 1
+    logger.info("Re-verify done: %d URL(s), %d now verified, %d failed",
+                len(work), now_verified, failures)
+    if args.dry_run:
+        return 1 if failures else 0
+    args.via, args.redo, args.limit = None, False, 100000
+    return max(1 if failures else 0, _main_outline(args))
 
 
 def _main_targeted(args: argparse.Namespace) -> int:

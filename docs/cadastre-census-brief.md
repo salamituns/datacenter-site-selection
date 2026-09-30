@@ -588,3 +588,41 @@ statewide layer carries them, and nothing else surfaced) and Somerset
 **The census now: 432 of 544 regions (79%)** carry a layer covering
 ≥ 0.75 of the county; 7 partial; 105 without — Kentucky 74, Illinois 10,
 Ohio 10, Pennsylvania 4, Michigan 5, DC 1, Virginia 1.
+
+## Ohio: the data was there, the census had stopped asking (2026-09-30)
+
+Ohio's ten uncovered regions — Montgomery, Warren, Wood, Ross,
+Washington, Sandusky, Crawford, Pike, Williams, Wyandot — each held an
+OGRIP statewide row stuck at `candidate`. The first pass could not count
+them: OGRIP's service refuses the short envelope name, which `ccd0252`
+fixed on 2026-09-22 *after* part of the first pass had run. The targeted
+pass re-asks only the self-hosted statewide programs (WV, PA, VA), so
+nothing ever asked OGRIP again. Measured directly, OGRIP covers all ten
+at 1.000.
+
+**`--reverify`** is the general fix: every `candidate` row with a live
+URL is verified afresh by today's rule — the envelope fix, the error-in-200
+fix, the layer ranking — upserted in place, and outline-measured if it now
+verifies. Rows that still fail stay candidates with today's reason. On
+Ohio's 60 candidate URLs it verified 26.
+
+Two more defects surfaced on the way:
+
+- **Counts time out on big counties.** OGRIP took more than 45 s (the
+  request timeout) to count Montgomery's 322,135 parcels, and later
+  answered the same query in 14 s — intermittently slow, not broken.
+  Bbox counts now get `COUNT_TIMEOUT = 180` s, and a count that still
+  fails leaves the row a candidate for the next `--reverify`, as
+  Montgomery's did once before verifying.
+- **`checked_at` never moved.** The column default fires on insert only,
+  so an upsert that re-verified a row kept the first pass's date — a row
+  checked today claimed to have been checked on 2026-09-22. `_row` now
+  stamps the time on every write.
+
+**Ohio holds 83 of 83. The census now: 442 of 544 regions (81%)** carry a
+layer covering ≥ 0.75 of the county; 7 partial; 95 without — Kentucky 74,
+Illinois 10, Michigan 5, Pennsylvania 4, DC 1, Virginia 1.
+
+The other 397 candidate URLs across the census have not been re-verified
+yet (`cadastre_census.py --reverify`); Ohio suggests some of them are
+stale in the same way.
