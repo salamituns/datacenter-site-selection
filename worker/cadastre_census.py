@@ -525,29 +525,40 @@ MAX_WEB_MAPS_PER_REGION = 40
 # second pass (2026-09-28) and invisible to the first because neither is
 # registered in ArcGIS Online. Direct layer URLs: there is nothing to
 # search for. (layer URL, title, owner, note)
-SELF_HOSTED_STATE_PROGRAMS: Dict[str, Tuple[str, str, str, str]] = {
-    "WV": ("https://services.wvgis.wvu.edu/arcgis/rest/services/"
-           "Planning_Cadastre/WV_Parcels/MapServer/0",
-           "WVParcels", "WVGISTC",
-           "WV GIS Technical Center statewide parcels, compiled from county "
-           "assessors and the WV Property Tax Division; self-hosted, not in "
-           "the ArcGIS Online index"),
-    "PA": ("https://gis.dep.pa.gov/depgisprd/rest/services/"
-           "Parcels/PA_Parcels/MapServer/0",
-           "PA Parcels", "PA DEP",
-           "PA DEP statewide parcel layer, self-described as a PARTIAL "
-           "dataset: a count here proves presence in the bbox, not "
-           "county-complete coverage"),
+SELF_HOSTED_STATE_PROGRAMS: Dict[str, List[Tuple[str, str, str, str]]] = {
+    "WV": [("https://services.wvgis.wvu.edu/arcgis/rest/services/"
+            "Planning_Cadastre/WV_Parcels/MapServer/0",
+            "WVParcels", "WVGISTC",
+            "WV GIS Technical Center statewide parcels, compiled from county "
+            "assessors and the WV Property Tax Division; self-hosted, not in "
+            "the ArcGIS Online index")],
+    "PA": [("https://gis.dep.pa.gov/depgisprd/rest/services/"
+            "Parcels/PA_Parcels/MapServer/0",
+            "PA Parcels", "PA DEP",
+            "PA DEP statewide parcel layer, self-described as a PARTIAL "
+            "dataset: a count here proves presence in the bbox, not "
+            "county-complete coverage"),
+           # PASDA's own statewide compilation (dataset 1696, "Pennsylvania
+           # Parcels (Available)", August 2026 build), on apps.pasda — a
+           # different host from the mapservices.pasda server the pool
+           # crawls. Also self-described incomplete; it and PA DEP each
+           # carry counties the other lacks (measured 2026-09-30).
+           ("https://apps.pasda.psu.edu/arcgis/rest/services/"
+            "PA_Parcels/MapServer/1",
+            "PA Parcels", "PASDA",
+            "PASDA (Penn State) statewide parcels, dataset 1696, compiled "
+            "from county submissions and self-described incomplete; the "
+            "Source and Date fields name each county's submission")],
     # The REST face of the statewide file the first pass could only record
     # as a download candidate (STATE_DOWNLOAD_SOURCES). Found 2026-09-29;
     # the host the search index still names, gismaps.vdem.virginia.gov,
     # no longer resolves — vginmaps is where the service lives now.
-    "VA": ("https://vginmaps.vdem.virginia.gov/arcgis/rest/services/"
-           "VA_Base_Layers/VA_Parcels/FeatureServer/0",
-           "Virginia Parcels", "VGIN",
-           "VGIN statewide parcels, aggregated from each locality's data-call "
-           "submission; not edge-matched across localities, and each "
-           "locality's vintage is its own last submission (LASTUPDATE)"),
+    "VA": [("https://vginmaps.vdem.virginia.gov/arcgis/rest/services/"
+            "VA_Base_Layers/VA_Parcels/FeatureServer/0",
+            "Virginia Parcels", "VGIN",
+            "VGIN statewide parcels, aggregated from each locality's data-call "
+            "submission; not edge-matched across localities, and each "
+            "locality's vintage is its own last submission (LASTUPDATE)")],
 }
 
 
@@ -814,8 +825,7 @@ def census_region_targeted(session: _ThrottledSession, region_key: str,
     rows: List[Dict[str, Any]] = []
     seen: set = set()
 
-    if state in SELF_HOSTED_STATE_PROGRAMS:
-        url, title, owner, note = SELF_HOSTED_STATE_PROGRAMS[state]
+    for url, title, owner, note in SELF_HOSTED_STATE_PROGRAMS.get(state, []):
         seen.add(_normalise_layer_url(url))
         rows += _verify_url(session, region_key, state, county,
                             "state_program", title, owner, None, url, bbox,
@@ -934,8 +944,7 @@ def census_region_web_maps(session: _ThrottledSession, region_key: str,
     state_name = STATE_NAMES.get(state, state)
     rows: List[Dict[str, Any]] = []
 
-    if state in SELF_HOSTED_STATE_PROGRAMS:
-        url, title, owner, note = SELF_HOSTED_STATE_PROGRAMS[state]
+    for url, title, owner, note in SELF_HOSTED_STATE_PROGRAMS.get(state, []):
         rows += _verify_url(session, region_key, state, county,
                             "state_program", title, owner, None, url, bbox,
                             note=note)

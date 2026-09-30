@@ -159,7 +159,7 @@ class _FakeSession:
 def test_web_map_sentinel_even_when_state_program_verifies(monkeypatch):
     # WV's statewide layer verifies, the county's web maps find nothing:
     # the region still needs its web_map row, or every re-run redoes it
-    wv_url = cadastre_census.SELF_HOSTED_STATE_PROGRAMS["WV"][0]
+    wv_url = cadastre_census.SELF_HOSTED_STATE_PROGRAMS["WV"][0][0]
     session = _FakeSession({
         wv_url: {"name": "WVParcels", "geometryType": "esriGeometryPolygon",
                  "maxRecordCount": 2000},

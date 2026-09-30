@@ -552,3 +552,39 @@ and turned up nothing on any path.
 
 **The census now: 425 of 544 regions (78%)** carry a layer covering
 ≥ 0.75 of the county; 7 partial; 112 without.
+
+## Pennsylvania: PASDA's own statewide layer (2026-09-30)
+
+Pennsylvania's twelve uncovered regions had already been through every
+path, so the first question was whether the directory crawl's caps
+(40 folders, 200 services) had truncated PASDA, whose server gave Erie.
+They had not: `mapservices.pasda.psu.edu` holds 173 services, two named
+for parcels, none for these counties.
+
+PASDA's **statewide compilation** lives elsewhere. Dataset 1696,
+"Pennsylvania Parcels (Available)" (August 2026 build, self-described
+incomplete, county parcels added as submitted), is served from
+`apps.pasda.psu.edu/.../PA_Parcels/MapServer/1` — a host no web map or
+catalog entry had pointed at. It is now Pennsylvania's second
+statewide program beside PA DEP (the table takes a list per state now);
+each carries counties the other lacks.
+
+**Seven regions gained coverage; Pennsylvania holds 62 of 67.**
+
+| Region | Parcels in bbox | Coverage |
+|---|---|---|
+| PA-WASHINGTON | 528,912 | 1.000 |
+| PA-LANCASTER | 442,743 | 0.917 |
+| PA-BUTLER | 110,689 | 0.958 |
+| PA-FAYETTE | 97,288 | 1.000 |
+| PA-MERCER | 63,277 | 1.000 |
+| PA-WARREN | 33,134 | 0.958 |
+| PA-MONTOUR | 12,757 | 1.000 |
+
+**Still uncovered:** Armstrong, Beaver, Cameron, Luzerne (neither
+statewide layer carries them, and nothing else surfaced) and Somerset
+(PA DEP, 0.333).
+
+**The census now: 432 of 544 regions (79%)** carry a layer covering
+≥ 0.75 of the county; 7 partial; 105 without — Kentucky 74, Illinois 10,
+Ohio 10, Pennsylvania 4, Michigan 5, DC 1, Virginia 1.
