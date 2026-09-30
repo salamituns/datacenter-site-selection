@@ -356,8 +356,27 @@ def test_catalog_matches_the_county_exactly():
         {"title": "Parcels - KY - Boyd County", "owner": "GDITAdmin",
          "id": "a3", "url": "https://y.gov/rest/services/B/MapServer/0"},
     ]}})
+    cadastre_census._CATALOG_CACHE.clear()
     found = cadastre_census.catalog_urls(session, "Boyle", "KY")
     assert [t for t, _, _ in found] == ["Parcels - KY - Boyle County"]
+    cadastre_census._CATALOG_CACHE.clear()
+
+
+def test_catalog_matches_across_spelling():
+    # the Census says LaSalle, the catalog "La Salle County"
+    session = _FakeSession({cadastre_census.AGOL_SEARCH_URL: {"results": [
+        {"title": "Parcels - IL - La Salle County", "owner": "GDITAdmin",
+         "id": "l1", "url": "https://gis.lasallecounty.org/arcgis/rest/"
+                            "services/TaxParcels/MapServer/0"},
+        {"title": "Parcels - IL - Jo Daviess County", "owner": "GDITAdmin",
+         "id": "j1", "url": "https://jd.gov/rest/services/P/MapServer/0"},
+    ]}})
+    cadastre_census._CATALOG_CACHE.clear()
+    assert [i["id"] for _, _, i in
+            cadastre_census.catalog_urls(session, "LaSalle", "IL")] == ["l1"]
+    assert [i["id"] for _, _, i in
+            cadastre_census.catalog_urls(session, "Jo Daviess", "IL")] == ["j1"]
+    cadastre_census._CATALOG_CACHE.clear()
 
 
 def test_pool_answers_only_for_services_named_for_the_county():
@@ -419,3 +438,16 @@ def test_layer_rank_orders_complete_tax_subset_other():
     assert r("Cadastre") == 1
     assert r("Residential Parcels") == 2
     assert r("Zip Codes") == 3
+
+
+def test_catalog_keeps_county_and_city_apart():
+    session = _FakeSession({cadastre_census.AGOL_SEARCH_URL: {"results": [
+        {"title": "Parcels - VA - Richmond City", "owner": "GDITAdmin",
+         "id": "city", "url": "https://c.gov/rest/services/P/MapServer/0"},
+        {"title": "Parcels - VA - Richmond County", "owner": "GDITAdmin",
+         "id": "county", "url": "https://k.gov/rest/services/P/MapServer/0"},
+    ]}})
+    cadastre_census._CATALOG_CACHE.clear()
+    assert [i["id"] for _, _, i in
+            cadastre_census.catalog_urls(session, "Richmond", "VA")] == ["county"]
+    cadastre_census._CATALOG_CACHE.clear()

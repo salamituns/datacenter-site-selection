@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -656,21 +657,52 @@ TARGETED_CANDIDATE_CAP = 12
 CATALOG_OWNERS = ("GDITAdmin",)
 
 
+_CATALOG_CACHE: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+
+
+def _county_key(name: str) -> str:
+    """A county name reduced to letters: "La Salle", "LaSalle", "Jo
+    Daviess", "DeKalb" and "De Kalb" each compare equal to their other
+    spelling. Census and catalog do not spell them alike. Only "county"
+    is dropped: Virginia has Richmond County AND Richmond City, and a
+    key that dropped "city" would let either answer for the other."""
+    name = re.sub(r"\bcounty\b", "", (name or "").lower())
+    return re.sub(r"[^a-z]", "", name)
+
+
+def _catalog_state(session: _ThrottledSession, owner: str, state: str
+                   ) -> List[Dict[str, Any]]:
+    """Every catalog item for a state, fetched once per run: the search
+    index's title matching is fuzzy about spacing, a paged state listing
+    is not."""
+    key = (owner, state)
+    if key not in _CATALOG_CACHE:
+        items, start = [], 1
+        while start and start > 0:
+            data = session.get_json(AGOL_SEARCH_URL, params={
+                "q": f'owner:{owner} title:"Parcels - {state}"',
+                "num": 100, "start": start, "f": "json"}) or {}
+            items += data.get("results") or []
+            start = data.get("nextStart", -1)
+        _CATALOG_CACHE[key] = items
+    return _CATALOG_CACHE[key]
+
+
 def catalog_urls(session: _ThrottledSession, county: str, state: str
                  ) -> List[Tuple[str, str, Dict[str, Any]]]:
-    """(title, url, item) of catalog entries for this county, matched on
-    the exact "Parcels - ST - <County> County" title so a neighbour's
-    entry can never answer for it."""
+    """(title, url, item) of catalog entries for this county. The title
+    must be "Parcels - ST - <County>[ County]" and the county part must
+    equal this county's name letter for letter — spacing aside — so a
+    neighbour's or a joint entry can never answer for it."""
+    want = _county_key(county)
+    prefix = f"parcels - {state.lower()} - "
     found = []
     for owner in CATALOG_OWNERS:
-        data = session.get_json(AGOL_SEARCH_URL, params={
-            "q": f'owner:{owner} title:"Parcels - {state} - {county}"',
-            "num": 10, "f": "json"}) or {}
-        for item in data.get("results") or []:
+        for item in _catalog_state(session, owner, state):
             title = (item.get("title") or "").strip()
-            wanted = {f"Parcels - {state} - {county} County".lower(),
-                      f"Parcels - {state} - {county}".lower()}
-            if title.lower() in wanted and item.get("url"):
+            if not title.lower().startswith(prefix) or not item.get("url"):
+                continue
+            if _county_key(title[len(prefix):]) == want:
                 found.append((title, item["url"], item))
     return found
 

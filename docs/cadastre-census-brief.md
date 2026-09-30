@@ -507,3 +507,48 @@ also lists 59 Illinois and 56 Pennsylvania entries; the PA ones have now
 been through the targeted pass, the Illinois ones not yet — IL's 18
 unsourced regions are the natural next run
 (`--targeted --include-unsourced --state IL`).
+
+## Illinois (2026-09-30)
+
+The catalog names 11 of Illinois's 18 unsourced regions. Running the
+targeted pass on them (plus partial IL-DUPAGE) first surfaced a matching
+bug: the Census spells **LaSalle, DeKalb, Jo Daviess**, the catalog
+"La Salle County". `catalog_urls` now reads the state's catalog once and
+compares county names with spacing and punctuation removed — dropping the
+word "county" but never "city", since Virginia has Richmond County *and*
+Richmond City and neither may answer for the other.
+
+**Eight regions gained coverage; Illinois holds 14 of 25.**
+
+| Region | Source | Parcels | Coverage |
+|---|---|---|---|
+| IL-KANE | county's ArcGIS account (`KaneCountyILGIS`) | 187,336 | 0.875 |
+| IL-LASALLE | county server `gis.lasallecounty.org` (catalog) | 72,241 | 1.000 |
+| IL-KENDALL | county server `maps.co.kendall.il.us` (catalog) | 58,672 | 0.917 |
+| IL-DEKALB | county's ArcGIS account (`DeKalbGIS`) | 45,407 | 0.875 |
+| IL-HENRY | hosted layer, vendor-served † | 31,932 | 1.000 |
+| IL-BUREAU | hosted layer, vendor-served † | 27,711 | 1.000 |
+| IL-BOONE | county server `maps.boonecountyil.org` | 24,319 | 1.000 |
+| IL-MARSHALL | hosted layer, vendor-served † | 13,245 | 1.000 |
+
+† Bureau, Henry and Marshall sit in one shared hosted organisation, with
+a copy under a `Magnasoft` account — a GIS outsourcing firm, most likely
+serving the three counties. Complete, but **not confirmed to be the
+county's own publication**, like Bradford and Franklin.
+
+**Five catalog endpoints failed, each for its own reason — recorded as
+candidates, never as absence:**
+
+| Region | Why |
+|---|---|
+| IL-CARROLL | "Token Required" — the layer needs a login, so it is not public |
+| IL-KANKAKEE | "Token Required" |
+| IL-FORD | TLS certificate fails verification; the census does not disable it |
+| IL-LEE | the county server does not accept connections |
+| IL-WOODFORD | the regional server (`centralilmaps.com`) no longer has a Woodford folder — withdrawn, not renamed |
+
+Jo Daviess, Livingston, Ogle, Stephenson and Winnebago are in no catalog
+and turned up nothing on any path.
+
+**The census now: 425 of 544 regions (78%)** carry a layer covering
+≥ 0.75 of the county; 7 partial; 112 without.
