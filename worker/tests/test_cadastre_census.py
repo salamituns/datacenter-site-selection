@@ -266,3 +266,39 @@ def test_service_error_in_a_200_is_no_answer(monkeypatch):
     ok = {"layers": [], "error_count": 0}
     monkeypatch.setattr(s._session, "get", lambda *a, **k: Resp(ok))
     assert s.get_json("https://g.gov/rest/services/x/MapServer") == ok
+
+
+# ── the targeted pass ─────────────────────────────────────────────────────
+
+def test_services_root():
+    r = cadastre_census._services_root
+    assert (r("https://maps.lexingtonky.gov/lfucggis/rest/services/parcels/MapServer/0")
+            == "https://maps.lexingtonky.gov/lfucggis/rest/services")
+    assert r("https://example.gov/something/else") is None
+
+
+def test_directory_crawl_finds_renamed_parcel_service():
+    # Lexington: the web maps say parcels/MapServer, the directory says
+    # property/MapServer — the directory is the server's current word
+    root = "https://maps.lexingtonky.gov/lfucggis/rest/services"
+    session = _FakeSession({
+        root: {"folders": ["Utilities"], "services": [
+            {"name": "aerial_mostrecent", "type": "MapServer"},
+            {"name": "property", "type": "MapServer"},
+            {"name": "zoning", "type": "MapServer"},
+            {"name": "Tax_Parcels", "type": "FeatureServer"},
+            {"name": "parcels_geocoder", "type": "GeocodeServer"},
+        ]},
+        root + "/Utilities": {"services": [
+            {"name": "Utilities/Parcel_Lookup", "type": "MapServer"}]},
+    })
+    found = cadastre_census.crawl_host_directory(
+        session, root + "/parcels/MapServer/0")
+    assert [n for n, _ in found] == ["property", "Tax_Parcels",
+                                     "Utilities/Parcel_Lookup"]
+    assert found[0][1] == root + "/property/MapServer"
+
+
+def test_directory_crawl_needs_an_arcgis_server():
+    assert cadastre_census.crawl_host_directory(
+        _FakeSession({}), "https://example.gov/parcels.json") == []

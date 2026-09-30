@@ -513,6 +513,16 @@ SELF_HOSTED_STATE_PROGRAMS: Dict[str, Tuple[str, str, str, str]] = {
            "PA DEP statewide parcel layer, self-described as a PARTIAL "
            "dataset: a count here proves presence in the bbox, not "
            "county-complete coverage"),
+    # The REST face of the statewide file the first pass could only record
+    # as a download candidate (STATE_DOWNLOAD_SOURCES). Found 2026-09-29;
+    # the host the search index still names, gismaps.vdem.virginia.gov,
+    # no longer resolves — vginmaps is where the service lives now.
+    "VA": ("https://vginmaps.vdem.virginia.gov/arcgis/rest/services/"
+           "VA_Base_Layers/VA_Parcels/FeatureServer/0",
+           "Virginia Parcels", "VGIN",
+           "VGIN statewide parcels, aggregated from each locality's data-call "
+           "submission; not edge-matched across localities, and each "
+           "locality's vintage is its own last submission (LASTUPDATE)"),
 }
 
 
@@ -576,7 +586,8 @@ def _normalise_layer_url(url: str) -> str:
 
 
 def discover_web_map_urls(session: _ThrottledSession, county: str,
-                          state_name: str
+                          state_name: str,
+                          cap: int = MAX_CANDIDATES_PER_REGION,
                           ) -> List[Tuple[str, str, Dict[str, Any]]]:
     """
     Self-hosted parcel layer URLs referenced by the county's web maps:
@@ -598,7 +609,108 @@ def discover_web_map_urls(session: _ThrottledSession, county: str,
             key = _normalise_layer_url(url)
             if key not in seen:
                 seen[key] = (title, key, item)
-    return list(seen.values())[:MAX_CANDIDATES_PER_REGION]
+    return list(seen.values())[:cap]
+
+
+# ── the targeted pass: counties whose recorded layers do not cover them ──
+#
+# Outline coverage found 77 regions whose "verified" layers cover under a
+# quarter of the county or are not parcel-sized at all. Two of them,
+# looked at by hand, had a good layer the census had recorded wrongly:
+# Kenton's hid behind the candidate cap, Fayette's behind a renamed
+# service. The targeted pass does those two things for every such region.
+
+TARGETED_CANDIDATE_CAP = 12
+MAX_DIRECTORY_SERVICES = 200
+
+
+def _services_root(url: str) -> Optional[str]:
+    """The .../rest/services root of an ArcGIS Server URL, or None."""
+    i = url.lower().find("/rest/services")
+    return url[:i + len("/rest/services")] if i >= 0 else None
+
+
+def crawl_host_directory(session: _ThrottledSession, url: str
+                         ) -> List[Tuple[str, str]]:
+    """
+    (name, service URL) of every parcel-named service on the server that
+    `url` lives on, folders one level deep. A county's web maps can point
+    at a service the server has since renamed — Lexington's maps still
+    draw parcels/MapServer, its directory lists property/MapServer — and
+    the directory is the server's own current word on what it publishes.
+    """
+    root = _services_root(url)
+    if not root:
+        return []
+    top = session.get_json(root, params={"f": "json"}) or {}
+    services = list(top.get("services") or [])
+    for folder in (top.get("folders") or [])[:40]:
+        sub = session.get_json(f"{root}/{folder}", params={"f": "json"}) or {}
+        services += sub.get("services") or []
+        if len(services) >= MAX_DIRECTORY_SERVICES:
+            break
+    found = []
+    for svc in services[:MAX_DIRECTORY_SERVICES]:
+        if svc.get("type") not in ("MapServer", "FeatureServer"):
+            continue
+        name = svc.get("name") or ""
+        # "property" names Lexington's parcel service; the layer check
+        # (polygons, a count, then coverage) decides whether it is one
+        if is_parcel_layer(name, "") or "property" in name.lower():
+            found.append((name, f"{root}/{name}/{svc['type']}"))
+    return found
+
+
+def census_region_targeted(session: _ThrottledSession, region_key: str,
+                           county: str, state: str,
+                           bbox: Tuple[float, float, float, float],
+                           known_urls: List[str]) -> List[Dict[str, Any]]:
+    """
+    One region the census has recorded wrongly or not at all: statewide
+    program, web maps with the cap raised, and the service directories of
+    every self-hosted server already tied to the region. Rows already
+    recorded are upserted in place; coverage is measured afterwards.
+    """
+    state_name = STATE_NAMES.get(state, state)
+    rows: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    if state in SELF_HOSTED_STATE_PROGRAMS:
+        url, title, owner, note = SELF_HOSTED_STATE_PROGRAMS[state]
+        seen.add(_normalise_layer_url(url))
+        rows += _verify_url(session, region_key, state, county,
+                            "state_program", title, owner, None, url, bbox,
+                            note=note)
+
+    hosts_seen: set = set()
+    web = discover_web_map_urls(session, county, state_name,
+                                cap=TARGETED_CANDIDATE_CAP)
+    for title, url, item in web:
+        seen.add(_normalise_layer_url(url))
+        rows += _verify_url(
+            session, region_key, state, county, "web_map",
+            title or urlparse(url).netloc, urlparse(url).netloc.lower(),
+            item, url, bbox,
+            note=f"referenced by web map {item.get('id')} ({item.get('owner')})")
+
+    for url in [u for _, u, _ in web] + known_urls:
+        if not is_self_hosted(url):
+            continue
+        root = _services_root(url)
+        if not root or root.lower() in hosts_seen:
+            continue
+        hosts_seen.add(root.lower())
+        for name, svc_url in crawl_host_directory(session, url):
+            key = _normalise_layer_url(svc_url)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows += _verify_url(
+                session, region_key, state, county, "host_directory",
+                name, urlparse(svc_url).netloc.lower(), None, svc_url, bbox,
+                note=f"listed in the service directory of {root}, a server "
+                     f"already tied to this region")
+    return rows
 
 
 def _verify_url(session: _ThrottledSession, region_key: str, state: str,
@@ -994,7 +1106,16 @@ def main() -> int:
     parser.add_argument("--via", default=None,
                         choices=["county_search", "state_program", "web_map"],
                         help="with --outline: one discovery path only")
+    parser.add_argument("--include-unsourced", action="store_true",
+                        help="with --targeted: also regions with no verified "
+                             "row at all")
+    parser.add_argument("--targeted", action="store_true",
+                        help="regions with no verified layer covering 0.75 "
+                             "of the county: statewide program, web maps with "
+                             "the cap raised, and known servers' directories")
     args = parser.parse_args()
+    if args.targeted:
+        return _main_targeted(args)
     if args.outline:
         return _main_outline(args)
     if args.web_maps:
@@ -1096,6 +1217,97 @@ def _persist(client: Any, rows: List[Dict[str, Any]]) -> None:
         (client.table("cadastre_sources")
          .upsert(row, on_conflict="region_key,service_url,layer_id")
          .execute())
+
+
+def _targeted_regions(client: Any
+                      ) -> Tuple[List[str], set, Dict[str, List[str]]]:
+    """
+    (regions with verified rows but no parcel-sized layer covering 0.75 of
+    the county, every region with a verified row, {region: every URL
+    already recorded for it}).
+    """
+    covered, verified, urls = set(), set(), {}
+    page, size = 0, 1000
+    while True:
+        res = (client.table("cadastre_sources")
+               .select("region_key,evidence_class,record_count,"
+                       "outline_coverage,service_url")
+               .order("id").range(page * size, page * size + size - 1)
+               .execute())
+        for r in res.data:
+            key = r["region_key"]
+            if r["service_url"].startswith("http"):
+                urls.setdefault(key, []).append(r["service_url"])
+            if r["evidence_class"] != "verified":
+                continue
+            verified.add(key)
+            if ((r["record_count"] or 0) >= 1000
+                    and r["outline_coverage"] is not None
+                    and float(r["outline_coverage"]) >= 0.75):
+                covered.add(key)
+        if len(res.data) < size:
+            break
+        page += 1
+    return sorted(verified - covered), verified, urls
+
+
+def _main_targeted(args: argparse.Namespace) -> int:
+    """The targeted pass, then outline coverage of whatever it recorded."""
+    from pipeline import PARCEL_PILOTS
+
+    client = _client()
+    wrong, verified, urls = _targeted_regions(client)
+    targets = [r for r in wrong if r not in PARCEL_PILOTS]
+    if args.include_unsourced:
+        # searched by the first pass (it has a row, the sentinel at least)
+        # and never verified anything
+        targets += sorted(r for r in _censused_regions(client)
+                          if r not in PARCEL_PILOTS and r not in verified)
+    if args.state:
+        targets = [r for r in targets if r.startswith(args.state.upper() + "-")]
+    if args.list:
+        print(f"targeted: {len(targets)}")
+        for r in targets[:40]:
+            print(" ", r)
+        return 0
+    targets = targets[:args.limit]
+    logger.info("Targeted pass: %d region(s)%s", len(targets),
+                " (dry run)" if args.dry_run else "")
+
+    session = _ThrottledSession()
+    failures = 0
+    for i, key in enumerate(targets, 1):
+        region = region_registry.resolve(key)
+        if region is None:
+            failures += 1
+            continue
+        state = key.split("-", 1)[0]
+        try:
+            rows = census_region_targeted(session, key, region.county, state,
+                                          region.bbox, urls.get(key, []))
+        except Exception as exc:
+            logger.warning("[%d/%d] %s targeted pass failed: %s",
+                           i, len(targets), key, exc)
+            failures += 1
+            continue
+        big = [r for r in rows if r["evidence_class"] == "verified"
+               and (r.get("record_count") or 0) >= 1000]
+        logger.info("[%d/%d] %s: %d row(s), %d parcel-sized", i, len(targets),
+                    key, len(rows), len(big))
+        if not args.dry_run and rows:
+            try:
+                _persist(client, rows)
+            except Exception as exc:  # fail the region, never the run
+                logger.warning("[%d/%d] %s persistence failed: %s",
+                               i, len(targets), key, exc)
+                failures += 1
+    logger.info("Targeted pass done: %d region(s), %d failed",
+                len(targets), failures)
+    if args.dry_run:
+        return 1 if failures else 0
+    # measure what was just recorded: new rows have no outline_method
+    args.via, args.redo, args.limit = None, False, 100000
+    return max(1 if failures else 0, _main_outline(args))
 
 
 def _main_web_maps(args: argparse.Namespace) -> int:

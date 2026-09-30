@@ -373,3 +373,61 @@ Still open, cheaply: the 17 zero-coverage and 60 non-parcel regions are
 exactly the queue for a targeted look at each county's own server —
 Fayette and Kenton both turned out to have a good layer the census had
 recorded wrongly, not no layer.
+
+## The targeted pass — 77 regions recorded wrongly (release34, 2026-09-29)
+
+Kenton and Fayette each had a good layer the census had recorded wrongly
+(a candidate cap, a renamed service). `cadastre_census.py --targeted`
+does both fixes for every region with verified rows but no parcel-sized
+layer covering 0.75 — 84 regions: the 77, plus the 7 partial — and then
+outline-measures whatever it recorded:
+
+- **the self-hosted statewide programs**, now including **VGIN's REST
+  service** for Virginia (`vginmaps.vdem.virginia.gov/.../VA_Parcels`).
+  The first pass could only record VGIN's statewide *file* as a download
+  candidate; the REST service the search index names lives on a host
+  (`gismaps.vdem.virginia.gov`) that no longer resolves.
+- **web maps with the candidate cap raised** from 4 to 12;
+- **the `/rest/services` directory** of every self-hosted server already
+  tied to the region, recorded as `discovered_via = 'host_directory'` —
+  the server's own current word on what it publishes.
+
+The same pass then ran on Virginia's 41 regions with no source at all
+(`--targeted --include-unsourced --state VA`), since VGIN answers for
+them too.
+
+**Result: 408 of 544 regions (75%) now have a layer covering ≥ 0.75 of
+the county**, up from 317. VGIN alone covers 86 Virginia regions, 40 of
+them previously sourceless; the rest came from county servers —
+Chesapeake's own, HRSD, Spotsylvania's directory, `gis.leoc.net`.
+
+| State | Covered | Partial | None |
+|---|---|---|---|
+| VA | 122 / 127 | 3 | 2 |
+| OH | 73 / 83 | 0 | 10 |
+| WV | 54 / 55 | 1 | 0 |
+| PA | 50 / 67 | 1 | 16 |
+| IN, MD, NC, TN, DE | 76 / 76 | 0 | 0 |
+| NJ | 20 / 21 | 1 | 0 |
+| IL | 6 / 25 | 1 | 18 |
+| KY | 6 / 83 | 0 | 77 |
+| MI | 1 / 6 | 0 | 5 |
+| DC | 0 / 1 | 0 | 1 |
+
+**Still recorded but not covering (22):** fifteen PA counties (Armstrong,
+Beaver, Bradford, Butler, Cameron, Carbon, Erie, Fayette, Luzerne,
+Mercer, Monroe, Montour, Pike, Warren, Washington — most of them the
+counties PA DEP's partial layer does not reach), OH-PIKE, OH-ROSS, OH-WARREN, OH-WASHINGTON, KY-GREEN,
+MI-CASS, and VA-RAPPAHANNOCK — which VGIN does not carry, presumably a
+locality that has not submitted to the data call. For these the three
+searches found no public layer of the county's own.
+
+**Partial (7):** IL-DUPAGE 0.708, VA-ARLINGTON 0.708, NJ-UNION 0.667,
+VA-CHARLOTTESVILLECITY 0.667, WV-TUCKER 0.667, VA-ALLEGHANY 0.625,
+PA-SOMERSET 0.333. The urban ones read as road surface, not missing data.
+
+**Unmeasured: VA-GLOUCESTER.** Its VGIN row verified, but the Census host
+answered its area-water file with a "Request Rejected" page though the
+file is listed — the WAF behaviour the README records for TIGERweb. The
+worker fails the row rather than measure it with water in; the next
+`--outline` run retries it.
