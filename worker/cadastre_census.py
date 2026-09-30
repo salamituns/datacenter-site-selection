@@ -209,19 +209,45 @@ def score_candidate(item: Dict[str, Any], county: str, state_name: str
     return score
 
 
+# Words that mark a parcel layer as a SUBSET of the county's parcels.
+# Boone County, KY publishes thirteen parcel layers in one service; the
+# first two in list order are "Airport Owned Parcels" (1,148), and the
+# complete "Tax Parcels" (54,873) sat untested behind them.
+PARCEL_SUBSET_WORDS = (
+    "owned", "hoa", "residential", "commercial", "industrial",
+    "agricultural", "exempt", "public", "storm", "vacant", "nonconforming",
+    "condo", "historic", "annex", "outline", "shaded", "dimension",
+)
+
+
+def layer_rank(name: str) -> int:
+    """
+    Order in which a service's layers are worth testing. 0: parcel-named
+    and not a subset ("Tax Parcels", "All Parcel Types"); 1: tax/cadastre
+    named; 2: a parcel subset ("Airport Owned Parcels"); 3: anything
+    else. Lower first; ties keep the service's own order.
+    """
+    low = (name or "").lower()
+    subset = any(w in low for w in PARCEL_SUBSET_WORDS)
+    if "parcel" in low and not subset:
+        return 0
+    if any(k in low for k in ("tax", "cadastre")) and not subset:
+        return 1
+    if "parcel" in low:
+        return 2
+    return 3
+
+
 def choose_layers(service_json: Dict[str, Any]
                   ) -> List[Dict[str, Any]]:
     """
-    Which layers of a service to record: polygon layers, preferring names
-    that say parcel/tax/cadastre, capped at two per service.
+    Which layers of a service to record: polygon layers, the county's
+    complete parcel layer before any subset of it, capped at two.
     """
     layers = service_json.get("layers") or []
     polygons = [l for l in layers
                 if l.get("geometryType") == "esriGeometryPolygon"]
-    named = [l for l in polygons
-             if any(k in (l.get("name") or "").lower()
-                    for k in ("parcel", "tax", "cadastre"))]
-    chosen = named + [l for l in polygons if l not in named]
+    chosen = sorted(polygons, key=lambda l: layer_rank(l.get("name")))
     return chosen[:MAX_LAYERS_PER_SERVICE]
 
 
@@ -259,10 +285,7 @@ def _polygon_layers(session: _ThrottledSession, service_url: str,
     if chosen:
         return chosen, True
     root_layers = svc.get("layers") or []
-    named_first = sorted(
-        root_layers,
-        key=lambda l: 0 if any(k in (l.get("name") or "").lower()
-                               for k in ("parcel", "tax", "cadastre")) else 1)
+    named_first = sorted(root_layers, key=lambda l: layer_rank(l.get("name")))
     found: List[Dict[str, Any]] = []
     for layer in named_first[:MAX_LAYER_PROBES]:
         detail = layer_detail(session, service_url, layer) or {}
@@ -622,6 +645,55 @@ def discover_web_map_urls(session: _ThrottledSession, county: str,
 # service. The targeted pass does those two things for every such region.
 
 TARGETED_CANDIDATE_CAP = 12
+
+# A catalog of county parcel endpoints on ArcGIS Online: items titled
+# "Parcels - <ST> - <County> County", 1,079 of them nationwide on
+# 2026-09-30, each pointing at the publisher's own service — county and
+# PVA servers, regional development districts, LINK-GIS. The account
+# carries no description, so it is used as an INDEX only: the recorded
+# publisher is the endpoint's host, and every layer passes the same
+# polygon, count and outline checks as anything the census finds itself.
+CATALOG_OWNERS = ("GDITAdmin",)
+
+
+def catalog_urls(session: _ThrottledSession, county: str, state: str
+                 ) -> List[Tuple[str, str, Dict[str, Any]]]:
+    """(title, url, item) of catalog entries for this county, matched on
+    the exact "Parcels - ST - <County> County" title so a neighbour's
+    entry can never answer for it."""
+    found = []
+    for owner in CATALOG_OWNERS:
+        data = session.get_json(AGOL_SEARCH_URL, params={
+            "q": f'owner:{owner} title:"Parcels - {state} - {county}"',
+            "num": 10, "f": "json"}) or {}
+        for item in data.get("results") or []:
+            title = (item.get("title") or "").strip()
+            wanted = {f"Parcels - {state} - {county} County".lower(),
+                      f"Parcels - {state} - {county}".lower()}
+            if title.lower() in wanted and item.get("url"):
+                found.append((title, item["url"], item))
+    return found
+
+
+def abbreviated_search(session: _ThrottledSession, county: str, state: str
+                       ) -> List[Dict[str, Any]]:
+    """
+    The first pass's service search, with the state abbreviation beside
+    its name. Kentucky's services say "Ky PVA Hardin Parcels", not
+    "Kentucky": a query that required the full name never saw them.
+    Hits are scored and floored exactly as the first pass's.
+    """
+    state_name = STATE_NAMES.get(state, state)
+    data = session.get_json(AGOL_SEARCH_URL, params={
+        "q": f'parcel* "{county}" ({state} OR "{state_name}")',
+        "num": 25, "f": "json"}) or {}
+    scored = []
+    for item in data.get("results") or []:
+        sc = score_candidate(item, county, state_name)
+        if sc is not None and item.get("url"):
+            scored.append((sc, item))
+    scored.sort(key=lambda pair: -pair[0])
+    return [item for _, item in scored[:MAX_CANDIDATES_PER_REGION]]
 MAX_DIRECTORY_SERVICES = 200
 
 
@@ -631,18 +703,19 @@ def _services_root(url: str) -> Optional[str]:
     return url[:i + len("/rest/services")] if i >= 0 else None
 
 
-def crawl_host_directory(session: _ThrottledSession, url: str
-                         ) -> List[Tuple[str, str]]:
-    """
-    (name, service URL) of every parcel-named service on the server that
-    `url` lives on, folders one level deep. A county's web maps can point
-    at a service the server has since renamed — Lexington's maps still
-    draw parcels/MapServer, its directory lists property/MapServer — and
-    the directory is the server's own current word on what it publishes.
-    """
+_DIRECTORY_CACHE: Dict[str, List[Tuple[str, str]]] = {}
+
+
+def list_host_services(session: _ThrottledSession, url: str
+                       ) -> List[Tuple[str, str]]:
+    """(name, service URL) of every Map/Feature service on the server that
+    `url` lives on, folders one level deep; cached per server for the run,
+    since a regional host is asked about many counties."""
     root = _services_root(url)
     if not root:
         return []
+    if root.lower() in _DIRECTORY_CACHE:
+        return _DIRECTORY_CACHE[root.lower()]
     top = session.get_json(root, params={"f": "json"}) or {}
     services = list(top.get("services") or [])
     for folder in (top.get("folders") or [])[:40]:
@@ -650,22 +723,55 @@ def crawl_host_directory(session: _ThrottledSession, url: str
         services += sub.get("services") or []
         if len(services) >= MAX_DIRECTORY_SERVICES:
             break
-    found = []
-    for svc in services[:MAX_DIRECTORY_SERVICES]:
-        if svc.get("type") not in ("MapServer", "FeatureServer"):
-            continue
-        name = svc.get("name") or ""
-        # "property" names Lexington's parcel service; the layer check
-        # (polygons, a count, then coverage) decides whether it is one
-        if is_parcel_layer(name, "") or "property" in name.lower():
-            found.append((name, f"{root}/{name}/{svc['type']}"))
-    return found
+    listed = [(svc.get("name") or "", f"{root}/{svc.get('name')}/{svc['type']}")
+              for svc in services[:MAX_DIRECTORY_SERVICES]
+              if svc.get("type") in ("MapServer", "FeatureServer")]
+    _DIRECTORY_CACHE[root.lower()] = listed
+    return listed
+
+
+def crawl_host_directory(session: _ThrottledSession, url: str
+                         ) -> List[Tuple[str, str]]:
+    """
+    (name, service URL) of every parcel-named service on the server that
+    `url` lives on. A county's web maps can point at a service the server
+    has since renamed — Lexington's maps still draw parcels/MapServer, its
+    directory lists property/MapServer — and the directory is the server's
+    own current word on what it publishes.
+    """
+    # "property" names Lexington's parcel service; the layer check
+    # (polygons, a count, then coverage) decides whether it is one
+    return [(n, u) for n, u in list_host_services(session, url)
+            if is_parcel_layer(n, "") or "property" in n.lower()]
+
+
+def pooled_host_services(session: _ThrottledSession, county: str,
+                         state_hosts: List[str]) -> List[Tuple[str, str, str]]:
+    """
+    (name, url, root) of services on any server known in the state whose
+    NAME carries the county's own name — a regional host (Bluegrass ADD
+    keeps Boyle's parcels in a Boyle/ folder) answering for a member
+    county the census never tied it to. The name filter is what keeps a
+    neighbour's layer out; the outline check still decides.
+    """
+    tokens = _tokens(county)
+    out = []
+    for root in state_hosts:
+        for name, url in list_host_services(session, root):
+            low = name.lower()
+            if any(t in low for t in tokens) and (
+                    is_parcel_layer(name, "") or "pva" in low
+                    or "property" in low):
+                out.append((name, url, root))
+    return out
 
 
 def census_region_targeted(session: _ThrottledSession, region_key: str,
                            county: str, state: str,
                            bbox: Tuple[float, float, float, float],
-                           known_urls: List[str]) -> List[Dict[str, Any]]:
+                           known_urls: List[str],
+                           state_hosts: Optional[List[str]] = None,
+                           ) -> List[Dict[str, Any]]:
     """
     One region the census has recorded wrongly or not at all: statewide
     program, web maps with the cap raised, and the service directories of
@@ -683,6 +789,31 @@ def census_region_targeted(session: _ThrottledSession, region_key: str,
                             "state_program", title, owner, None, url, bbox,
                             note=note)
 
+    extra_urls: List[str] = []
+    for title, url, item in catalog_urls(session, county, state):
+        extra_urls.append(url)
+        key = _normalise_layer_url(url)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows += _verify_url(
+            session, region_key, state, county, "catalog", title,
+            urlparse(url).netloc.lower(), item, url, bbox,
+            note=f"catalogued by {item.get('owner')} (item {item.get('id')}); "
+                 f"publisher is the endpoint's host, not the catalog")
+
+    for item in abbreviated_search(session, county, state):
+        extra_urls.append(item["url"])
+        key = _normalise_layer_url(item["url"])
+        if key in seen:
+            continue
+        seen.add(key)
+        rows += _verify_url(
+            session, region_key, state, county, "county_search",
+            item.get("title") or "", item.get("owner") or "", item,
+            item["url"], bbox,
+            note="found by the abbreviated-state search (targeted pass)")
+
     hosts_seen: set = set()
     web = discover_web_map_urls(session, county, state_name,
                                 cap=TARGETED_CANDIDATE_CAP)
@@ -694,7 +825,7 @@ def census_region_targeted(session: _ThrottledSession, region_key: str,
             item, url, bbox,
             note=f"referenced by web map {item.get('id')} ({item.get('owner')})")
 
-    for url in [u for _, u, _ in web] + known_urls:
+    for url in [u for _, u, _ in web] + known_urls + extra_urls:
         if not is_self_hosted(url):
             continue
         root = _services_root(url)
@@ -711,6 +842,18 @@ def census_region_targeted(session: _ThrottledSession, region_key: str,
                 name, urlparse(svc_url).netloc.lower(), None, svc_url, bbox,
                 note=f"listed in the service directory of {root}, a server "
                      f"already tied to this region")
+
+    for name, svc_url, root in pooled_host_services(session, county,
+                                                    state_hosts or []):
+        key = _normalise_layer_url(svc_url)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows += _verify_url(
+            session, region_key, state, county, "host_directory",
+            name, urlparse(svc_url).netloc.lower(), None, svc_url, bbox,
+            note=f"named for this county in the service directory of "
+                 f"{root}, a server known elsewhere in the state")
     return rows
 
 
@@ -1275,6 +1418,25 @@ def _targeted_regions(client: Any
     return sorted(verified - covered), verified, urls
 
 
+def _state_host_pool(session: _ThrottledSession, state: str,
+                     urls: Dict[str, List[str]]) -> List[str]:
+    """Every self-hosted ArcGIS Server root known in the state: recorded
+    anywhere in the census, or listed by the endpoint catalog."""
+    known = [u for key, us in urls.items()
+             if key.startswith(state + "-") for u in us]
+    for owner in CATALOG_OWNERS:
+        data = session.get_json(AGOL_SEARCH_URL, params={
+            "q": f'owner:{owner} title:"Parcels - {state} -"',
+            "num": 100, "f": "json"}) or {}
+        known += [it["url"] for it in data.get("results") or [] if it.get("url")]
+    roots = {}
+    for u in known:
+        root = _services_root(u) if is_self_hosted(u) else None
+        if root:
+            roots.setdefault(root.lower(), root)
+    return sorted(roots.values())
+
+
 def _main_targeted(args: argparse.Namespace) -> int:
     """The targeted pass, then outline coverage of whatever it recorded."""
     from pipeline import PARCEL_PILOTS
@@ -1299,6 +1461,10 @@ def _main_targeted(args: argparse.Namespace) -> int:
                 " (dry run)" if args.dry_run else "")
 
     session = _ThrottledSession()
+    pools = {st: _state_host_pool(session, st, urls)
+             for st in sorted({t.split("-", 1)[0] for t in targets})}
+    for st, pool in pools.items():
+        logger.info("Host pool for %s: %d self-hosted server(s)", st, len(pool))
     failures = 0
     for i, key in enumerate(targets, 1):
         region = region_registry.resolve(key)
@@ -1308,7 +1474,8 @@ def _main_targeted(args: argparse.Namespace) -> int:
         state = key.split("-", 1)[0]
         try:
             rows = census_region_targeted(session, key, region.county, state,
-                                          region.bbox, urls.get(key, []))
+                                          region.bbox, urls.get(key, []),
+                                          state_hosts=pools.get(state))
         except Exception as exc:
             logger.warning("[%d/%d] %s targeted pass failed: %s",
                            i, len(targets), key, exc)

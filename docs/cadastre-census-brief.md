@@ -433,3 +433,77 @@ the file's, not this machine's. `county_water` now falls back to the
 prior TIGER vintage when the current one is refused, as the county
 shapefile is the fallback for roads: a different official file, not a
 way round the refusal. That makes **409 of 544 regions (75%)** covered.
+
+## Kentucky, and a catalog of county endpoints (release35, 2026-09-30)
+
+Kentucky's 77 unsourced regions were invisible to every earlier path, for
+two measured reasons. Its services say "Ky PVA Hardin Parcels", not
+"Kentucky", and the first pass's query required the state's full name.
+And its county data lives on county, PVA and area-development-district
+servers the index does not list. Most Kentucky PVAs publish only through
+vendor viewers (qPublic, Beacon), whose terms bar automated access; the
+census does not scrape them, and the Department of Revenue's mapping
+program sells its data, which this project does not buy.
+
+The targeted pass gained three things:
+
+- **an endpoint catalog.** An ArcGIS Online account, `GDITAdmin`, keeps
+  items titled "Parcels - <ST> - <County> County" — 1,079 nationwide, 20
+  in Kentucky — each pointing at the publisher's own endpoint. It carries
+  no description, so it is an index only: the recorded owner is the
+  endpoint's host, and every layer passes the same checks. Recorded as
+  `catalog`, matched on the exact county title so a neighbour's entry
+  cannot answer.
+- **an abbreviated-state search**: the first pass's query with `KY` beside
+  `Kentucky`, scored and floored exactly as before.
+- **a state-wide host pool**: every self-hosted server known anywhere in
+  the state (11 in Kentucky), its directory read once per run and
+  searched for services *named for the county* — how a regional server
+  (Bluegrass ADD keeps Boyle's parcels in a `Boyle/` folder) could answer
+  for a member county the census never tied it to.
+
+### A layer-choice bug, found on Boone
+
+Boone County publishes thirteen parcel layers in one service. The census
+tested the first two in list order — "Airport Owned Parcels", outline and
+shaded (1,148 features, 0.125) — and never reached "Tax Parcels"
+(54,873). `choose_layers` now ranks a service's layers by `layer_rank`:
+the complete parcel layer first, tax/cadastre next, subsets ("owned",
+"HOA", "residential", "exempt"…) after. The 1,000-feature floor had
+already kept Boone's "Clerk Property Groupings" (107 features, 1.000)
+from counting — coverage says a layer reaches the whole county, the
+count says it is divided like parcels.
+
+Re-running the targeted pass with the fix over every uncovered region
+(31) and Kentucky (74) added eight:
+
+| Region | Source | Parcels | Coverage |
+|---|---|---|---|
+| KY-BOONE | county server, `Tax Parcels` / `All Parcel Types` | 56,013 | 1.000 |
+| KY-MADISON | county server (catalog + directory) | 40,293 | 0.958 |
+| KY-FRANKLIN | catalog → hosted `1319Parcels` † | 22,627 | 1.000 |
+| PA-ERIE | PASDA (Penn State clearinghouse), via the PA pool | 112,708 | 0.917 |
+| PA-MONROE | catalog → `monroegis.org` | 105,985 | 1.000 |
+| PA-PIKE | county server, via the PA pool | 62,824 | 0.958 |
+| PA-CARBON | catalog → `gis.carboncounty.com` | 48,666 | 0.958 |
+| PA-BRADFORD | hosted layer, account `TLabudaLDG` † | 34,983 | 1.000 |
+
+† **Not confirmed to be the government's own publication.** Bradford's
+layer is a private account's; Franklin's catalog entry points at a
+hosted service whose publisher the census cannot name. Both cover their
+county completely, and the first pass accepted hosted services on the
+same terms, but a deep probe should find the county's own source before
+relying on either.
+
+**Dead ends, recorded:** Bluegrass ADD's server (`maps2.bgadd.org`)
+resolves but refuses connections from outside; Hardin's PVA service on
+the state server is still listed in ArcGIS Online and gone from the
+server's directory.
+
+**The census now: 417 of 544 regions (77%)** carry a layer covering
+≥ 0.75 of the county. Kentucky holds 9 of its 83. The 74 left there are
+what the free, public, non-scraping routes cannot reach. The catalog
+also lists 59 Illinois and 56 Pennsylvania entries; the PA ones have now
+been through the targeted pass, the Illinois ones not yet — IL's 18
+unsourced regions are the natural next run
+(`--targeted --include-unsourced --state IL`).

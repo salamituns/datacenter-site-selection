@@ -341,3 +341,81 @@ def test_area_water_falls_back_to_prior_vintage(monkeypatch, tmp_path):
     assert not water.is_empty
     assert [u.split("/")[5] for u in asked] == ["TIGER2024", "TIGER2023"]
     assert (tmp_path / "cache" / "99999.gpkg").exists()
+
+
+# ── Kentucky: the catalog, the abbreviation, the regional pool ────────────
+
+def test_catalog_matches_the_county_exactly():
+    session = _FakeSession({cadastre_census.AGOL_SEARCH_URL: {"results": [
+        {"title": "Parcels - KY - Boyle County", "owner": "GDITAdmin",
+         "id": "a1", "url": "https://maps2.bgadd.org/arcgis/rest/services/"
+                            "Boyle/BoyleParcelBoundary/MapServer/0"},
+        # the search is fuzzy: a neighbour's entry must not answer
+        {"title": "Parcels - KY - Boyle and Mercer Joint", "owner": "GDITAdmin",
+         "id": "a2", "url": "https://x.gov/rest/services/J/MapServer/0"},
+        {"title": "Parcels - KY - Boyd County", "owner": "GDITAdmin",
+         "id": "a3", "url": "https://y.gov/rest/services/B/MapServer/0"},
+    ]}})
+    found = cadastre_census.catalog_urls(session, "Boyle", "KY")
+    assert [t for t, _, _ in found] == ["Parcels - KY - Boyle County"]
+
+
+def test_pool_answers_only_for_services_named_for_the_county():
+    root = "https://maps2.bgadd.org/arcgis/rest/services"
+    session = _FakeSession({
+        root: {"folders": ["Boyle", "Garrard"], "services": []},
+        root + "/Boyle": {"services": [
+            {"name": "Boyle/BoyleParcelBoundary", "type": "MapServer"}]},
+        root + "/Garrard": {"services": [
+            {"name": "Garrard/GarrardPVA", "type": "MapServer"},
+            {"name": "Garrard/GarrardRoads", "type": "MapServer"}]},
+    })
+    cadastre_census._DIRECTORY_CACHE.clear()
+    got = cadastre_census.pooled_host_services(session, "Garrard", [root])
+    assert [n for n, _, _ in got] == ["Garrard/GarrardPVA"]
+    # the directory was read once and cached for the next county
+    assert root.lower() in cadastre_census._DIRECTORY_CACHE
+    assert [n for n, _, _ in cadastre_census.pooled_host_services(
+        session, "Boyle", [root])] == ["Boyle/BoyleParcelBoundary"]
+    cadastre_census._DIRECTORY_CACHE.clear()
+
+
+def test_abbreviated_search_keeps_the_first_pass_floor():
+    session = _FakeSession({cadastre_census.AGOL_SEARCH_URL: {"results": [
+        {"title": "Ky_PVA_Hardin_Parcels", "owner": "kevin.hogue_kygeonet",
+         "type": "Feature Service", "tags": [], "id": "h1",
+         "url": "https://kygisserver.ky.gov/arcgis/rest/services/"
+                "WGS84WM_Services/Ky_PVA_Hardin_Parcels_WGS84WM/MapServer"},
+        # nationwide commercial layer: no county token, rejected as before
+        {"title": "Regrid USA Nationwide Parcel Boundaries",
+         "owner": "data_regrid", "type": "Feature Service", "tags": [],
+         "id": "r1", "url": "https://z.arcgis.com/rest/services/R/FeatureServer"},
+    ]}})
+    got = cadastre_census.abbreviated_search(session, "Hardin", "KY")
+    assert [i["id"] for i in got] == ["h1"]
+
+
+def test_complete_parcel_layer_before_its_subsets():
+    # Boone County, KY: thirteen parcel layers, the subsets listed first
+    svc = {"layers": [
+        {"id": 7, "name": "Airport Owned Parcels (outline)",
+         "geometryType": "esriGeometryPolygon"},
+        {"id": 8, "name": "Airport Owned Parcels (shaded)",
+         "geometryType": "esriGeometryPolygon"},
+        {"id": 18, "name": "HOA Parcels", "geometryType": "esriGeometryPolygon"},
+        {"id": 12, "name": "Tax Districts (thick outline)",
+         "geometryType": "esriGeometryPolygon"},
+        {"id": 32, "name": "All Parcel Types",
+         "geometryType": "esriGeometryPolygon"},
+        {"id": 0, "name": "Tax Parcels", "geometryType": "esriGeometryPolygon"},
+    ]}
+    assert [l["id"] for l in cadastre_census.choose_layers(svc)] == [32, 0]
+
+
+def test_layer_rank_orders_complete_tax_subset_other():
+    r = cadastre_census.layer_rank
+    assert r("Tax Parcels") == 0
+    assert r("Parcels") == 0
+    assert r("Cadastre") == 1
+    assert r("Residential Parcels") == 2
+    assert r("Zip Codes") == 3
